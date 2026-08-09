@@ -347,6 +347,29 @@ describe("smtp server: limits and timeouts", () => {
   });
 });
 
+describe("smtp server: STARTTLS edge cases", () => {
+  test("STARTTLS without TLS configured is not implemented", async () => {
+    const { client } = await setup();
+    client.write("EHLO x\r\n");
+    await client.waitFor(/^250 /);
+    client.write("STARTTLS\r\n");
+    await client.waitFor(/^502 5\.5\.1/);
+  });
+
+  test("abandoning the connection after STARTTLS cleans up server side", async () => {
+    const { makeTestCert } = await import("./testcert.ts");
+    const { client, server } = await setup({ tls: makeTestCert() });
+    client.write("EHLO x\r\n");
+    await client.waitFor(/^250 /);
+    client.write("STARTTLS\r\n");
+    await client.waitFor(/^220 2\.0\.0/);
+    // Never start the handshake; just hang up.
+    client.end();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await server.close(); // must not hang on the orphaned upgrade
+  });
+});
+
 describe("smtp server: AUTH (plaintext dev mode)", () => {
   const authOpts: Partial<SmtpServerOptions> = {
     onAuth: ({ username, password }) =>

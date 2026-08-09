@@ -114,6 +114,7 @@ function upgradeServerSocket(
   return new Promise((resolve, rejectPromise) => {
     const oneShot = tls.createServer({ key: tlsConfig.key, cert: tlsConfig.cert });
     let expectedPort = -1;
+    let bridge: net.Socket | undefined;
     const unverified: net.Socket[] = [];
     const verify = (conn: net.Socket) => {
       const ok =
@@ -126,8 +127,11 @@ function upgradeServerSocket(
       if (settled) return;
       settled = true;
       oneShot.close();
+      bridge?.destroy();
       rejectPromise(err);
     };
+    // If the peer vanishes before the handshake completes, tear everything down.
+    raw.once("close", () => fail(new Error("connection closed during TLS upgrade")));
     oneShot.on("tlsClientError", fail);
     oneShot.on("error", fail);
     oneShot.on("connection", (conn) => {
@@ -138,18 +142,18 @@ function upgradeServerSocket(
       oneShot.close();
       if (settled) return clear.destroy();
       settled = true;
-      resolve({ clear, bridge });
+      resolve({ clear, bridge: bridge! });
     });
-    let bridge: net.Socket;
     oneShot.listen(0, "127.0.0.1", () => {
       const port = (oneShot.address() as net.AddressInfo).port;
-      bridge = net.connect(port, "127.0.0.1", () => {
-        expectedPort = bridge.localPort ?? -2;
+      const b = net.connect(port, "127.0.0.1", () => {
+        expectedPort = b.localPort ?? -2;
         for (const conn of unverified.splice(0)) verify(conn);
-        raw.pipe(bridge);
-        bridge.pipe(raw);
+        raw.pipe(b);
+        b.pipe(raw);
       });
-      bridge.on("error", fail);
+      bridge = b;
+      b.on("error", fail);
     });
   });
 }

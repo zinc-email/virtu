@@ -69,6 +69,20 @@ test-unit *args="":
 test-int *args="":
   bin/test-int {{args}}
 
+# Start the simulated internet (fake DNS, peer MTAs, test-runner).
+# Fully isolated from the dev stack; no published host ports.
+test-net-up:
+  docker compose -f docker-compose.test.yml up -d --build --wait
+
+# Tear down the simulated internet, including the shared mail spool.
+test-net-down:
+  docker compose -f docker-compose.test.yml down -v
+
+# Story tests, run inside the simulated internet's test-runner container.
+# Requires `just test-net-up` first.
+test-story *args="":
+  docker compose -f docker-compose.test.yml exec test-runner bun test test/ {{args}}
+
 # ----------------------------------------------------------------------------
 # Checks — format, typecheck, and the CI gauntlet
 # ----------------------------------------------------------------------------

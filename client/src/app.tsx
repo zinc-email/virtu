@@ -10,7 +10,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { getApiKey } from "src/auth";
-import { HomePage } from "src/pages/Home";
+import { AliasesPage } from "src/pages/Aliases";
 import { LoginPage } from "src/pages/Login";
 
 function Shell() {
@@ -29,7 +29,7 @@ const indexRoute = createRoute({
   beforeLoad: () => {
     if (!getApiKey()) throw redirect({ to: "/login" });
   },
-  component: HomePage,
+  component: AliasesPage,
 });
 
 const loginRoute = createRoute({

@@ -4,21 +4,9 @@
 import { Alert, Button, Paper, PasswordInput, Stack, Text, TextInput, Title } from "@mantine/core";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { apiErrorMessage } from "src/api/errors";
 import { setApiKey } from "src/auth";
 import { usePostAuthLogin } from "src/gen";
-
-function errorMessage(err: unknown): string {
-  if (err && typeof err === "object" && "response" in err) {
-    const response = err.response;
-    if (response && typeof response === "object" && "data" in response) {
-      const data = response.data;
-      if (data && typeof data === "object" && "error" in data && typeof data.error === "string") {
-        return data.error;
-      }
-    }
-  }
-  return "Something went wrong";
-}
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -50,7 +38,7 @@ export function LoginPage() {
           <Stack>
             {login.isError && (
               <Alert color="red" variant="light">
-                {errorMessage(login.error)}
+                {apiErrorMessage(login.error)}
               </Alert>
             )}
             <TextInput

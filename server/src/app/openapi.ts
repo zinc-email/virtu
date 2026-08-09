@@ -14,15 +14,17 @@ import {
 
 const isApiRoute = (url: string) => url === "/api" || url.startsWith("/api/");
 
-// Hide non-/api routes (health probe, served spec) from the spec, and strip
-// the /api prefix from the surviving paths.
+// Hide non-/api routes (health probe, served spec) from the spec. The /api
+// prefix is NOT stripped here: @fastify/swagger already strips the base path
+// it finds in servers[0].url ("/api"), and stripping twice mangles routes
+// whose remaining path itself starts with "api" (/api/api_key -> "_key").
 type ZodTransform = typeof fastifyZodOpenApiTransform;
 const transform: ZodTransform = (data) => {
   const result = fastifyZodOpenApiTransform(data);
   if (!isApiRoute(data.url)) {
     result.schema = { ...result.schema, hide: true };
   }
-  return { ...result, url: result.url.replace(/^\/api/, "") };
+  return result;
 };
 
 // Hiding a route drops its path but NOT the component schemas it referenced —

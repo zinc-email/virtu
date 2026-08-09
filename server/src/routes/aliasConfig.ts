@@ -1,0 +1,49 @@
+// Alias-surface configuration shared by the alias/mailbox/contact/setting
+// routes. Kept out of src/config.ts (owned by another lane): everything here
+// is route-local and parsed with the same env helper.
+//
+// SECRET — suffix signing (SimpleLogin's CUSTOM_ALIAS_SECRET analog): the
+// HMAC key for signed alias suffixes (see signedSuffix.ts). Signatures only
+// need to be unforgeable by clients and stable across the ~10-minute
+// create-alias window, so any stable server-side secret works. We read
+// ALIAS_SIGNING_SECRET when set and otherwise derive a key from DATABASE_URL
+// (server-only, contains the DB password, stable per deployment). Set
+// ALIAS_SIGNING_SECRET in production so rotating DB credentials doesn't
+// invalidate in-flight create-alias flows.
+
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import { loadConfigFromEnv } from "../app/env";
+import { config } from "../config";
+
+const AliasEnvSchema = z.object({
+  // Comma-separated list of domains we create aliases on. The first entry is
+  // the default (used for reverse aliases and random aliases).
+  aliasDomains: z.string().default("virtu.email"),
+  aliasSigningSecret: z.string().optional(),
+});
+
+const aliasEnv = loadConfigFromEnv(AliasEnvSchema);
+
+/** Domains available for alias creation ("SL domains" in SimpleLogin terms). */
+export const ALIAS_DOMAINS: readonly string[] = aliasEnv.aliasDomains
+  .split(",")
+  .map((d) => d.trim().toLowerCase())
+  .filter((d) => d.length > 0);
+
+/** The default alias domain (SimpleLogin FIRST_ALIAS_DOMAIN / EMAIL_DOMAIN). */
+export const FIRST_ALIAS_DOMAIN = ALIAS_DOMAINS[0] ?? "virtu.email";
+
+/** HMAC key for signed suffixes — see the module doc for the derivation. */
+export const SUFFIX_SIGNING_SECRET: string =
+  aliasEnv.aliasSigningSecret ??
+  createHash("sha256").update(`virtu-suffix:${config.databaseUrl}`).digest("hex");
+
+/** SimpleLogin PAGE_LIMIT: max items per page on every paginated endpoint. */
+export const PAGE_LIMIT = 20;
+
+/** SimpleLogin SUDO_MODE_MINUTES_VALID: sudo mode lifetime after PATCH /sudo. */
+export const SUDO_MODE_MINUTES_VALID = 5;
+
+/** SimpleLogin's signed-suffix validity window (seconds): the create-alias flow. */
+export const SUFFIX_MAX_AGE_SECONDS = 600;

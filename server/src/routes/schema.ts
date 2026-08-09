@@ -29,3 +29,101 @@ export const UserInfoResponse = z
   .meta({ id: "UserInfoResponse" });
 
 export type UserInfo = z.infer<typeof UserInfoResponse>;
+
+// ---------------------------------------------------------------------------
+// Aliases (serialize_alias_info_v2 shape — docs/api.md GET /aliases/:alias_id)
+// ---------------------------------------------------------------------------
+
+export const MailboxLite = z
+  .object({ id: z.number().int(), email: z.string() })
+  .meta({ id: "MailboxLite" });
+
+export const ActivityAction = z
+  .enum(["forward", "reply", "block", "bounced"])
+  .meta({ id: "ActivityAction" });
+
+export const LatestActivity = z
+  .object({
+    action: ActivityAction,
+    timestamp: z.number().int(),
+    contact: z.object({
+      email: z.string(),
+      name: z.string().nullable(),
+      reverse_alias: z.string(),
+    }),
+  })
+  .meta({ id: "LatestActivity" });
+
+export const AliasDto = z
+  .object({
+    id: z.number().int(),
+    email: z.string(),
+    creation_date: z.string(),
+    creation_timestamp: z.number().int(),
+    enabled: z.boolean(),
+    note: z.string().nullable(),
+    name: z.string().nullable(),
+    nb_forward: z.number().int(),
+    nb_block: z.number().int(),
+    nb_reply: z.number().int(),
+    mailbox: MailboxLite,
+    mailboxes: z.array(MailboxLite),
+    support_pgp: z.boolean(),
+    disable_pgp: z.boolean(),
+    latest_activity: LatestActivity.nullable(),
+    pinned: z.boolean(),
+  })
+  .meta({ id: "Alias" });
+
+export const AliasesResponse = z.object({ aliases: z.array(AliasDto) }).meta({
+  id: "AliasesResponse",
+});
+
+// POST /v3/alias/custom/new + /alias/random/new: alias info plus the bare
+// address under `alias` (SimpleLogin returns both).
+export const CreatedAliasResponse = AliasDto.extend({ alias: z.string() }).meta({
+  id: "CreatedAliasResponse",
+});
+
+// ---------------------------------------------------------------------------
+// Contacts (serialize_contact shape)
+// ---------------------------------------------------------------------------
+
+export const ContactDto = z
+  .object({
+    id: z.number().int(),
+    contact: z.string(),
+    creation_date: z.string(),
+    creation_timestamp: z.number().int(),
+    last_email_sent_date: z.string().nullable(),
+    last_email_sent_timestamp: z.number().int().nullable(),
+    reverse_alias: z.string(),
+    reverse_alias_address: z.string(),
+    block_forward: z.boolean(),
+    existed: z.boolean(),
+  })
+  .meta({ id: "Contact" });
+
+// ---------------------------------------------------------------------------
+// Mailboxes (mailbox_to_dict shape)
+// ---------------------------------------------------------------------------
+
+export const MailboxDto = z
+  .object({
+    id: z.number().int(),
+    email: z.string(),
+    verified: z.boolean(),
+    default: z.boolean(),
+    creation_timestamp: z.number().int(),
+    nb_alias: z.number().int(),
+  })
+  .meta({ id: "Mailbox" });
+
+// ---------------------------------------------------------------------------
+// Small envelopes shared across route groups
+// ---------------------------------------------------------------------------
+
+export const DeletedResponse = z.object({ deleted: z.boolean() }).meta({ id: "DeletedResponse" });
+export const OkResponse = z.object({ ok: z.boolean() }).meta({ id: "OkResponse" });
+export const UpdatedResponse = z.object({ updated: z.boolean() }).meta({ id: "UpdatedResponse" });
+export const EnabledResponse = z.object({ enabled: z.boolean() }).meta({ id: "EnabledResponse" });

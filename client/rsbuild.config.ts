@@ -3,9 +3,11 @@ import { defineConfig } from "@rsbuild/core";
 import { pluginReact } from "@rsbuild/plugin-react";
 
 // In the compose stack the api is reachable by service name; natively it's
-// localhost. Same trick as madi.
+// localhost. Same trick as madi. API_PROXY_TARGET overrides both (useful
+// when the native api runs on a non-default port, e.g. API_PORT=3101).
 const isDocker = fs.existsSync("/.dockerenv");
-const apiTarget = isDocker ? "http://api:3000" : "http://localhost:3000";
+const apiTarget =
+  process.env.API_PROXY_TARGET ?? (isDocker ? "http://api:3000" : "http://localhost:3000");
 
 export default defineConfig({
   plugins: [pluginReact()],

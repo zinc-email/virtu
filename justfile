@@ -83,6 +83,15 @@ test-net-down:
 test-story *args="":
   docker compose -f docker-compose.test.yml exec test-runner bun test test/ {{args}}
 
+# Logs from the simulated internet (default: follow the mail service —
+# its pipeline log lines are the fastest story-debug tool).
+test-net-logs *args="-f mail":
+  docker compose -f docker-compose.test.yml logs {{args}}
+
+# Service status for the simulated internet.
+test-net-ps:
+  docker compose -f docker-compose.test.yml ps
+
 # ----------------------------------------------------------------------------
 # Homepage — static marketing site (Astro, www/)
 # ----------------------------------------------------------------------------

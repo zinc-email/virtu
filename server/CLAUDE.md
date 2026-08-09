@@ -1,4 +1,9 @@
 
+This project follows `/PLAN.md` (repo root) — the design doc and work breakdown.
+Where this file's generic Bun advice conflicts with PLAN.md, **PLAN.md wins**:
+the API is Fastify (+ fastify-zod-openapi), the DB layer is Drizzle over
+`drizzle-orm/bun-sql`, and the client is a separate rsbuild package.
+
 Default to using Bun instead of Node.js.
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`

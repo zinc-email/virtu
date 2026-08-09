@@ -12,10 +12,7 @@ interface Props {
   autofocus?: boolean;
 }
 
-const {
-  note = "Enter your e-mail address to login or signup.",
-  autofocus = false,
-} = Astro.props;
+const { note = "Enter your e-mail address to login or signup.", autofocus = false } = Astro.props;
 ---
 
 <form class="auth-login-form form" action="/app/register" method="GET">

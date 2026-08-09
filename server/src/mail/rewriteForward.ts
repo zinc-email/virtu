@@ -172,6 +172,10 @@ export async function rewriteForward(
   const now = ctx.now ?? new Date();
   const aliasEmail = ctx.alias.email.toLowerCase();
 
+  // Capture Reply-To BEFORE the whitelist drops it (SimpleLogin computes
+  // reply_to_contacts before delete_all_headers_except for the same reason).
+  const originalReplyTo = headers.get("Reply-To");
+
   // 1. Whitelist: drop everything we do not explicitly forward.
   const droppedHeaders = applyHeaderWhitelist(headers, FORWARD_HEADER_WHITELIST);
 
@@ -215,9 +219,8 @@ export async function rewriteForward(
   );
 
   // 5. Reply-To → reverse alias(es), capped at 5 (SimpleLogin).
-  const replyToValue = headers.get("Reply-To");
-  if (replyToValue !== undefined) {
-    const replyTos = parseAddressList(replyToValue).slice(0, MAX_REPLY_TO_CONTACTS);
+  if (originalReplyTo !== undefined) {
+    const replyTos = parseAddressList(originalReplyTo).slice(0, MAX_REPLY_TO_CONTACTS);
     const mapped: Address[] = [];
     for (const rt of replyTos) {
       if (!isPlausibleAddress(rt.address)) continue;

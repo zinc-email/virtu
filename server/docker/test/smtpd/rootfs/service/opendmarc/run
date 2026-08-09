@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "Starting opendkim"
+exec opendmarc -f
+

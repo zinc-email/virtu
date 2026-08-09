@@ -1,0 +1,183 @@
+# The simulated internet (Lane H): a self-contained fake email network for
+# integration/story tests. BIND serves authoritative DNS for every pretend
+# domain; one parameterized postfix+opendkim+opendmarc+policyd-spf peer runs
+# per domain and delivers into per-user Maildirs on a shared volume; tests run
+# from the `test-runner` service.
+#
+#   docker compose -f docker-compose.test.yml up -d --build --wait
+#   docker compose -f docker-compose.test.yml exec test-runner bun test test/
+#   docker compose -f docker-compose.test.yml down -v
+#
+# Topology (ported from the legacy stack, see tmp/virtu and
+# server/docs/NETWORK.md semantics): two networks, both `internal: true`
+# (no host ports, no way out to the real internet), every container resolving
+# through the fake BIND.
+#
+# NOTE on subnets: the legacy virtu stack owns 192.168.33.0/24 + .42.0/24 and
+# may be running on the same machine, so this stack uses the sibling subnets
+# 192.168.34.0/24 ("pretend" internet) + 192.168.43.0/24 (internal) with the
+# SAME last-octet assignments as NETWORK.md:
+#
+#   192.168.34.7    mail.qmail.com    pretend Gmail — users' real mailboxes
+#   192.168.34.8    mail.user.com     reserved (customer custom domain; its MX
+#                                     is mail.virtu.email — no peer runs here)
+#   192.168.34.9    mail.docusign.com strict-DMARC sender
+#   192.168.34.10   mail.yahoo.com    strictest major-provider policy
+#   192.168.34.11   mail.void.com     blackhole (catch-all Maildir sink)
+#   192.168.34.12   mail.initech.com  legit correspondent, DMARC p=reject
+#   192.168.34.13   mail.open.relay   spammer's wide-open relay
+#   192.168.34.101  mail.virtu.email  RESERVED: our mx joins here in wave 2
+#   192.168.34.102  virtu.email/www   RESERVED: our api/web (wave 2)
+#   192.168.34.254  ns2.virtu.email   fake BIND (pretend side)
+#   192.168.43.254  ns.virtu.email    fake BIND (internal side)
+#
+# Dynamic allocation (test-runner, future scaled workers) draws from
+# x.x.x.160/27 so that opendkim InternalHosts (below) can classify traffic:
+# submission clients from the dynamic range are "internal" (peer signs their
+# mail), while every statically-addressed peer — including our future mx at
+# .101 — is external (peer VERIFIES its signatures instead of re-signing).
+name: virtu-ts-test
+
+x-peer: &peer
+  build:
+    context: ./server/docker/test
+    dockerfile: smtpd/Dockerfile
+  depends_on:
+    - dns
+  dns: 192.168.34.254
+  environment: &peer-env
+    DKIM_INTERNAL_HOSTS: "127.0.0.1, 192.168.43.0/24, 192.168.34.160/27"
+  volumes:
+    - mail:/var/mail
+  healthcheck:
+    test: ["CMD-SHELL", "nc -z 127.0.0.1 25 && nc -z 127.0.0.1 587"]
+    interval: 2s
+    timeout: 2s
+    retries: 45
+    start_period: 3s
+
+services:
+  dns:
+    build:
+      context: ./server/docker/test/dns
+    dns: 192.168.43.254
+    networks:
+      internal:
+        ipv4_address: 192.168.43.254
+      pretend:
+        ipv4_address: 192.168.34.254
+
+  qmail:
+    <<: *peer
+    environment:
+      <<: *peer-env
+      MAIL_DOMAIN: qmail.com
+    hostname: mail.qmail.com
+    networks:
+      pretend:
+        ipv4_address: 192.168.34.7
+
+  docusign:
+    <<: *peer
+    environment:
+      <<: *peer-env
+      MAIL_DOMAIN: docusign.com
+    hostname: mail.docusign.com
+    networks:
+      pretend:
+        ipv4_address: 192.168.34.9
+
+  yahoo:
+    <<: *peer
+    environment:
+      <<: *peer-env
+      MAIL_DOMAIN: yahoo.com
+    hostname: mail.yahoo.com
+    networks:
+      pretend:
+        ipv4_address: 192.168.34.10
+
+  void:
+    <<: *peer
+    environment:
+      <<: *peer-env
+      MAIL_DOMAIN: void.com
+    hostname: mail.void.com
+    networks:
+      pretend:
+        ipv4_address: 192.168.34.11
+
+  initech:
+    <<: *peer
+    environment:
+      <<: *peer-env
+      MAIL_DOMAIN: initech.com
+    hostname: mail.initech.com
+    networks:
+      pretend:
+        ipv4_address: 192.168.34.12
+
+  relay:
+    <<: *peer
+    environment:
+      <<: *peer-env
+      MAIL_DOMAIN: open.relay
+    hostname: mail.open.relay
+    networks:
+      pretend:
+        ipv4_address: 192.168.34.13
+
+  # Where `bun test` runs: attached to both networks, resolving through the
+  # fake BIND, with read-only sight of every persona's Maildir.
+  test-runner:
+    image: oven/bun:1
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep infinity"]
+    working_dir: /repo/server
+    dns:
+      - 192.168.43.254
+      - 192.168.34.254
+    depends_on:
+      dns:
+        condition: service_started
+      qmail:
+        condition: service_healthy
+      docusign:
+        condition: service_healthy
+      yahoo:
+        condition: service_healthy
+      void:
+        condition: service_healthy
+      initech:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    environment:
+      VIRTU_TEST_MAILDIR: /var/mail
+      VIRTU_TEST_DNS: 192.168.43.254
+    networks:
+      internal:
+      pretend:
+    volumes:
+      - .:/repo
+      - mail:/var/mail:ro
+
+volumes:
+  # Shared Maildir spool: /var/mail/{domain}/{localpart}/new/{unique}.
+  # Never truncated between tests — tests find their own mail by
+  # X-Virtu-Test-Id, so dirty state is harmless by design.
+  mail:
+
+networks:
+  internal:
+    internal: true
+    ipam:
+      config:
+        - subnet: 192.168.43.0/24
+          ip_range: 192.168.43.160/27
+  pretend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 192.168.34.0/24
+          ip_range: 192.168.34.160/27

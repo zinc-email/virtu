@@ -1,0 +1,14 @@
+; Pretend Gmail: users' real mailboxes live here. Deliberately publishes no
+; DKIM or DMARC records ("relatively unique security settings").
+$ORIGIN qmail.com.
+$TTL 60
+;                 email    serial      refresh  retry  exp   ttl
+@    IN SOA  ns ( root     2026080801  1800     600    3600  900 )
+@    IN NS   ns
+@    IN MX   10 mail
+@    IN A    192.168.34.7
+mx1  IN A    192.168.34.7
+ns   IN A    192.168.34.254
+mail IN A    192.168.34.7
+@    IN TXT  "v=spf1 a -all"
+mail IN TXT  "v=spf1 a -all"

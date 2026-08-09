@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "Starting postfix in the foreground..."
+exec postfix start-fg
+

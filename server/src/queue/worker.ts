@@ -11,10 +11,9 @@
  *   - 4xx / transport / DNS      → pending again with exponential backoff,
  *                                  until maxTries — then failed + callback
  *
- * DSN generation is a STUB for MVP: permanent failures log loudly and rely
- * on the bounce-accounting callback (recordBounce) for user-visible state.
- * Null-reverse-path rows never produce any bounce action (never bounce a
- * bounce).
+ * Permanent failures invoke onPermanentFailure (bounce accounting + DSN
+ * generation — see deliverd.ts). Null-reverse-path rows never produce any
+ * bounce action (never bounce a bounce).
  */
 
 import { promises as dns } from "node:dns";
@@ -205,7 +204,7 @@ export interface QueueWorkerOptions {
   batchSize: number;
   maxTries: number;
   deliver: DeliverFn;
-  /** Called once per row that permanently failed (bounce accounting, DSN stub). */
+  /** Called once per row that permanently failed (bounce accounting, DSN). */
   onPermanentFailure?: (row: OutboundMessage, error: string) => Promise<void>;
   now?: () => Date;
   random?: () => number;

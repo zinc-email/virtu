@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# gen — regenerate the whole contract pipeline, in order:
+#
+#   1. server/spec/openapi.json  (committed artifact — bin/openapi-gen)
+#   2. client/src/gen            (Kubb SDK, gitignored)
+#
+# Server is the source of truth: change db/schema.ts or routes/, then run
+# this so the client typechecks against the new contract.
+
+cd "$(dirname "$0")/.."
+
+bin/openapi-gen
+(cd client && ./node_modules/.bin/kubb generate)

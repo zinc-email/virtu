@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# format-check — check repo formatting with Biome. Non-zero exit on drift.
+# Used by CI and the `just format-check` recipe. To auto-fix locally, run
+# `just format-write` (bin/format-write).
+#
+# Biome config lives at biome.json in the repo root; ignore globs are
+# defined there.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+exec ./node_modules/.bin/biome format .

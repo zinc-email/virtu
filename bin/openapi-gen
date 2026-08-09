@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# openapi-gen — generate the committed OpenAPI spec by building the Fastify
+# app in-process. No running api server, no HTTP round-trip, and no Docker
+# stack required; this runs with the local server Bun dependencies.
+#
+#   server/spec/openapi.json  <- app.swagger()  (SimpleLogin-compatible API)
+#
+# The spec is a COMMITTED artifact — review and commit it after running.
+# It is Biome-ignored (kept in the emitter's raw pretty-print).
+#
+# Usage (from anywhere):
+#   bin/openapi-gen
+
+cd "$(dirname "$0")/../server"
+
+exec bun run src/scripts/openapiEmit.ts

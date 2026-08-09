@@ -1,0 +1,20 @@
+# lefthook.yml — pre-commit hook spec for the Biome formatter.
+#
+# Runs Biome formatting on staged files only. `stage_fixed: true` re-adds
+# files that were auto-fixed so the commit picks them up.
+#
+# Install once per machine after cloning:
+#
+#   bunx lefthook install
+#
+# This writes a thin shim into .git/hooks/pre-commit. Without it, the
+# config below does nothing. CI doesn't need this — the workflow runs
+# `bin/format-check` against all files.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: format
+      glob: "*.{js,jsx,mjs,cjs,ts,tsx,json,jsonc,css}"
+      run: ./node_modules/.bin/biome format --write --no-errors-on-unmatched {staged_files}
+      stage_fixed: true

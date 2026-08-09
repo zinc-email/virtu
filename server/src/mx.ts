@@ -33,6 +33,7 @@ import {
 import { type DnsResolver, signOutbound, verifyInbound } from "./mailauth/index.ts";
 import { getOrCreateContact } from "./pipeline/contacts.ts";
 import { loadDkimKey } from "./pipeline/dkim.ts";
+import { makeVerifyResolver } from "./pipeline/dnsTxt.ts";
 import { recordBounce } from "./pipeline/bounce.ts";
 import {
   createBlockedLog,
@@ -53,6 +54,13 @@ import {
 
 const encoder = new TextEncoder();
 
+/** Lazy singleton for the default verify resolver. */
+let cachedResolver: DnsResolver | null = null;
+function defaultResolver(): DnsResolver {
+  cachedResolver ??= makeVerifyResolver();
+  return cachedResolver;
+}
+
 /** Everything the mx needs; a subset of config plus injectables for tests. */
 export interface MxOptions {
   db: Db;
@@ -62,7 +70,11 @@ export interface MxOptions {
   verpSecret: string;
   maxMessageSize: number;
   tls?: SmtpTlsConfig;
-  /** DNS resolver override for verifyInbound (defaults to node:dns). */
+  /**
+   * DNS resolver override for verifyInbound. Defaults to
+   * {@link makeVerifyResolver} — node:dns except TXT, which goes through
+   * the wire-format client (Bun's builtin TXT API loses record grouping).
+   */
   resolver?: DnsResolver;
   log?: (message: string) => void;
 }
@@ -111,7 +123,7 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       mta: opts.mailHostname,
     },
     event.raw,
-    { resolver: opts.resolver },
+    { resolver: opts.resolver ?? defaultResolver() },
   );
   if (verification.verdict.action === "reject") {
     const v = verification.verdict;
@@ -128,8 +140,9 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   };
   const originalMessageId = parsed.headers.get("Message-ID") ?? null;
   const prepended = parseMessage(encoder.encode(verification.prependHeaders));
-  const dkimKey = await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector);
-  if (dkimKey === null) {
+  const dkimKey =
+    deliverable.length > 0 ? await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector) : null;
+  if (deliverable.length > 0 && dkimKey === null) {
     log(`mx: WARNING no active DKIM key for ${opts.mailDomain} — forwarding unsigned`);
   }
 

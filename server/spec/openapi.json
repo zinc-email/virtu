@@ -225,6 +225,50 @@
           "contact": "First Last <first@example.com>"
         }
       },
+      "CreateCustomDomainRequest": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain"
+        ],
+        "example": {
+          "domain": "example.com"
+        }
+      },
+      "UpdateCustomDomainRequest": {
+        "type": "object",
+        "properties": {
+          "catch_all": {
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "random_prefix_generation": {
+            "type": "boolean"
+          },
+          "mailbox_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      },
       "CreateMailboxRequest": {
         "type": "object",
         "properties": {
@@ -990,6 +1034,248 @@
         },
         "required": [
           "block_forward"
+        ],
+        "additionalProperties": false
+      },
+      "CustomDomainsResponse": {
+        "type": "object",
+        "properties": {
+          "custom_domains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomDomain"
+            }
+          }
+        },
+        "required": [
+          "custom_domains"
+        ],
+        "additionalProperties": false
+      },
+      "CustomDomain": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "domain_name": {
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_verified": {
+            "type": "boolean"
+          },
+          "nb_alias": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "creation_date": {
+            "type": "string"
+          },
+          "creation_timestamp": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "catch_all": {
+            "type": "boolean"
+          },
+          "random_prefix_generation": {
+            "type": "boolean"
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailboxLite"
+            }
+          },
+          "ownership_verified": {
+            "type": "boolean"
+          },
+          "mx_verified": {
+            "type": "boolean"
+          },
+          "spf_verified": {
+            "type": "boolean"
+          },
+          "dkim_verified": {
+            "type": "boolean"
+          },
+          "dmarc_verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "domain_name",
+          "name",
+          "is_verified",
+          "nb_alias",
+          "creation_date",
+          "creation_timestamp",
+          "catch_all",
+          "random_prefix_generation",
+          "mailboxes",
+          "ownership_verified",
+          "mx_verified",
+          "spf_verified",
+          "dkim_verified",
+          "dmarc_verified"
+        ],
+        "additionalProperties": false
+      },
+      "CustomDomainDnsResponse": {
+        "type": "object",
+        "properties": {
+          "domain_name": {
+            "type": "string"
+          },
+          "records": {
+            "type": "object",
+            "properties": {
+              "ownership": {
+                "$ref": "#/components/schemas/DnsRecord"
+              },
+              "mx": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DnsRecord"
+                }
+              },
+              "spf": {
+                "$ref": "#/components/schemas/DnsRecord"
+              },
+              "dkim": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DnsRecord"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dmarc": {
+                "$ref": "#/components/schemas/DnsRecord"
+              }
+            },
+            "required": [
+              "ownership",
+              "mx",
+              "spf",
+              "dkim",
+              "dmarc"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "domain_name",
+          "records"
+        ],
+        "additionalProperties": false
+      },
+      "DnsRecord": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "TXT",
+              "MX"
+            ]
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "type",
+          "hostname",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "VerifyCustomDomainResponse": {
+        "type": "object",
+        "properties": {
+          "ownership": {
+            "$ref": "#/components/schemas/DnsCheckResult"
+          },
+          "mx": {
+            "$ref": "#/components/schemas/DnsCheckResult"
+          },
+          "spf": {
+            "$ref": "#/components/schemas/DnsCheckResult"
+          },
+          "dkim": {
+            "$ref": "#/components/schemas/DnsCheckResult"
+          },
+          "dmarc": {
+            "$ref": "#/components/schemas/DnsCheckResult"
+          },
+          "custom_domain": {
+            "$ref": "#/components/schemas/CustomDomain"
+          }
+        },
+        "required": [
+          "ownership",
+          "mx",
+          "spf",
+          "dkim",
+          "dmarc",
+          "custom_domain"
+        ],
+        "additionalProperties": false
+      },
+      "DnsCheckResult": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "errors"
+        ],
+        "additionalProperties": false
+      },
+      "UpdatedCustomDomainResponse": {
+        "type": "object",
+        "properties": {
+          "custom_domain": {
+            "$ref": "#/components/schemas/CustomDomain"
+          }
+        },
+        "required": [
+          "custom_domain"
         ],
         "additionalProperties": false
       },
@@ -2601,6 +2887,380 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/custom_domains": {
+      "get": {
+        "tags": [
+          "CustomDomain"
+        ],
+        "description": "Get the user's custom domains, with per-record verification flags.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomDomainsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "CustomDomain"
+        ],
+        "description": "Add a custom domain (premium only). Generates the ownership TXT token and a per-domain DKIM signing key; publish the records from GET .../dns, then POST .../verify. No SimpleLogin API equivalent (web-only there).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomDomainRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomDomain"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/custom_domains/{custom_domain_id}/dns": {
+      "get": {
+        "tags": [
+          "CustomDomain"
+        ],
+        "description": "The DNS records to publish for this domain: ownership TXT (vt-verification=…), MX, SPF include, the per-domain DKIM TXT and the recommended DMARC record. No SimpleLogin API equivalent (web-only there).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "custom_domain_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomDomainDnsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/custom_domains/{custom_domain_id}/verify": {
+      "post": {
+        "tags": [
+          "CustomDomain"
+        ],
+        "description": "Run the real DNS checks (ownership, MX, SPF, DKIM, DMARC) and update the domain's verification flags. `errors` lists what was found when a check fails. No SimpleLogin API equivalent (web-only forms there).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "custom_domain_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyCustomDomainResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/custom_domains/{custom_domain_id}": {
+      "patch": {
+        "tags": [
+          "CustomDomain"
+        ],
+        "description": "Update a custom domain. `catch_all` and `name` are supported; `random_prefix_generation` and `mailbox_ids` return 400 (not modeled yet).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCustomDomainRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "custom_domain_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedCustomDomainResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "CustomDomain"
+        ],
+        "description": "Delete a custom domain. Its aliases are deleted and tombstoned (never reusable) and its DKIM keys are removed. Deletion is immediate — a deviation from SimpleLogin, whose web-only flow schedules a background job.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "custom_domain_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
             "description": "Default Response",
             "content": {
               "application/json": {

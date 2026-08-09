@@ -8,9 +8,10 @@
  * MAIL FROM must be an alias or mailbox of the authed user → DATA →
  * rewriteReply (any To/Cc or envelope recipient that is not one of this
  * alias's reverse aliases → 550 5.7.1, the real recipient list is never
- * leaked) → DKIM-sign (MVP: always the service-domain key, even for
- * custom-domain aliases) → enqueue per recipient (envelope from = VERP
- * bounce_reply, rcpt = the contact's real address).
+ * leaked) → DKIM-sign (custom-domain aliases with the domain's own key once
+ * dkim_verified, else the service key — pipeline/dkim.ts selectReplyDkimKey)
+ * → enqueue per recipient (envelope from = VERP bounce_reply, rcpt = the
+ * contact's real address).
  */
 
 import { config } from "./config.ts";
@@ -21,7 +22,7 @@ import { type Alias, users } from "./db/schema.ts";
 import { buildVerp, parseMessage, rewriteReply, serializeMessage } from "./mail/index.ts";
 import { signOutbound } from "./mailauth/index.ts";
 import { resolveReverseAlias } from "./pipeline/contacts.ts";
-import { loadDkimKey } from "./pipeline/dkim.ts";
+import { selectReplyDkimKey } from "./pipeline/dkim.ts";
 import { createReplyLog, resolveOurMessageId, setMessageIdMap } from "./pipeline/emailLog.ts";
 import { senderOwnership } from "./pipeline/policy.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
@@ -159,12 +160,16 @@ async function handleSubmissionData(
     }
   }
 
-  // MVP: replies are signed with the service-domain key even for
-  // custom-domain aliases (per-domain keys are the milestone-4+ path).
-  const dkimKey = await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector);
+  // Key selection: a custom-domain alias signs with its own domain's key
+  // once the domain's DKIM record is verified (dkim_verified); otherwise —
+  // and for service-domain aliases — the service key.
+  const dkimKey = await selectReplyDkimKey(opts.db, alias, {
+    serviceDomain: opts.mailDomain,
+    serviceSelector: opts.dkimSelector,
+  });
   let message: Uint8Array;
   if (dkimKey === null) {
-    log(`submission: WARNING no active DKIM key for ${opts.mailDomain} — sending unsigned`);
+    log(`submission: WARNING no active DKIM key for ${aliasDomain} — sending unsigned`);
     message = serializeMessage(result.headers, parsed.body);
   } else {
     const signed = await signOutbound(result.headers, parsed.body, { dkimKeys: [dkimKey] });

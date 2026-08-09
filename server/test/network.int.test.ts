@@ -64,7 +64,8 @@ describe("simulated internet", () => {
 
       // qmail's policyd-spf checked SPF (initech.com is "v=spf1 +a -all"
       // and the peer connects from initech's own address, so: pass).
-      const spf = getHeader(raw, "Received-SPF");
+      // policyd-spf-fs prepends the X- variant of the header.
+      const spf = getHeader(raw, "X-Received-SPF") ?? getHeader(raw, "Received-SPF");
       expect(spf).toBeDefined();
       expect(spf!.toLowerCase()).toMatch(/^pass/);
 

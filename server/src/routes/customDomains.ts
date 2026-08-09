@@ -45,6 +45,17 @@ import { DeletedResponse, ErrorResponse, MailboxLite } from "./schema";
 
 const DomainIdParams = z.object({ custom_domain_id: z.coerce.number().int() });
 
+/** Unique-violation detection across the driver's wrapping (err.cause chain). */
+function isUniqueViolation(err: unknown): boolean {
+  for (let e = err, depth = 0; typeof e === "object" && e !== null && depth < 4; depth++) {
+    const rec = e as { code?: unknown; errno?: unknown; message?: unknown; cause?: unknown };
+    if (rec.code === "23505" || rec.errno === "23505") return true;
+    if (typeof rec.message === "string" && rec.message.includes("duplicate key")) return true;
+    e = rec.cause;
+  }
+  return false;
+}
+
 /** RFC 1035-ish shape check; length-capped, lowercase, at least one dot. */
 const DOMAIN_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
@@ -245,12 +256,7 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
           .returning();
         cd = inserted[0];
       } catch (err) {
-        const message = err instanceof Error ? err.message : "";
-        const code =
-          typeof err === "object" && err !== null && "code" in err ? err.code : undefined;
-        if (code === "23505" || message.includes("duplicate key")) {
-          throw new HttpError(400, `${domain} already used`);
-        }
+        if (isUniqueViolation(err)) throw new HttpError(400, `${domain} already used`);
         throw err;
       }
       if (!cd) throw new Error("custom domain insert returned no row");

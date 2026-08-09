@@ -46,9 +46,20 @@ async function createDomain(apiKey: string, domain = uniqueDomain()) {
   return res.json<{ id: number; domain_name: string }>();
 }
 
+/** A user whose trial is over and who has no subscription: not premium. */
+async function freeUser(): Promise<TestUser> {
+  const user = await registerAndLogin(app);
+  // Registration grants a 7-day trial (SimpleLogin behavior) — expire it.
+  await db
+    .update(users)
+    .set({ trialEnd: new Date(Date.now() - 1_000) })
+    .where(eq(users.email, user.email));
+  return user;
+}
+
 describe("POST /api/custom_domains", () => {
-  test("requires premium", async () => {
-    const { apiKey } = await registerAndLogin(app);
+  test("requires premium (expired trial, no subscription)", async () => {
+    const { apiKey } = await freeUser();
     const res = await app.inject({
       method: "POST",
       url: "/api/custom_domains",

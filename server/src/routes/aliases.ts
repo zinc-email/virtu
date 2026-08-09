@@ -146,7 +146,7 @@ export async function withAliasRoutes(authed: FastifyInstance) {
     method: "POST",
     url: "/v2/aliases",
     config: { rateLimit: { max: 50, timeWindow: "1 minute" } },
-    schema: { ...listSchema, body: ListBody.optional() },
+    schema: { ...listSchema, body: ListBody.nullish() },
     handler: async (req) =>
       listAliases(req.user.id, { ...parseFilters(req.query), query: req.body?.query ?? null }),
   });

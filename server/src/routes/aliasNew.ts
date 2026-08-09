@@ -264,7 +264,7 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         hostname: z.string().optional(),
         mode: z.string().optional(),
       }),
-      body: NewRandomAliasBody.optional(),
+      body: NewRandomAliasBody.nullish(),
       response: {
         201: CreatedAliasResponse,
         400: ErrorResponse,

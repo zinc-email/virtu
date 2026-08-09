@@ -189,7 +189,7 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       tags: ["Mailbox"],
       security: [{ apiKeyAuth: [] }],
       params: MailboxIdParams,
-      body: DeleteMailboxBody.optional(),
+      body: DeleteMailboxBody.nullish(),
       response: {
         200: DeletedResponse,
         400: ErrorResponse,

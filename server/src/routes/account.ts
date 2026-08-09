@@ -235,7 +235,7 @@ export async function withAccountRoutes(authed: FastifyInstance) {
         '440 {"error": "Need sudo"} otherwise.',
       tags: ["Account"],
       security: [{ apiKeyAuth: [] }],
-      body: CreateApiKeyBody.optional(),
+      body: CreateApiKeyBody.nullish(),
       response: { 201: ApiKeyResponse, 401: ErrorResponse, 440: ErrorResponse },
     },
     handler: async (req, reply) => {

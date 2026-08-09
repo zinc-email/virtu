@@ -1367,11 +1367,17 @@
             "application/json": {
               "schema": {
                 "x-fastify-zod-openapi-optional": true,
-                "$ref": "#/components/schemas/AliasListQueryBody"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AliasListQueryBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
-          },
-          "description": "Optional search query (email/name/note ilike)"
+          }
         },
         "parameters": [
           {
@@ -2015,7 +2021,14 @@
             "application/json": {
               "schema": {
                 "x-fastify-zod-openapi-optional": true,
-                "$ref": "#/components/schemas/NewRandomAliasRequest"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/NewRandomAliasRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           }
@@ -2565,7 +2578,14 @@
             "application/json": {
               "schema": {
                 "x-fastify-zod-openapi-optional": true,
-                "$ref": "#/components/schemas/DeleteMailboxRequest"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DeleteMailboxRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           }

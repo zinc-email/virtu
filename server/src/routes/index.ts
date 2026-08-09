@@ -10,6 +10,7 @@ import { withAliasNewRoutes } from "./aliasNew";
 import { withAliasRoutes } from "./aliases";
 import { requireApiAuth } from "./apiAuth";
 import { withAuthRoutes } from "./auth";
+import { withBillingRoutes } from "./billing";
 import { withContactRoutes } from "./contacts";
 import { errorEnvelopeHandler, HttpError } from "./httpError";
 import { withMailboxRoutes } from "./mailboxRoutes";
@@ -38,6 +39,7 @@ export async function withApiRoutes(app: FastifyInstance) {
         await withContactRoutes(authed);
         await withMailboxRoutes(authed);
         await withAccountRoutes(authed);
+        await withBillingRoutes(authed);
       });
     },
     { prefix: "/api" },

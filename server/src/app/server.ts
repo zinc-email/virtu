@@ -10,6 +10,7 @@ import {
   validatorCompiler,
 } from "fastify-zod-openapi";
 import { withApiRoutes } from "../routes";
+import { withStripeWebhookRoutes } from "../routes/billing";
 import { registerOpenApi } from "./openapi";
 
 export interface BuildAppOptions {
@@ -33,6 +34,13 @@ export async function buildApp(opts: BuildAppOptions = {}) {
   await registerOpenApi(app);
 
   await withApiRoutes(app);
+
+  // Stripe webhook — outside /api (Stripe posts here directly, no auth
+  // header; authenticity is the signature). Its raw-body content-type parser
+  // is encapsulated inside the module's own plugin scope, so no other
+  // route's JSON parsing changes. Hidden from the spec like all non-/api
+  // routes (see openapi.ts).
+  await withStripeWebhookRoutes(app);
 
   // Public probes — outside /api and hidden from the spec (see openapi.ts).
   app.route({

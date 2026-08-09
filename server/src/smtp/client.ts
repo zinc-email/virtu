@@ -33,6 +33,11 @@ import {
   takeLine,
 } from "./wire.ts";
 
+/** SNI must be a hostname, never an IP literal (RFC 6066). */
+function sniFor(host: string): { servername?: string } {
+  return net.isIP(host) === 0 ? { servername: host } : {};
+}
+
 /** Transport-level client failure (connect/timeout/drop/unparseable reply). */
 export class SmtpClientError extends Error {
   constructor(
@@ -80,7 +85,7 @@ export async function connectSmtp(options: ConnectSmtpOptions): Promise<SmtpClie
     };
     const sock: net.Socket | tls.TLSSocket = options.implicitTls
       ? tls.connect(
-          { host: options.host, port: options.port, servername: options.host, ...options.tls },
+          { host: options.host, port: options.port, ...sniFor(options.host), ...options.tls },
           onReady,
         )
       : net.connect(options.port, options.host, onReady);
@@ -229,7 +234,7 @@ class Session implements SmtpClient {
         reject(new SmtpClientError("TLS handshake timeout", "TIMEOUT"));
       }, this.timeoutMs);
       const t: tls.TLSSocket = tls.connect(
-        { socket: plain, servername: this.options.host, ...this.options.tls },
+        { socket: plain, ...sniFor(this.options.host), ...this.options.tls },
         () => {
           clearTimeout(timer);
           t.removeListener("error", onError);

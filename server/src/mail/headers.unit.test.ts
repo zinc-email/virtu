@@ -29,8 +29,7 @@ describe("parseMessage", () => {
   });
 
   test("preserves folded headers and unfolds on get", () => {
-    const raw =
-      "Subject: a very\r\n long subject\r\n\tthat folds twice\r\n" + "\r\n" + "body";
+    const raw = "Subject: a very\r\n long subject\r\n\tthat folds twice\r\n" + "\r\n" + "body";
     const { headers } = parseMessage(enc.encode(raw));
     expect(headers.fields).toHaveLength(1);
     expect(headers.fields[0]!.rawValue).toBe(" a very\r\n long subject\r\n\tthat folds twice");
@@ -146,7 +145,10 @@ describe("helpers", () => {
 
   test("long generated values fold at whitespace under 78 chars", () => {
     const headers = new HeaderBlock();
-    const list = Array.from({ length: 6 }, (_, i) => `contact_${i}_at_example_com_xyz${i}@proxy.example`);
+    const list = Array.from(
+      { length: 6 },
+      (_, i) => `contact_${i}_at_example_com_xyz${i}@proxy.example`,
+    );
     headers.append("To", list.join(", "));
     const out = dec.decode(headers.serialize());
     for (const line of out.split("\r\n")) {
@@ -165,9 +167,7 @@ describe("helpers", () => {
 
 describe("parseAddressList", () => {
   test("single bare address", () => {
-    expect(parseAddressList("milton@initech.com")).toEqual([
-      { address: "milton@initech.com" },
-    ]);
+    expect(parseAddressList("milton@initech.com")).toEqual([{ address: "milton@initech.com" }]);
   });
 
   test("angle-addr with display name", () => {
@@ -183,9 +183,7 @@ describe("parseAddressList", () => {
   });
 
   test("comma-separated list, mixed forms", () => {
-    expect(
-      parseAddressList('a@x.com, "B, b" <b@y.com>, C <c@z.com>'),
-    ).toEqual([
+    expect(parseAddressList('a@x.com, "B, b" <b@y.com>, C <c@z.com>')).toEqual([
       { address: "a@x.com" },
       { name: "B, b", address: "b@y.com" },
       { name: "C", address: "c@z.com" },

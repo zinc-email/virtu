@@ -87,14 +87,12 @@ describe("forwardDisplayName (SimpleLogin sender_format AT)", () => {
     );
   });
   test("no name", () => {
-    expect(forwardDisplayName({ address: "milton@initech.com" })).toBe(
-      "milton at initech.com",
-    );
+    expect(forwardDisplayName({ address: "milton@initech.com" })).toBe("milton at initech.com");
   });
   test("name equal to address collapses", () => {
-    expect(
-      forwardDisplayName({ name: "milton@initech.com", address: "milton@initech.com" }),
-    ).toBe("milton at initech.com");
+    expect(forwardDisplayName({ name: "milton@initech.com", address: "milton@initech.com" })).toBe(
+      "milton at initech.com",
+    );
   });
 });
 
@@ -132,9 +130,7 @@ describe("rewriteForward", () => {
     expect(result.headers.get("X-Virtu-EmailLog-ID")).toBe("42");
     expect(result.headers.get("X-Virtu-Envelope-From")).toBe("bounces-123@initech.com");
     expect(result.headers.get("X-Virtu-Envelope-To")).toBe("asdf@user.com");
-    expect(result.headers.get("X-Virtu-Original-From")).toBe(
-      "Milton Waddams <milton@initech.com>",
-    );
+    expect(result.headers.get("X-Virtu-Original-From")).toBe("Milton Waddams <milton@initech.com>");
 
     // input untouched (pure)
     expect(headers.get("From")).toBe("Milton Waddams <milton@initech.com>");
@@ -255,9 +251,7 @@ describe("rewriteForward", () => {
 
   test("In-Reply-To/References translated back to mailbox-side originals", async () => {
     const ctx = baseCtx();
-    const map = new Map([
-      ["<ours-9@user.com>", "<gmail-abc@mail.qmail.com>"],
-    ]);
+    const map = new Map([["<ours-9@user.com>", "<gmail-abc@mail.qmail.com>"]]);
     ctx.resolveOriginalMessageId = async (id) => map.get(id) ?? null;
     const raw =
       "From: milton@initech.com\r\n" +

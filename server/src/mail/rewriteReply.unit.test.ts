@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseAddressList, parseMessage } from "./headers.ts";
-import {
-  REPLY_HEADER_WHITELIST,
-  type ReplyContext,
-  rewriteReply,
-} from "./rewriteReply.ts";
+import { REPLY_HEADER_WHITELIST, type ReplyContext, rewriteReply } from "./rewriteReply.ts";
 
 const enc = new TextEncoder();
 
@@ -158,9 +154,7 @@ describe("rewriteReply", () => {
     const { headers } = parseMessage(enc.encode(raw));
     const result = await rewriteReply({ headers }, ctx);
     if (!result.ok) throw new Error("expected ok");
-    expect(parseAddressList(result.headers.get("Cc")!)).toEqual([
-      { address: "peter@initech.com" },
-    ]);
+    expect(parseAddressList(result.headers.get("Cc")!)).toEqual([{ address: "peter@initech.com" }]);
   });
 
   test("undisclosed-recipients To is left untouched (BCC mode)", async () => {
@@ -174,9 +168,7 @@ describe("rewriteReply", () => {
     const result = await rewriteReply({ headers }, ctx);
     if (!result.ok) throw new Error("expected ok");
     expect(result.headers.get("To")).toBe("undisclosed-recipients:;");
-    expect(parseAddressList(result.headers.get("Cc")!)[0]!.address).toBe(
-      "milton@initech.com",
-    );
+    expect(parseAddressList(result.headers.get("Cc")!)[0]!.address).toBe("milton@initech.com");
   });
 
   test("Message-ID reused from existing mapping (multi-recipient reply)", async () => {
@@ -197,8 +189,7 @@ describe("rewriteReply", () => {
 
   test("no Message-ID on input: ours generated, original null", async () => {
     const ctx = baseCtx();
-    const raw =
-      "From: wes@qmail.com\r\nTo: milton_at_initech_com_r1@proxy.virtu.test\r\n\r\nbody";
+    const raw = "From: wes@qmail.com\r\nTo: milton_at_initech_com_r1@proxy.virtu.test\r\n\r\nbody";
     const { headers } = parseMessage(enc.encode(raw));
     const result = await rewriteReply({ headers }, ctx);
     if (!result.ok) throw new Error("expected ok");
@@ -239,8 +230,7 @@ describe("rewriteReply", () => {
 
   test("missing Date synthesized on replies", async () => {
     const ctx = baseCtx();
-    const raw =
-      "From: wes@qmail.com\r\nTo: milton_at_initech_com_r1@proxy.virtu.test\r\n\r\nbody";
+    const raw = "From: wes@qmail.com\r\nTo: milton_at_initech_com_r1@proxy.virtu.test\r\n\r\nbody";
     const { headers } = parseMessage(enc.encode(raw));
     const result = await rewriteReply({ headers }, ctx);
     if (!result.ok) throw new Error("expected ok");

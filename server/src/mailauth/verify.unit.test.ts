@@ -6,12 +6,7 @@ import {
   makeStubResolver,
   type TestKeyPair,
 } from "./test-fixtures.ts";
-import {
-  DEFAULT_VERIFY_POLICY,
-  mapVerdict,
-  VERDICT_RULES,
-  verifyInbound,
-} from "./verify.ts";
+import { DEFAULT_VERIFY_POLICY, mapVerdict, VERDICT_RULES, verifyInbound } from "./verify.ts";
 
 let initechKey: TestKeyPair;
 
@@ -27,9 +22,9 @@ const SESSION = {
   mta: "mx.virtu.test",
 };
 
-function zonesFor(dmarcPolicy: "reject" | "quarantine" | "none" | null): Parameters<
-  typeof makeStubResolver
->[0] {
+function zonesFor(
+  dmarcPolicy: "reject" | "quarantine" | "none" | null,
+): Parameters<typeof makeStubResolver>[0] {
   const txt: Record<string, string> = {
     "initech.com": `v=spf1 ip4:${INITECH_IP} -all`,
     "sel1._domainkey.initech.com": dkimTxtRecord(initechKey),
@@ -91,11 +86,9 @@ describe("verifyInbound", () => {
 
   test("spoofed mail, p=reject: verdict reject 550 5.7.1", async () => {
     // unsigned + wrong source IP → dkim none, spf fail, dmarc fail
-    const result = await verifyInbound(
-      { ...SESSION, remoteAddress: "198.51.100.99" },
-      MESSAGE,
-      { resolver: makeStubResolver(zonesFor("reject")) },
-    );
+    const result = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, MESSAGE, {
+      resolver: makeStubResolver(zonesFor("reject")),
+    });
     expect(result.verdict.action).toBe("reject");
     if (result.verdict.action !== "reject") throw new Error("unreachable");
     expect(result.verdict.code).toBe(550);
@@ -105,40 +98,30 @@ describe("verifyInbound", () => {
   });
 
   test("spoofed mail, p=quarantine: verdict flag (deliver annotated)", async () => {
-    const result = await verifyInbound(
-      { ...SESSION, remoteAddress: "198.51.100.99" },
-      MESSAGE,
-      { resolver: makeStubResolver(zonesFor("quarantine")) },
-    );
+    const result = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, MESSAGE, {
+      resolver: makeStubResolver(zonesFor("quarantine")),
+    });
     expect(result.verdict).toEqual({ action: "flag", reason: "dmarc-quarantine" });
   });
 
   test("spoofed mail, p=none: accept (DMARC says monitor only)", async () => {
-    const result = await verifyInbound(
-      { ...SESSION, remoteAddress: "198.51.100.99" },
-      MESSAGE,
-      { resolver: makeStubResolver(zonesFor("none")) },
-    );
+    const result = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, MESSAGE, {
+      resolver: makeStubResolver(zonesFor("none")),
+    });
     expect(result.verdict).toEqual({ action: "accept" });
   });
 
   test("SPF hard fail without DMARC record: default flag, configurable to reject", async () => {
     const zones = zonesFor(null);
-    const flagged = await verifyInbound(
-      { ...SESSION, remoteAddress: "198.51.100.99" },
-      MESSAGE,
-      { resolver: makeStubResolver(zones) },
-    );
+    const flagged = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, MESSAGE, {
+      resolver: makeStubResolver(zones),
+    });
     expect(flagged.verdict).toEqual({ action: "flag", reason: "spf-hardfail" });
 
-    const rejected = await verifyInbound(
-      { ...SESSION, remoteAddress: "198.51.100.99" },
-      MESSAGE,
-      {
-        resolver: makeStubResolver(zones),
-        policy: { onSpfHardFailWithoutDmarc: "reject" },
-      },
-    );
+    const rejected = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, MESSAGE, {
+      resolver: makeStubResolver(zones),
+      policy: { onSpfHardFailWithoutDmarc: "reject" },
+    });
     expect(rejected.verdict.action).toBe("reject");
     if (rejected.verdict.action !== "reject") throw new Error("unreachable");
     expect(rejected.verdict.enhanced).toBe("5.7.23");
@@ -148,24 +131,18 @@ describe("verifyInbound", () => {
     // DKIM-signed (aligned, passes) but sent from the wrong IP → SPF fails,
     // DMARC still passes via DKIM. Conservative: accept.
     const message = await signedByInitech();
-    const result = await verifyInbound(
-      { ...SESSION, remoteAddress: "198.51.100.99" },
-      message,
-      { resolver: makeStubResolver(zonesFor("reject")) },
-    );
+    const result = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, message, {
+      resolver: makeStubResolver(zonesFor("reject")),
+    });
     expect(result.raw.spf !== false && result.raw.spf.status.result).toBe("fail");
     expect(result.verdict).toEqual({ action: "accept" });
   });
 
   test("policy override: dmarc reject downgraded to flag", async () => {
-    const result = await verifyInbound(
-      { ...SESSION, remoteAddress: "198.51.100.99" },
-      MESSAGE,
-      {
-        resolver: makeStubResolver(zonesFor("reject")),
-        policy: { onDmarcReject: "flag" },
-      },
-    );
+    const result = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, MESSAGE, {
+      resolver: makeStubResolver(zonesFor("reject")),
+      policy: { onDmarcReject: "flag" },
+    });
     expect(result.verdict).toEqual({ action: "flag", reason: "dmarc-reject" });
   });
 
@@ -204,8 +181,8 @@ describe("mapVerdict table", () => {
       bimi: false,
       headers: "",
     } as never;
-    expect(
-      mapVerdict(res, { ...DEFAULT_VERIFY_POLICY, onDmarcReject: "accept" }),
-    ).toEqual({ action: "accept" });
+    expect(mapVerdict(res, { ...DEFAULT_VERIFY_POLICY, onDmarcReject: "accept" })).toEqual({
+      action: "accept",
+    });
   });
 });

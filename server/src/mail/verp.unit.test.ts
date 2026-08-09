@@ -110,7 +110,13 @@ describe("tampering", () => {
 
   test("cross-type confusion impossible: payload of one type re-signed check", () => {
     // An attacker cannot change the type code without invalidating the hmac.
-    const forward = buildVerp({ type: "bounce_forward", id: 1, secret: SECRET, domain: DOMAIN, now });
+    const forward = buildVerp({
+      type: "bounce_forward",
+      id: 1,
+      secret: SECRET,
+      domain: DOMAIN,
+      now,
+    });
     const reply = buildVerp({ type: "bounce_reply", id: 1, secret: SECRET, domain: DOMAIN, now });
     const [, fPayload] = forward.split("@")[0]!.split(".");
     const [, , rSig] = reply.split("@")[0]!.split(".");
@@ -125,7 +131,13 @@ describe("tampering", () => {
 
 describe("expiry", () => {
   const created = new Date("2026-08-01T00:00:00Z");
-  const addr = buildVerp({ type: "bounce_forward", id: 5, secret: SECRET, domain: DOMAIN, now: created });
+  const addr = buildVerp({
+    type: "bounce_forward",
+    id: 5,
+    secret: SECRET,
+    domain: DOMAIN,
+    now: created,
+  });
 
   test("valid within the 5-day window", () => {
     const fourDaysLater = new Date(created.getTime() + 4 * 86400 * 1000);

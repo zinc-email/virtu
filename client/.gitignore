@@ -1,0 +1,5 @@
+# Generated SDK (kubb) — regenerated from ../server/spec/openapi.json
+src/gen/
+
+dist/
+node_modules/

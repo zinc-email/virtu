@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# typecheck — run `tsc --noEmit` across the TypeScript workspaces (server,
+# client). Non-zero exit on any type error. Used by CI, `just typecheck`,
+# and `just check`.
+#
+# The client typecheck descends into the generated SDK (client/src/gen), a
+# gitignored build artifact regenerated here when absent so a fresh clone /
+# CI runner typechecks the same code that ships. The generator reads the
+# committed server/spec/openapi.json — no network, no running server.
+#
+# Assumes workspace deps are installed (bun install in server/ and client/).
+# If you changed routes or schemas, run `bin/gen` first — the "regenerate
+# only when missing" check below intentionally doesn't refresh stale output.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# 1. client SDK (src/gen from the committed openapi spec).
+if [ ! -d client/src/gen ]; then
+  echo "typecheck: generating client SDK" >&2
+  (cd client && ./node_modules/.bin/kubb generate)
+fi
+
+# 2. typecheck each workspace.
+echo "typecheck: server" >&2
+(cd server && ./node_modules/.bin/tsc --noEmit)
+
+echo "typecheck: client" >&2
+(cd client && ./node_modules/.bin/tsc --noEmit)
+
+echo "typecheck: all workspaces clean" >&2

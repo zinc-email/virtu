@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# test-int — run the integration tier (*.int.test.ts): Fastify routes via
+# app.inject() against the dockerized postgres.
+#
+# Prerequisites (one-time per fresh DB volume):
+#   just up        # start the compose stack (db on localhost:5432)
+#   just db push   # apply the Drizzle schema
+#
+# The tier is parallel-safe by construction (madi RFC 0003: unique data per
+# test, no truncation, no ordering constraints) — tests run in any order
+# against a shared dirty database.
+#
+# Args forward to `bun test` verbatim (path-substring / -t name filters):
+#   bin/test-int                 # whole int tier
+#   bin/test-int auth.int.test   # one file
+
+cd "$(dirname "$0")/../server"
+
+exec bun test int.test "$@"

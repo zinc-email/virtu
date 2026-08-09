@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Thin wrapper around `docker compose` for the dev stack that runs the app
+# containers (api, client) as the *host* user instead of root, so files they
+# write into the bind mounts (node_modules, generated SDK output) are owned
+# by you on the host, not root.
+#
+# It exports APP_UID / APP_GID, which docker-compose.yml's `user:` reads:
+#
+#     user: "${APP_UID:-1000}:${APP_GID:-1000}"
+#
+# Defaults to the invoking user's id/gid. Override by pre-exporting them.
+# Falls back to 1000:1000 — the oven/bun image's built-in `bun` user — when
+# id(1) is unavailable.
+#
+# All justfile recipes that touch `docker compose` route through here. Args
+# pass through verbatim, including `-f <file>` overlays (e.g. the simulated
+# internet test network).
+
+cd "$(dirname "$0")/.."
+
+export APP_UID="${APP_UID:-$(id -u 2>/dev/null || echo 1000)}"
+export APP_GID="${APP_GID:-$(id -g 2>/dev/null || echo 1000)}"
+
+exec docker compose "$@"

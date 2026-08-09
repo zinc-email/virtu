@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# check — run every check CI runs, so a green run here means CI will pass.
+# Mirrors .github/workflows/test.yml: format-check, typecheck, unit tests.
+#
+# Cheapest checks first so it fails fast. Only the unit tier runs here — it
+# needs no docker. The int tier (routes against the dockerized postgres) has
+# its own recipe: `just up && just db push && just test-int`.
+#
+# Extra args forward to `bun test` (e.g. `bin/check apiKey`); with no args
+# the full unit tier runs, matching CI.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "- format" >&2
+bin/format-check
+
+echo "- typecheck" >&2
+bin/typecheck
+
+echo "- unit tests" >&2
+(cd server && bun test unit.test "$@")
+
+echo >&2
+echo "all checks passed" >&2

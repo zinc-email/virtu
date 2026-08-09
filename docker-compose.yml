@@ -1,0 +1,65 @@
+# Dev stack — the daily-driver services only (db, api, client). The
+# simulated-internet test network (fake DNS, peer MTAs) lives in a separate
+# compose overlay owned by Lane H.
+#
+# Run via bin/compose (or `just up`), which exports APP_UID/APP_GID so the
+# bind-mount writes (node_modules, generated SDK) are host-owned, not root.
+
+services:
+  db:
+    image: "postgres:17-alpine"
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: virtu
+      POSTGRES_PASSWORD: virtu
+    ports:
+      # Host ports are overridable so parallel checkouts can coexist.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: pg_isready -U virtu -h 127.0.0.1
+      interval: 5s
+    volumes:
+      - "pg_data:/var/lib/postgresql/data:rw"
+
+  api:
+    # Debian-based (not alpine): node_modules live in the bind mount shared
+    # with the host, and native bindings (rspack in the client) are
+    # platform-specific — keep container libc matching the usual host.
+    image: "oven/bun:1.3"
+    working_dir: /app/server
+    # bun install first: node_modules live in the bind mount and may be
+    # missing (fresh clone) or host-installed for a different platform.
+    command: ["sh", "-c", "bun install && bun --watch src/api.ts"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      DATABASE_URL: "postgres://virtu:virtu@db:5432/virtu"
+      # An arbitrary host uid has no /etc/passwd entry, so HOME would default
+      # to "/" (unwritable) and `bun install` couldn't write its cache.
+      HOME: /tmp
+    ports:
+      - "127.0.0.1:${API_PORT:-3000}:3000"
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ".:/app"
+
+  client:
+    # See api: debian-based to match host libc for the shared bind mount.
+    image: "oven/bun:1.3"
+    working_dir: /app/client
+    command: ["sh", "-c", "bun install && bun run kubb && bun run dev"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      HOME: /tmp
+    ports:
+      - "127.0.0.1:${CLIENT_PORT:-9000}:9000"
+    init: true
+    depends_on:
+      - api
+    volumes:
+      - ".:/app"
+
+volumes:
+  pg_data:

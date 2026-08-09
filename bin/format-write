@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# format-write — apply Biome formatting fixes in place across the repo.
+# Local-use sibling of `bin/format-check` (which only verifies).
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+exec ./node_modules/.bin/biome format --write .

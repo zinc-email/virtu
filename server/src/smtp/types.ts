@@ -337,7 +337,11 @@ export interface SmtpClient {
    * challenge dialog. Defaults to PLAIN when advertised, else LOGIN.
    * Resolves with the 235 reply; throws {@link SmtpCommandError} on refusal.
    */
-  auth(credentials: { username: string; password: string; mechanism?: "PLAIN" | "LOGIN" }): Promise<SmtpReply>;
+  auth(credentials: {
+    username: string;
+    password: string;
+    mechanism?: "PLAIN" | "LOGIN";
+  }): Promise<SmtpReply>;
   /** Run one mail transaction. Envelope-level refusals come back structured
    * (per step, so partial failures are reportable); transport failures throw. */
   send(options: SmtpSendOptions): Promise<SmtpSendResult>;

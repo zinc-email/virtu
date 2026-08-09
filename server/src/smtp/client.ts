@@ -262,7 +262,8 @@ class Session implements SmtpClient {
   }): Promise<SmtpReply> {
     const advertised = (this.capabilities.get("AUTH") ?? "").toUpperCase().split(/\s+/);
     const mechanism =
-      credentials.mechanism ?? (advertised.includes("PLAIN") || !advertised.includes("LOGIN") ? "PLAIN" : "LOGIN");
+      credentials.mechanism ??
+      (advertised.includes("PLAIN") || !advertised.includes("LOGIN") ? "PLAIN" : "LOGIN");
     if (mechanism === "PLAIN") {
       const payload = encodeBase64(`\0${credentials.username}\0${credentials.password}`);
       const r = await this.command(`AUTH PLAIN ${payload}`);

@@ -19,14 +19,21 @@ describe("smtp client vs hostile server", () => {
     const port = await serve(async (conn) => {
       conn.write("220 fake.example ESMTP\r\n");
       await conn.nextLine(); // EHLO
-      conn.write("250-fake.example greets you\r\n250-PIPELINING\r\n250-SIZE 5000\r\n250 AUTH PLAIN LOGIN\r\n");
+      conn.write(
+        "250-fake.example greets you\r\n250-PIPELINING\r\n250-SIZE 5000\r\n250 AUTH PLAIN LOGIN\r\n",
+      );
       await conn.nextLine(); // QUIT
       conn.write("221 2.0.0 Bye\r\n");
     });
     const client = await connectSmtp({ host: "127.0.0.1", port, name: "me.example" });
     expect(client.greeting.code).toBe(220);
     const r = await client.ehlo();
-    expect(r.lines).toEqual(["fake.example greets you", "PIPELINING", "SIZE 5000", "AUTH PLAIN LOGIN"]);
+    expect(r.lines).toEqual([
+      "fake.example greets you",
+      "PIPELINING",
+      "SIZE 5000",
+      "AUTH PLAIN LOGIN",
+    ]);
     expect(client.capabilities.get("SIZE")).toBe("5000");
     expect(client.capabilities.get("AUTH")).toBe("PLAIN LOGIN");
     await client.quit();

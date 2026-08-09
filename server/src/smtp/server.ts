@@ -594,9 +594,14 @@ class Connection {
     if (!this.opts.onAuth) return this.sayError(502, "5.5.1", "AUTH not available");
     if (!this.session.heloName) return this.sayError(503, "5.5.1", "Send HELO/EHLO first");
     if (this.session.authUser) return this.sayError(503, "5.5.1", "Already authenticated");
-    if (this.mailFrom !== null) return this.sayError(503, "5.5.1", "AUTH not allowed during a mail transaction");
+    if (this.mailFrom !== null)
+      return this.sayError(503, "5.5.1", "AUTH not allowed during a mail transaction");
     if (this.opts.requireAuthTls && !this.secure) {
-      return this.sayError(538, "5.7.11", "Encryption required for requested authentication mechanism");
+      return this.sayError(
+        538,
+        "5.7.11",
+        "Encryption required for requested authentication mechanism",
+      );
     }
     const [mechRaw, initial] = arg.trim().split(/\s+/, 2);
     const mechanism = (mechRaw ?? "").toUpperCase();
@@ -676,6 +681,10 @@ class Connection {
 }
 
 /** Reusable rejection shape helper (sugar for hooks). */
-export function rejectWith(code: number, enhanced: string, message: string): { reject: SmtpRejection } {
+export function rejectWith(
+  code: number,
+  enhanced: string,
+  message: string,
+): { reject: SmtpRejection } {
   return { reject: { code, enhanced, message } };
 }

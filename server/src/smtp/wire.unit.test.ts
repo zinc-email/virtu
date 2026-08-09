@@ -148,7 +148,12 @@ describe("ReplyParser", () => {
   test("single-line reply with enhanced code", () => {
     const p = new ReplyParser();
     const r = p.feed("250 2.1.0 Ok");
-    expect(r).toEqual({ code: 250, enhancedCode: "2.1.0", message: "2.1.0 Ok", lines: ["2.1.0 Ok"] });
+    expect(r).toEqual({
+      code: 250,
+      enhancedCode: "2.1.0",
+      message: "2.1.0 Ok",
+      lines: ["2.1.0 Ok"],
+    });
   });
   test("multiline reply", () => {
     const p = new ReplyParser();
@@ -178,7 +183,12 @@ describe("ReplyParser", () => {
 
 describe("parseCapabilities", () => {
   test("parses keywords and params, skipping the greeting line", () => {
-    const caps = parseCapabilities(["mx.example ready", "PIPELINING", "SIZE 1000", "AUTH PLAIN LOGIN"]);
+    const caps = parseCapabilities([
+      "mx.example ready",
+      "PIPELINING",
+      "SIZE 1000",
+      "AUTH PLAIN LOGIN",
+    ]);
     expect(caps.has("PIPELINING")).toBe(true);
     expect(caps.get("SIZE")).toBe("1000");
     expect(caps.get("AUTH")).toBe("PLAIN LOGIN");

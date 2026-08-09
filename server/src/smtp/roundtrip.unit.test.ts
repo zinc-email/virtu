@@ -22,7 +22,9 @@ interface Received {
   events: SmtpDataEvent[];
 }
 
-async function setup(options: Partial<SmtpServerOptions> = {}): Promise<{ port: number; received: Received }> {
+async function setup(
+  options: Partial<SmtpServerOptions> = {},
+): Promise<{ port: number; received: Received }> {
   const received: Received = { events: [] };
   const { server, port } = await listen({
     hostname: "mx.test.example",
@@ -66,7 +68,9 @@ describe("round-trip: plaintext", () => {
     expect(event.envelope.tls).toBe(false);
     expect(event.envelope.authUser).toBeUndefined();
     expect(Buffer.from(event.raw).toString()).toBe(message);
-    expect(Buffer.from(event.headers).toString()).toBe("From: a@x\r\nTo: b@y\r\nSubject: hello\r\n");
+    expect(Buffer.from(event.headers).toString()).toBe(
+      "From: a@x\r\nTo: b@y\r\nSubject: hello\r\n",
+    );
     expect(Buffer.from(event.body).toString()).toBe("Hi there.\r\n");
   });
 
@@ -250,7 +254,12 @@ describe("round-trip: TLS", () => {
 
   test("implicit TLS (465-style) delivery", async () => {
     const { port, received } = await setup({ tls: CERT, implicitTls: true, onAuth: auth });
-    const client = await connectSmtp({ host: "127.0.0.1", port, implicitTls: true, tls: TLS_CLIENT });
+    const client = await connectSmtp({
+      host: "127.0.0.1",
+      port,
+      implicitTls: true,
+      tls: TLS_CLIENT,
+    });
     expect(client.secure).toBe(true);
     await client.ehlo();
     // Already secure: STARTTLS is not advertised, AUTH is.

@@ -221,7 +221,9 @@ describe("smtp server: MAIL parameters", () => {
   test("maxRecipients is enforced with 452", async () => {
     const { client } = await setup({ maxRecipients: 2 });
     await ehlo(client);
-    client.write("MAIL FROM:<a@b.c>\r\nRCPT TO:<r1@b.c>\r\nRCPT TO:<r2@b.c>\r\nRCPT TO:<r3@b.c>\r\n");
+    client.write(
+      "MAIL FROM:<a@b.c>\r\nRCPT TO:<r1@b.c>\r\nRCPT TO:<r2@b.c>\r\nRCPT TO:<r3@b.c>\r\n",
+    );
     await client.waitFor(/^250 2\.1\.5/);
     await client.waitFor(/^250 2\.1\.5/);
     await client.waitFor(/^452 4\.5\.3/);

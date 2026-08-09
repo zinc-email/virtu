@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# user-create — register + activate + login a local dev user in one shot.
+#
+# Idempotent: an already-activated user just logs in; an unactivated one is
+# activated with the code pulled from the queue (bin/login-code). Prints the
+# API key. Requires the dev stack (`just up` + `just db push`).
+#
+# Usage: bin/user-create [email] [password]
+# Defaults: wes@qmail.com / password1234 (the story-world persona, dev only)
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+EMAIL="${1:-wes@qmail.com}"
+PASSWORD="${2:-password1234}"
+BASE="http://localhost:${API_PORT:-3000}/api"
+
+login() {
+  curl -s -X POST "$BASE/auth/login" -H 'content-type: application/json' \
+    -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"device\":\"user-create\"}"
+}
+
+print_key() {
+  local key
+  key=$(printf '%s' "$1" | sed -nE 's/.*"api_key":"([^"]+)".*/\1/p')
+  echo "user:    $EMAIL"
+  echo "api key: $key"
+  echo
+  echo "Log in at http://localhost:${CLIENT_PORT:-9000} with the password, or:"
+  echo "  curl -H 'Authentication: $key' $BASE/user_info"
+}
+
+RES=$(login)
+if [[ "$RES" == *'"api_key"'* ]]; then
+  print_key "$RES"
+  exit 0
+fi
+
+# Not logged in: register (a 400 "already used" just means unactivated or a
+# wrong password — activation below sorts out which).
+curl -s -X POST "$BASE/auth/register" -H 'content-type: application/json' \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" > /dev/null
+
+activate() {
+  local code
+  code=$(bin/login-code "$EMAIL") || return 1
+  curl -s -X POST "$BASE/auth/activate" -H 'content-type: application/json' \
+    -d "{\"email\":\"$EMAIL\",\"code\":\"$code\"}"
+}
+
+OUT=$(activate)
+if [[ "$OUT" != *activated* ]]; then
+  # Code may be expired (15 min) or consumed: request a fresh one, retry once.
+  curl -s -X POST "$BASE/auth/reactivate" -H 'content-type: application/json' \
+    -d "{\"email\":\"$EMAIL\"}" > /dev/null
+  OUT=$(activate)
+fi
+
+RES=$(login)
+if [[ "$RES" == *'"api_key"'* ]]; then
+  print_key "$RES"
+else
+  echo "login failed for $EMAIL: $RES" >&2
+  echo "(existing user with a different password?)" >&2
+  exit 1
+fi

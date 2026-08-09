@@ -93,6 +93,18 @@ test-net-ps:
   docker compose -f docker-compose.test.yml ps
 
 # ----------------------------------------------------------------------------
+# Dev users — local login ergonomics (requires the dev stack)
+# ----------------------------------------------------------------------------
+
+# Register + activate + login a dev user; prints the API key.
+user-create email="wes@qmail.com" password="password1234":
+  bin/user-create {{email}} {{password}}
+
+# Print the newest emailed verification code for an address (from the queue).
+login-code email:
+  bin/login-code {{email}}
+
+# ----------------------------------------------------------------------------
 # Homepage — static marketing site (Astro, www/)
 # ----------------------------------------------------------------------------
 

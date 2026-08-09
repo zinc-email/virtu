@@ -11,6 +11,7 @@ import { withAliasRoutes } from "./aliases";
 import { requireApiAuth } from "./apiAuth";
 import { withAuthRoutes } from "./auth";
 import { withContactRoutes } from "./contacts";
+import { withCustomDomainRoutes } from "./customDomains";
 import { errorEnvelopeHandler, HttpError } from "./httpError";
 import { withMailboxRoutes } from "./mailboxRoutes";
 import { withUserInfoRoutes } from "./userInfo";
@@ -36,6 +37,7 @@ export async function withApiRoutes(app: FastifyInstance) {
         await withAliasRoutes(authed);
         await withAliasNewRoutes(authed);
         await withContactRoutes(authed);
+        await withCustomDomainRoutes(authed);
         await withMailboxRoutes(authed);
         await withAccountRoutes(authed);
       });

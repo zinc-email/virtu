@@ -81,27 +81,30 @@ export function shouldDisable(bounceTimes: Date[], now: Date): DisableVerdict {
   return { disable: false };
 }
 
-/** Options for {@link sendAlertOnce}. */
-export interface AlertInput {
+/** Dedup key for one rate-limited action (the sent_alerts row shape). */
+export interface AlertClaimInput {
   userId: number;
-  /** Address the alert would be mailed to (dedup key with alertType). */
+  /** Address the alert/DSN would be mailed to (dedup key with alertType). */
   toEmail: string;
-  /** Dedup key, e.g. `bounce_disabled_alias_42`. */
+  /** Dedup key, e.g. `bounce_disabled_alias_42` or `dsn_bounce_forward_7`. */
   alertType: string;
-  title: string;
-  message: string;
   now?: Date;
   /** Dedup window; default 24h (SimpleLogin). */
   windowMs?: number;
 }
 
+/** Options for {@link sendAlertOnce}. */
+export interface AlertInput extends AlertClaimInput {
+  title: string;
+  message: string;
+}
+
 /**
- * Write a notification row unless the same (user, toEmail, alertType) alert
- * fired within the window. Returns true when the alert was actually written.
- * (Actual alert *email* delivery is a milestone-4 concern; the rows are the
- * durable record either way.)
+ * Claim a once-per-window slot in sent_alerts WITHOUT writing a notification
+ * (used to rate-limit outbound mail such as DSNs, where the "alert" is the
+ * message itself). Returns true when this call claimed the slot.
  */
-export async function sendAlertOnce(db: Db, input: AlertInput): Promise<boolean> {
+export async function claimAlertOnce(db: Db, input: AlertClaimInput): Promise<boolean> {
   const now = input.now ?? new Date();
   const windowStart = new Date(now.getTime() - (input.windowMs ?? DAY_MS));
 
@@ -124,6 +127,17 @@ export async function sendAlertOnce(db: Db, input: AlertInput): Promise<boolean>
     toEmail: input.toEmail,
     alertType: input.alertType,
   });
+  return true;
+}
+
+/**
+ * Write a notification row unless the same (user, toEmail, alertType) alert
+ * fired within the window. Returns true when the alert was actually written.
+ * (Actual alert *email* delivery is a milestone-4 concern; the rows are the
+ * durable record either way.)
+ */
+export async function sendAlertOnce(db: Db, input: AlertInput): Promise<boolean> {
+  if (!(await claimAlertOnce(db, input))) return false;
   await db.insert(notifications).values({
     userId: input.userId,
     title: input.title,

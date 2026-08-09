@@ -12,6 +12,7 @@ import {
 import { getApiKey } from "src/auth";
 import { AliasesPage } from "src/pages/Aliases";
 import { LoginPage } from "src/pages/Login";
+import { SettingsPage } from "src/pages/Settings";
 
 function Shell() {
   return (
@@ -32,6 +33,15 @@ const indexRoute = createRoute({
   component: AliasesPage,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  beforeLoad: () => {
+    if (!getApiKey()) throw redirect({ to: "/login" });
+  },
+  component: SettingsPage,
+});
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
@@ -39,7 +49,7 @@ const loginRoute = createRoute({
 });
 
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, loginRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, settingsRoute, loginRoute]),
 });
 
 declare module "@tanstack/react-router" {

@@ -7,6 +7,7 @@ import {
   Button,
   Group,
   Modal,
+  MultiSelect,
   Select,
   Stack,
   Text,
@@ -33,7 +34,8 @@ export function CreateAliasModal({ opened, onClose }: Props) {
   const queryClient = useQueryClient();
   const [prefix, setPrefix] = useState("");
   const [signedSuffix, setSignedSuffix] = useState<string | null>(null);
-  const [mailboxId, setMailboxId] = useState<string | null>(null);
+  const [mailboxIds, setMailboxIds] = useState<string[]>([]);
+  const [mailboxesSeeded, setMailboxesSeeded] = useState(false);
   const [note, setNote] = useState("");
 
   const options = useGetV5AliasOptions(undefined, {
@@ -48,8 +50,11 @@ export function CreateAliasModal({ opened, onClose }: Props) {
   }, [opened, options.data, signedSuffix]);
   useEffect(() => {
     const def = mailboxes.data?.mailboxes.find((m) => m.default) ?? mailboxes.data?.mailboxes[0];
-    if (opened && def && mailboxId === null) setMailboxId(String(def.id));
-  }, [opened, mailboxes.data, mailboxId]);
+    if (opened && def && !mailboxesSeeded) {
+      setMailboxIds([String(def.id)]);
+      setMailboxesSeeded(true);
+    }
+  }, [opened, mailboxes.data, mailboxesSeeded]);
 
   const create = usePostV3AliasCustomNew({
     mutation: {
@@ -71,7 +76,8 @@ export function CreateAliasModal({ opened, onClose }: Props) {
   const handleClose = () => {
     setPrefix("");
     setSignedSuffix(null);
-    setMailboxId(null);
+    setMailboxIds([]);
+    setMailboxesSeeded(false);
     setNote("");
     create.reset();
     onClose();
@@ -85,7 +91,7 @@ export function CreateAliasModal({ opened, onClose }: Props) {
   const canSubmit =
     prefix.trim().length > 0 &&
     signedSuffix !== null &&
-    mailboxId !== null &&
+    mailboxIds.length > 0 &&
     options.data?.can_create !== false;
 
   return (
@@ -93,12 +99,13 @@ export function CreateAliasModal({ opened, onClose }: Props) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (!canSubmit || signedSuffix === null || mailboxId === null) return;
+          if (!canSubmit || signedSuffix === null || mailboxIds.length === 0) return;
           create.mutate({
             data: {
               alias_prefix: prefix.trim(),
               signed_suffix: signedSuffix,
-              mailbox_ids: [Number(mailboxId)],
+              // The first entry becomes the primary mailbox.
+              mailbox_ids: mailboxIds.map(Number),
               ...(note.trim() ? { note: note.trim() } : {}),
             },
           });
@@ -143,13 +150,12 @@ export function CreateAliasModal({ opened, onClose }: Props) {
               </Text>
             </Text>
           )}
-          <Select
-            label="Mailbox"
-            description="Where forwarded emails arrive"
+          <MultiSelect
+            label="Mailboxes"
+            description="Where forwarded emails arrive (the first is the primary)"
             data={mailboxData}
-            value={mailboxId}
-            onChange={setMailboxId}
-            allowDeselect={false}
+            value={mailboxIds}
+            onChange={setMailboxIds}
             comboboxProps={{ withinPortal: false }}
           />
           <Textarea

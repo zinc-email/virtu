@@ -197,7 +197,9 @@ export const contacts = pgTable(
   },
   (t) => [
     uniqueIndex("contacts_alias_id_website_email_uq").on(t.aliasId, t.websiteEmail),
-    index("contacts_reply_email_idx").on(t.replyEmail),
+    // UNIQUE (wave 2): reverse-alias addresses are generated with a random
+    // suffix and made collision-safe by constraint-violation retry.
+    uniqueIndex("contacts_reply_email_uq").on(t.replyEmail),
     index("contacts_user_id_idx").on(t.userId),
   ],
 );
@@ -241,6 +243,10 @@ export const emailLogs = pgTable(
     // E.g. alias disabled — the forward was blocked.
     blocked: boolean().default(false).notNull(),
     bounced: boolean().default(false).notNull(),
+    // When the bounce was recorded (wave 2): the auto-disable thresholds
+    // (>12/day, >10/week, 9-of-10 days — PLAN Lane C) count on this, not on
+    // createdAt, so late bounces land in the right window.
+    bouncedAt: timestamp({ withTimezone: true, mode: "date" }),
     autoReplied: boolean().default(false).notNull(),
     isSpam: boolean().default(false).notNull(),
     spamScore: real(),
@@ -258,6 +264,8 @@ export const emailLogs = pgTable(
     index("email_logs_alias_id_idx").on(t.aliasId),
     index("email_logs_mailbox_id_idx").on(t.mailboxId),
     index("email_logs_created_at_idx").on(t.createdAt),
+    // Bounce accounting (wave 2): count recent bounces per alias.
+    index("email_logs_alias_id_bounced_at_idx").on(t.aliasId, t.bouncedAt),
   ],
 );
 

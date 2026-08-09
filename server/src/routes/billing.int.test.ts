@@ -259,6 +259,60 @@ describe("POST /webhooks/stripe — subscription lifecycle", () => {
     expect(rows[0]?.currentPeriodEnd?.getTime()).toBe(periodEnd * 1000);
   });
 
+  test("out-of-order subscription.created after updated does not regress status (live-observed)", async () => {
+    // Stripe delivers events out of order: in the live test, `updated`
+    // (active, with period end) arrived before `created` (incomplete — the
+    // subscription's birth state) and the status regressed. `created` must
+    // never overwrite the status of a row already tracking the same
+    // subscription; it may only backfill a missing period end.
+    const { email } = await registerAndLogin(app);
+    const userId = await userIdByEmail(email);
+    const customerId = `cus_${uid()}`;
+    const subscriptionId = `sub_${uid()}`;
+    await postWebhook(checkoutCompleted(userId, customerId, subscriptionId));
+
+    const periodEnd = Math.floor(Date.now() / 1000) + 30 * 24 * 3600;
+    await postWebhook(
+      eventBody("customer.subscription.updated", {
+        id: subscriptionId,
+        customer: customerId,
+        status: "active",
+        current_period_end: periodEnd,
+      }),
+    );
+    await postWebhook(
+      eventBody("customer.subscription.created", {
+        id: subscriptionId,
+        customer: customerId,
+        status: "incomplete",
+        current_period_end: periodEnd,
+      }),
+    );
+
+    const rows = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("active"); // birth state did not clobber current state
+    expect(rows[0]?.currentPeriodEnd?.getTime()).toBe(periodEnd * 1000);
+
+    // The backfill path: a row attached by checkout (period end null) gets
+    // its period end from a late `created` without a status change.
+    const sub2 = `sub_${uid()}`;
+    const { email: email2 } = await registerAndLogin(app);
+    const userId2 = await userIdByEmail(email2);
+    await postWebhook(checkoutCompleted(userId2, `cus_${uid()}`, sub2));
+    await postWebhook(
+      eventBody("customer.subscription.created", {
+        id: sub2,
+        customer: customerId,
+        status: "incomplete",
+        current_period_end: periodEnd,
+      }),
+    );
+    const rows2 = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId2));
+    expect(rows2[0]?.status).toBe("active"); // checkout's status kept
+    expect(rows2[0]?.currentPeriodEnd?.getTime()).toBe(periodEnd * 1000); // backfilled
+  });
+
   test("trialing status and Basil-style items[].current_period_end are stored verbatim", async () => {
     const { email } = await registerAndLogin(app);
     const userId = await userIdByEmail(email);

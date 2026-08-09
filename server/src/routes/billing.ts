@@ -275,23 +275,49 @@ export async function handleStripeEvent(event: StripeEvent, log: FastifyBaseLogg
         currentPeriodEnd: sub.currentPeriodEnd,
         updatedAt: new Date(),
       };
-      const matched = await db
-        .update(subscriptions)
-        .set(set)
-        .where(eq(subscriptions.stripeSubscriptionId, sub.subscriptionId))
-        .returning({ id: subscriptions.id });
-      if (matched.length > 0 || event.type !== "customer.subscription.created") return;
-      // A brand-new subscription for a customer we already track (re-subscribe
-      // where this event raced ahead of checkout.session.completed): re-target
-      // that customer's row. Restricted to `created` so stale updates/deletes
-      // for an old subscription can never steal the row back.
+
+      if (event.type === "customer.subscription.created") {
+        // `created` carries the subscription's BIRTH state (typically
+        // `incomplete`) and Stripe delivers events out of order — observed
+        // live: `updated` (active) landed before `created` (incomplete),
+        // and the old unconditional update regressed the status. A row
+        // already tracking this subscription keeps its status; only a
+        // missing period end is backfilled.
+        const existing = await db
+          .select({ id: subscriptions.id, cpe: subscriptions.currentPeriodEnd })
+          .from(subscriptions)
+          .where(eq(subscriptions.stripeSubscriptionId, sub.subscriptionId))
+          .limit(1);
+        if (existing[0] !== undefined) {
+          if (existing[0].cpe === null && sub.currentPeriodEnd !== null) {
+            await db
+              .update(subscriptions)
+              .set({ currentPeriodEnd: sub.currentPeriodEnd, updatedAt: new Date() })
+              .where(eq(subscriptions.id, existing[0].id));
+          }
+          return;
+        }
+        // A brand-new subscription for a customer we already track
+        // (re-subscribe where this event raced ahead of
+        // checkout.session.completed): re-target that customer's row.
+        // Restricted to `created` so stale updates/deletes for an old
+        // subscription can never steal the row back. No row at all: the
+        // checkout.session.completed that maps customer -> user hasn't
+        // arrived yet; ignore — it creates the row and later subscription
+        // events fill in status/period.
+        await db
+          .update(subscriptions)
+          .set({ ...set, stripeSubscriptionId: sub.subscriptionId })
+          .where(eq(subscriptions.stripeCustomerId, sub.customerId));
+        return;
+      }
+
+      // updated/deleted are authoritative for the subscription's CURRENT
+      // state: apply unconditionally, matched by subscription id.
       await db
         .update(subscriptions)
-        .set({ ...set, stripeSubscriptionId: sub.subscriptionId })
-        .where(eq(subscriptions.stripeCustomerId, sub.customerId));
-      // No row at all: the checkout.session.completed that maps customer ->
-      // user hasn't arrived yet. Ignore; it creates the row and later
-      // subscription events fill in status/period.
+        .set(set)
+        .where(eq(subscriptions.stripeSubscriptionId, sub.subscriptionId));
       return;
     }
 

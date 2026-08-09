@@ -12,6 +12,8 @@ import { db } from "../src/db/index.ts";
 import {
   type Alias,
   aliases,
+  type CustomDomain,
+  customDomains,
   type DkimKey,
   dkimKeys,
   type Mailbox,
@@ -154,12 +156,49 @@ export async function ensureWes(): Promise<UserFixture> {
   return ensureUser(wes.email, WES_PASSWORD);
 }
 
+/**
+ * Find-or-create a (verified) custom domain row for a user. The test zone
+ * for user.com already MXes at mail.virtu.email with delegated SPF, so a
+ * row here is all the "setup" a custom-domain story needs.
+ */
+export async function ensureCustomDomain(userId: number, domain: string): Promise<CustomDomain> {
+  const normalized = domain.trim().toLowerCase();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const existing = (
+      await db.select().from(customDomains).where(eq(customDomains.domain, normalized)).limit(1)
+    )[0];
+    if (existing !== undefined) {
+      if (existing.userId !== userId) {
+        throw new Error(`custom domain ${normalized} already owned by user ${existing.userId}`);
+      }
+      return existing;
+    }
+    const inserted = await db
+      .insert(customDomains)
+      .values({
+        userId,
+        domain: normalized,
+        verified: true,
+        spfVerified: true,
+        ownershipVerified: true,
+      })
+      .onConflictDoNothing()
+      .returning();
+    if (inserted[0] !== undefined) return inserted[0];
+  }
+  throw new Error(`ensureCustomDomain lost every race for ${normalized}`);
+}
+
 /** Options for {@link createAlias}. */
 export interface CreateAliasOptions {
   enabled?: boolean;
   mailboxId?: number;
   /** Localpart prefix before the unique tag; default "wes". */
   prefix?: string;
+  /** Domain for the alias; default config.mailDomain. */
+  domain?: string;
+  /** Link the alias to a custom domain row. */
+  customDomainId?: number;
 }
 
 /**
@@ -170,7 +209,7 @@ export async function createAlias(
   fixture: UserFixture,
   opts: CreateAliasOptions = {},
 ): Promise<Alias> {
-  const email = `${opts.prefix ?? "wes"}.${randomTag()}@${config.mailDomain}`;
+  const email = `${opts.prefix ?? "wes"}.${randomTag()}@${opts.domain ?? config.mailDomain}`;
   const rows = await db
     .insert(aliases)
     .values({
@@ -178,6 +217,7 @@ export async function createAlias(
       email,
       enabled: opts.enabled ?? true,
       mailboxId: opts.mailboxId ?? fixture.mailbox.id,
+      customDomainId: opts.customDomainId ?? null,
     })
     .returning();
   return rows[0]!;

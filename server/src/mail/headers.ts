@@ -469,10 +469,7 @@ function parseMailbox(item: string): Address | null {
 function decodeDisplayName(text: string): string {
   const t = text.trim();
   if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
-    return t
-      .slice(1, -1)
-      .replace(/\\(.)/g, "$1")
-      .trim();
+    return t.slice(1, -1).replace(/\\(.)/g, "$1").trim();
   }
   return t.replace(/\s+/g, " ");
 }

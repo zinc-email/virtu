@@ -150,10 +150,7 @@ export async function signOutbound(
 
   // DKIM: mailauth's default (full) header set first, then the SimpleLogin
   // fallback chains for any key that failed the previous attempt.
-  const attempts: (readonly string[] | undefined)[] = [
-    undefined,
-    ...DKIM_HEADER_FALLBACK_CHAINS,
-  ];
+  const attempts: (readonly string[] | undefined)[] = [undefined, ...DKIM_HEADER_FALLBACK_CHAINS];
   let dkimHeaders = "";
   const finalErrors: SignError[] = [];
   let remaining = [...opts.dkimKeys];
@@ -178,8 +175,7 @@ export async function signOutbound(
     remaining = failed;
   }
 
-  const dkimSigned =
-    dkimHeaders === "" ? base : Buffer.concat([Buffer.from(dkimHeaders), base]);
+  const dkimSigned = dkimHeaders === "" ? base : Buffer.concat([Buffer.from(dkimHeaders), base]);
 
   // ARC seal (over the DKIM-signed message so the AMS covers the final state).
   let arcHeaders = "";

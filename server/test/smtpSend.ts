@@ -176,11 +176,7 @@ export async function smtpSend(opts: SmtpSendOptions): Promise<void> {
 }
 
 /** Poll until a TCP port accepts connections (peers may still be booting). */
-export async function waitForPort(
-  host: string,
-  port: number,
-  timeoutMs = 30_000,
-): Promise<void> {
+export async function waitForPort(host: string, port: number, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {

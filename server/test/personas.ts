@@ -46,12 +46,8 @@ export function mailboxOf(email: string): Mailbox {
 }
 
 /** Absolute path of a persona's Maildir (contains tmp/, new/, cur/). */
-export function maildirPath(
-  who: Persona | Mailbox | string,
-  root: string = MAILDIR_ROOT,
-): string {
-  const box =
-    typeof who === "string" ? mailboxOf(who) : "mailbox" in who ? who.mailbox : who;
+export function maildirPath(who: Persona | Mailbox | string, root: string = MAILDIR_ROOT): string {
+  const box = typeof who === "string" ? mailboxOf(who) : "mailbox" in who ? who.mailbox : who;
   return join(root, box.domain, box.localpart);
 }
 

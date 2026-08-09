@@ -201,8 +201,7 @@ export async function rewriteReply(
     reused = ours !== null;
   }
   if (ours === null) {
-    const domain =
-      ctx.messageIdDomain ?? ctx.alias.email.slice(ctx.alias.email.indexOf("@") + 1);
+    const domain = ctx.messageIdDomain ?? ctx.alias.email.slice(ctx.alias.email.indexOf("@") + 1);
     ours = ctx.generateMessageId?.() ?? defaultMessageId(ctx.emailLogId, domain);
   }
   headers.replace("Message-ID", ours);

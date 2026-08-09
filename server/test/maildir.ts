@@ -29,9 +29,7 @@ export interface WaitForMailOptions {
 const MAILDIR_SUBDIRS = ["new", "cur"] as const;
 
 /** All message file paths in a persona's Maildir (never throws if absent). */
-export async function listMail(
-  who: Persona | Mailbox | string,
-): Promise<string[]> {
+export async function listMail(who: Persona | Mailbox | string): Promise<string[]> {
   const base = maildirPath(who);
   const paths: string[] = [];
   for (const sub of MAILDIR_SUBDIRS) {
@@ -115,9 +113,6 @@ export function getHeaders(raw: Buffer | string, name: string): string[] {
 }
 
 /** First value of a header (case-insensitive), or undefined. */
-export function getHeader(
-  raw: Buffer | string,
-  name: string,
-): string | undefined {
+export function getHeader(raw: Buffer | string, name: string): string | undefined {
   return getHeaders(raw, name)[0];
 }

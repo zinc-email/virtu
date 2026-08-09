@@ -70,10 +70,7 @@ export function headerNameInList(name: string, list: readonly string[]): boolean
  * Apply a whitelist to a header block in place. Returns the names of dropped
  * headers in original order (duplicates included).
  */
-export function applyHeaderWhitelist(
-  headers: HeaderBlock,
-  whitelist: readonly string[],
-): string[] {
+export function applyHeaderWhitelist(headers: HeaderBlock, whitelist: readonly string[]): string[] {
   const dropped: string[] = [];
   for (let i = headers.fields.length - 1; i >= 0; i--) {
     const field = headers.fields[i]!;
@@ -181,9 +178,9 @@ export async function rewriteForward(
 
   // Capture originals before rewriting.
   const originalFromValue = headers.get("From");
-  const originalFrom: Address =
-    (originalFromValue !== undefined ? parseAddressList(originalFromValue)[0] : undefined) ??
-    { address: ctx.envelopeFrom };
+  const originalFrom: Address = (originalFromValue !== undefined
+    ? parseAddressList(originalFromValue)[0]
+    : undefined) ?? { address: ctx.envelopeFrom };
 
   // 2. Missing Date → synthesize (some MTAs/MUAs omit it; mailboxes want it).
   let synthesizedDate = false;
@@ -247,10 +244,7 @@ export async function rewriteForward(
         invalidRecipients.push(entry.address);
         continue;
       }
-      const contact = await ctx.getOrCreateContact(
-        entry,
-        headerName === "To" ? "to" : "cc",
-      );
+      const contact = await ctx.getOrCreateContact(entry, headerName === "To" ? "to" : "cc");
       mapped.push({ name: forwardDisplayName(entry), address: contact.replyEmail });
     }
     if (mapped.length > 0) headers.replace(headerName, formatAddressList(mapped));

@@ -134,7 +134,9 @@ function dmarcPolicy(res: AuthenticateResult): string {
 
 /** True when the From domain publishes no usable DMARC record. */
 function noDmarcRecord(res: AuthenticateResult): boolean {
-  return res.dmarc === false || ["none", "permerror", "temperror"].includes(res.dmarc.status.result);
+  return (
+    res.dmarc === false || ["none", "permerror", "temperror"].includes(res.dmarc.status.result)
+  );
 }
 
 /**
@@ -164,8 +166,7 @@ export const VERDICT_RULES: readonly VerdictRule[] = [
   {
     reason: "spf-hardfail",
     policyKey: "onSpfHardFailWithoutDmarc",
-    when: (res) =>
-      res.spf !== false && res.spf.status.result === "fail" && noDmarcRecord(res),
+    when: (res) => res.spf !== false && res.spf.status.result === "fail" && noDmarcRecord(res),
     rejectCode: 550,
     rejectEnhanced: "5.7.23",
     rejectMessage: () => "SPF validation failed",
@@ -191,8 +192,7 @@ export function mapVerdict(res: AuthenticateResult, policy: VerifyPolicy): Verdi
 }
 
 /** Default resolver: the container's configured DNS via node:dns. */
-const defaultResolver: DnsResolver = (name, rrtype) =>
-  dnsPromises.resolve(name, rrtype as never);
+const defaultResolver: DnsResolver = (name, rrtype) => dnsPromises.resolve(name, rrtype as never);
 
 /**
  * Verify an inbound message: SPF + DKIM + DMARC + ARC in one in-process

@@ -218,11 +218,7 @@ export function parseVerp(
   }
   if (!Array.isArray(data) || data.length !== 3) return null;
   const [typeCode, id, minutes] = data;
-  if (
-    typeof typeCode !== "number" ||
-    typeof id !== "number" ||
-    typeof minutes !== "number"
-  ) {
+  if (typeof typeCode !== "number" || typeof id !== "number" || typeof minutes !== "number") {
     return null;
   }
   const type = CODE_TO_TYPE[typeCode];

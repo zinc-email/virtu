@@ -110,9 +110,7 @@ describe("mx pipeline: verify → rewrite → sign/seal → re-verify", () => {
 
     expect(verification.verdict).toEqual({ action: "accept" });
     expect(verification.raw.dkim.results?.[0]?.status.result).toBe("pass");
-    expect(verification.raw.dmarc !== false && verification.raw.dmarc.status.result).toBe(
-      "pass",
-    );
+    expect(verification.raw.dmarc !== false && verification.raw.dmarc.status.result).toBe("pass");
     expect(verification.arcContext).not.toBeNull();
     expect(verification.arcContext!.cv).toBe("none");
 
@@ -202,7 +200,9 @@ describe("mx pipeline: verify → rewrite → sign/seal → re-verify", () => {
     expect(outcome.dmarc !== false && outcome.dmarc.status.result).toBe("pass");
 
     // sanity: the final message still carries the forwarded body untouched
-    const final = dec.decode(serializeMessage(parseMessage(sealed.message).headers, parseMessage(sealed.message).body));
+    const final = dec.decode(
+      serializeMessage(parseMessage(sealed.message).headers, parseMessage(sealed.message).body),
+    );
     expect(final).toContain("Please find the cover sheets attached.\r\n");
     expect(final).toContain("ARC-Authentication-Results: i=1; mx.virtu.test");
     // the real mailbox address never appears in the outbound message

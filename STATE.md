@@ -17,7 +17,7 @@ and the entire production/deploy story, which has not been started.
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~350 tests / 25 files | `just test-unit` | green |
+| Unit | ~385 tests / 27 files | `just test-unit` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit | `just check` | green |
 | Integration (API vs real Postgres) | 106 tests / 7 files | `just up && just db push && just test-int` | green ×2 consecutive |
 | Stories (simulated internet) | 13 stories / 9 files | `just test-net-up && just test-story` | green ×2 against dirty state |

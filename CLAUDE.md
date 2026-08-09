@@ -63,10 +63,13 @@ homepage (`www/`).
 `just check` = format + both typechecks (regenerates the SDK) + unit tests;
 green here means CI passes.
 
-## Code-gen pipeline (one direction)
+## Code-gen pipeline (one direction) — the type-safety spine
 
-Server is the source of truth → OpenAPI spec → client SDK → client UI.
-**Never edit generated code or start downstream with a stale spec.**
+Drizzle schema → drizzle-zod insert/select shapes → route Zod schemas →
+OpenAPI spec → Kubb SDK → client. One definition per fact, flowing outward; a
+DB column rename surfaces as a client compile error. See PLAN.md "The
+type-safety spine" for the full rationale. **Never edit generated code or start
+downstream with a stale spec.**
 
 1. Change `server/src/db/schema.ts`, `routes/`, or response schemas.
 2. `bin/openapi-gen` writes `server/spec/openapi.json` (**committed artifact**).

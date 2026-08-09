@@ -34,6 +34,34 @@ same way):
 
 Everything shares `src/db/schema.ts` (Drizzle, Postgres, snake_case) and `src/config.ts`.
 
+### The type-safety spine (the core structural bet)
+
+One definition per fact, flowing outward — no type or schema hand-maintained on
+both sides of a boundary. The whole server/client structure exists to serve this:
+
+```
+db/schema.ts (Drizzle tables)
+  → drizzle-zod derives insert/select Zod shapes
+  → route Zod schemas reuse those column shapes   (routes/schema.ts:
+      createSelectSchema(users), e.g. userSelect.shape.email)
+  → fastify-zod-openapi emits OpenAPI 3.1 from those exact schemas
+  → committed server/spec/openapi.json
+  → Kubb generates the typed client SDK + react-query hooks
+  → the React app consumes them
+```
+
+A column rename in `db/schema.ts` ripples, **at compile time**, to a red
+squiggle in the client — the contract cannot silently drift. Rules that keep the
+spine intact:
+
+- Where an API field mirrors a DB column, derive it from the drizzle-zod schema,
+  don't re-type it (`routes/schema.ts`).
+- The spec is generated, never hand-edited; the SDK is generated, never
+  hand-edited. Regenerate downstream after any schema/route change (`just gen`).
+- SimpleLogin wire-compat lives at exactly one seam — the route Zod schemas
+  (snake_case field names from `serializer.py`). Inward of that seam everything
+  is our own camelCase types; outward, everything is generated from those schemas.
+
 Mail flow (inbound): accept DATA → `mailauth.authenticate()` (SPF/DKIM/DMARC/ARC
 verify, in-process) → policy
 (alias exists? enabled? user active? not abuse-flagged? spam score ok?) → **reject

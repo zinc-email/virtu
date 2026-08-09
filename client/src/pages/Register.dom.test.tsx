@@ -66,6 +66,15 @@ describe("RegisterPage — real transport against the running stack", () => {
     expect(localStorage.getItem("virtu.apiKey")).toBeTruthy();
   });
 
+  test("prefills the email from the homepage CTA's ?email= param", async () => {
+    const email = uniqueEmail();
+    renderPage(RegisterPage, "/register", `?email=${encodeURIComponent(email)}`);
+
+    await screen.findByText("Create your account");
+    const emailInput = document.querySelector<HTMLInputElement>('input[type="email"]');
+    expect(emailInput?.value).toBe(email);
+  });
+
   test("a wrong code surfaces the API error and stays on the code step", async () => {
     const user = userEvent.setup();
     const email = uniqueEmail();

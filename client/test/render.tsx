@@ -28,10 +28,10 @@ const BASE = "/app";
 
 /**
  * Render `Component` mounted at `path` (default "/register") with the app's
- * providers and a memory router under the /app basepath. Returns the RTL utils
- * plus the test router.
+ * providers and a memory router under the /app basepath. `search` (e.g.
+ * "?email=x") seeds the initial URL query. Returns the RTL utils plus router.
  */
-export function renderPage(Component: FunctionComponent, path = "/register") {
+export function renderPage(Component: FunctionComponent, path = "/register", search = "") {
   const rootRoute = createRootRoute();
   const routes = [createRoute({ getParentRoute: () => rootRoute, path, component: Component })];
   if (path !== "/") {
@@ -55,7 +55,7 @@ export function renderPage(Component: FunctionComponent, path = "/register") {
   const router = createRouter({
     basepath: BASE,
     routeTree: rootRoute.addChildren(routes),
-    history: createMemoryHistory({ initialEntries: [`${BASE}${path}`] }),
+    history: createMemoryHistory({ initialEntries: [`${BASE}${path}${search}`] }),
   });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

@@ -18,7 +18,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { apiErrorMessage } from "src/api/errors";
 import { setApiKey } from "src/auth";
@@ -38,8 +38,12 @@ function looksLikeEmail(email: string): boolean {
 
 export function RegisterPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [phase, setPhase] = useState<"details" | "code">("details");
-  const [email, setEmail] = useState("");
+  // The homepage CTA (www CtaForm) submits GET /app/register?email=…; prefill it.
+  const [email, setEmail] = useState(
+    () => new URLSearchParams(location.searchStr).get("email") ?? "",
+  );
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
 

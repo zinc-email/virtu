@@ -115,6 +115,9 @@ export function AliasesPage() {
           <Button color="brand.5" c="dark.8" onClick={() => setCreating(true)}>
             New alias
           </Button>
+          <Button variant="subtle" color="gray" onClick={() => void navigate({ to: "/billing" })}>
+            Billing
+          </Button>
           <Button variant="subtle" color="gray" onClick={() => void logout()}>
             Log out
           </Button>

@@ -31,6 +31,24 @@ just db push                     # apply the Drizzle schema
 - API: http://localhost:3000/api (docs spec: `server/spec/openapi.json`)
 - Client: http://localhost:9000/
 
+## Billing (optional, Stripe)
+
+Billing is fully offloaded to Stripe (PLAN Lane I): Checkout to subscribe,
+Customer Portal to manage, one webhook keeping the `subscriptions` table in
+sync. All four vars are optional — leave them unset and the billing routes
+answer 503 while the rest of the app runs normally.
+
+```sh
+STRIPE_SECRET_KEY=sk_...        # secret key for the Checkout/Portal REST calls
+STRIPE_WEBHOOK_SECRET=whsec_... # endpoint secret for POST /webhooks/stripe
+STRIPE_PRICE_ID=price_...       # the premium subscription price
+BILLING_RETURN_URL=...          # browser return origin (default http://localhost:9000)
+```
+
+Point a Stripe webhook endpoint at `POST /webhooks/stripe` with the events
+`checkout.session.completed` and `customer.subscription.created/updated/deleted`
+(unknown events are acknowledged and ignored).
+
 ## Checks & tests
 
 ```sh

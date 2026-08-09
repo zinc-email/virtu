@@ -1,0 +1,89 @@
+# Serve/deploy stack — builds the static frontends and serves the whole web
+# app (homepage, SPA, API) behind Caddy at one origin, the SAME on every box.
+# Per-box config is env: VIRTU_HOST (zinc.email / lmnop.email) + VIRTU_TLS_*.
+#
+# Local prod-like preview (run in its own project so it won't touch the dev
+# stack):
+#   bin/compose -p virtu-serve -f docker-compose.serve.yml up --build -d
+#   -> https://localhost:8443   (self-signed; curl -k)
+#
+# Deploy (per box): set VIRTU_HOST + publish 80/443, e.g.
+#   VIRTU_HOST=zinc.email HTTP_PUBLISH=0.0.0.0:80 HTTPS_PUBLISH=0.0.0.0:443 \
+#     bin/compose -f docker-compose.serve.yml up --build -d
+#
+# NOTE: this is the WEB stack (db, api, built frontends, proxy). The mail
+# processes (mx/submission/deliverd) and host provisioning are the rest of the
+# deploy lane, not yet wired here.
+
+services:
+  db:
+    image: "postgres:17-alpine"
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: virtu
+      POSTGRES_PASSWORD: virtu
+    ports:
+      - "127.0.0.1:${SERVE_DB_PORT:-5433}:5432"
+    healthcheck:
+      test: pg_isready -U virtu -h 127.0.0.1
+      interval: 5s
+    volumes:
+      - "serve_pg_data:/var/lib/postgresql/data:rw"
+
+  # One-shot: build the client SDK + bundle and the homepage into dist/.
+  build:
+    image: "oven/bun:1.3"
+    working_dir: /app
+    command:
+      [
+        "sh",
+        "-c",
+        "cd client && bun install && bun run kubb && bun run build && cd ../www && bun install && bun run build",
+      ]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      HOME: /tmp
+      ASTRO_TELEMETRY_DISABLED: "1"
+    volumes:
+      - ".:/app"
+
+  api:
+    image: "oven/bun:1.3"
+    working_dir: /app/server
+    command: ["sh", "-c", "bun install && bun src/api.ts"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      DATABASE_URL: "postgres://virtu:virtu@db:5432/virtu"
+      HOME: /tmp
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ".:/app"
+
+  # The universal reverse proxy — serves the built dists, terminates TLS.
+  proxy:
+    image: "caddy:2-alpine"
+    ports:
+      - "${HTTP_PUBLISH:-127.0.0.1:8081}:80"
+      - "${HTTPS_PUBLISH:-127.0.0.1:8443}:443"
+    environment:
+      VIRTU_HOST: "${VIRTU_HOST:-dummy.localhost}"
+      VIRTU_TLS_MODE: "${VIRTU_TLS_MODE:-internal}"
+      VIRTU_TLS_CHALLENGE: "${VIRTU_TLS_CHALLENGE:-}"
+      VIRTU_TLS_RESOLVERS: "${VIRTU_TLS_RESOLVERS:-}"
+    depends_on:
+      build:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    volumes:
+      - "./Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "./client/dist:/srv/client:ro"
+      - "./www/dist:/srv/www:ro"
+      - "serve_caddy_data:/data"
+
+volumes:
+  serve_pg_data:
+  serve_caddy_data:

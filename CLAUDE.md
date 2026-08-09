@@ -30,14 +30,25 @@ DKIM/ARC/SPF/DMARC (verify and sign, in-process — no milters) · a plain
 + TanStack Router/Query + Mantine) with a Kubb-generated SDK · Astro static
 homepage (`www/`).
 
-**Dev/prod topology.** A Caddy reverse proxy (`Caddyfile`) fronts everything at
-one origin with a fixed path split — `/` homepage, `/app/*` SPA, `/api/*` API
-— identical in dev and prod. So the SPA is served under `/app`: rsbuild's
+**Dev/prod topology.** A Caddy reverse proxy fronts everything at one origin
+with a fixed path split — `/` homepage, `/app/*` SPA, `/api/*` API — identical
+in dev and prod. So the SPA is served under `/app`: rsbuild's
 `server.base`/`assetPrefix` and TanStack Router's `basepath` are all `/app`
-(change them together). `just up` runs the whole thing behind
-`http://localhost:8080`; the homepage links to the app with absolute `/app/*`
-paths. The prod Caddyfile (file_server over the builds + TLS) is the remaining
-deploy-lane piece.
+(change them together); the homepage links to the app with absolute `/app/*`
+paths. Two Caddyfiles, same path topology:
+
+- **`Caddyfile.dev`** — the dev proxy: reverse_proxy to the live dev servers
+  (HMR). `just up` runs the whole stack behind `http://localhost:8080`.
+- **`Caddyfile`** — the universal deploy file (madi-style): serves the built
+  `www/dist` + `client/dist`, proxies `/api`, host + TLS from env
+  (`VIRTU_HOST`, `VIRTU_TLS_*`). One file for `localhost`, `zinc.email`
+  (prod), and `lmnop.email` (staging) — each box sets its own `VIRTU_HOST`.
+  `docker-compose.serve.yml` builds the frontends and runs it; see README
+  "Deploy". Remaining deploy-lane work: mail processes in the serve stack,
+  host provisioning, per-box TLS.
+
+We name environments **zinc** (prod) and **lmnop** (staging), never
+prod/staging.
 
 ## Conventions
 

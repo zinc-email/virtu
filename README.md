@@ -107,6 +107,36 @@ just test-net-down               # tear down
 Static Astro site in `www/`: `just www-dev` (dev server) or `just www-build`
 (static output to `www/dist/`).
 
+## Deploy
+
+One **universal `Caddyfile`** serves every environment — it fronts the built
+`www/dist` (`/`) + `client/dist` (`/app`) and proxies the API (`/api`), with
+the host and TLS driven by env. The only per-box difference is `VIRTU_HOST`.
+Environments are named **zinc** (prod, `zinc.email`) and **lmnop** (staging,
+`lmnop.email`) — never "prod"/"staging". The plan is a single box per
+environment, vertically scaled, running the whole stack via docker compose.
+
+`docker-compose.serve.yml` builds the frontends and runs the universal proxy:
+
+```sh
+# Local prod-like preview (own project, self-signed cert; won't touch dev):
+bin/compose -p virtu-serve -f docker-compose.serve.yml up --build -d
+#   -> https://localhost:8443   (curl -k)
+
+# A box (zinc shown; use lmnop.email for staging):
+VIRTU_HOST=zinc.email HTTP_PUBLISH=0.0.0.0:80 HTTPS_PUBLISH=0.0.0.0:443 \
+  bin/compose -f docker-compose.serve.yml up --build -d
+```
+
+Deploy env vars (all optional; sensible defaults): `VIRTU_HOST` (the box's
+hostname), `VIRTU_TLS_MODE` (default `internal` self-signed; set for ACME),
+`VIRTU_TLS_CHALLENGE` / `VIRTU_TLS_RESOLVERS` (DNS-challenge providers).
+`Caddyfile.dev` is the dev-only variant (proxies the HMR dev servers).
+
+> Web serving is wired; the rest of the deploy lane — the mail processes
+> (mx/submission/deliverd) in the serve stack, host provisioning, and per-box
+> TLS/DNS — is still open. See STATE.md.
+
 ## License
 
 [AGPL-3.0](./LICENSE). Network use counts as distribution: run a modified

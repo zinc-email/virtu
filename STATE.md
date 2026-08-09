@@ -75,15 +75,18 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
 
 ## Not started
 
-- **Production/deploy story** — prod compose, Dockerfile targets, mail ports
-  25/465/587, real TLS (certs for MX + web), outbound deliverability setup
-  (rDNS, SPF record, DKIM key publication, DMARC), backups, host provisioning
-  docs. _Partial progress:_ the web path topology is settled and built — the
-  SPA is served under `/app` (rsbuild base + router basepath) and a Caddy
-  reverse proxy (`Caddyfile`) fronts `/` (www), `/app` (SPA), `/api` (API) at
-  one origin, wired into `docker-compose.yml` for dev (`http://localhost:8080`).
-  What remains for web is the **prod** Caddyfile (file_server over `www/dist` +
-  `client/dist` with SPA fallback, reverse_proxy `/api`) and TLS.
+- **Production/deploy story** — mail ports 25/465/587 in the serve stack,
+  outbound deliverability setup (rDNS, SPF record, DKIM key publication,
+  DMARC), backups, host provisioning docs, a deploy trigger. _Web serving is
+  built and verified:_ the SPA is served under `/app` (rsbuild base + router
+  basepath); a **universal `Caddyfile`** (host + TLS from env, `VIRTU_HOST`)
+  serves the built `www/dist` + `client/dist` and proxies `/api`, run by
+  `docker-compose.serve.yml` — one config for local prod-like preview, **zinc**
+  (prod), and **lmnop** (staging). Verified end-to-end against real builds at
+  `https://localhost:8443` (homepage, SPA deep links + hashed assets under
+  `/app/static`, `/api`). Dev uses `Caddyfile.dev` (HMR proxy) via `just up`.
+  What remains: fold the mail processes into the serve stack, per-box TLS/DNS,
+  host provisioning, and the deploy trigger.
   **Secrets management**: `server/.env` is gitignored, so nothing sensitive is
   in git — CI and any deploy must provide the production secrets out-of-band
   (`VERP_SECRET`, TLS cert/key paths, and the Stripe keys if billing is on).

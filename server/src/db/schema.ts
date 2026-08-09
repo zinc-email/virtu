@@ -65,10 +65,38 @@ export const users = pgTable("users", {
   maxSpamScore: integer(),
   // Whether the user receives notification emails.
   notification: boolean().default(true).notNull(),
+  // Settings (SimpleLogin GET/PATCH /setting) — values zod-validated at the
+  // route layer: alias_generator word|uuid, sender_format AT|A|NAME_ONLY|
+  // AT_ONLY|NO_NAME, random_alias_suffix word|random_string.
+  aliasGenerator: varchar({ length: 16 }).default("word").notNull(),
+  senderFormat: varchar({ length: 16 }).default("AT").notNull(),
+  randomAliasSuffix: varchar({ length: 16 }).default("random_string").notNull(),
+  defaultAliasDomain: varchar({ length: 128 }),
   // Bitfield for misc account flags (SimpleLogin User.flags).
   flags: bigint({ mode: "number" }).default(0).notNull(),
   ...timestamps,
 });
+
+// One-time codes for account activation and mailbox verification, sent via
+// transactional email (VERP type `transactional`).
+export const verificationCodes = pgTable(
+  "verification_codes",
+  {
+    id: id(),
+    userId: integer()
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    // Set for mailbox verification; null for account activation.
+    mailboxId: integer().references(() => mailboxes.id, { onDelete: "cascade" }),
+    purpose: varchar({ length: 16 }).notNull(), // "account" | "mailbox"
+    // sha256 hex of the code (codes are secrets; never store plaintext).
+    codeHash: varchar({ length: 64 }).notNull(),
+    expiresAt: timestamp({ withTimezone: true, mode: "date" }).notNull(),
+    usedAt: timestamp({ withTimezone: true, mode: "date" }),
+    ...timestamps,
+  },
+  (t) => [index("verification_codes_user_purpose_idx").on(t.userId, t.purpose)],
+);
 
 export const apiKeys = pgTable(
   "api_keys",
@@ -160,6 +188,8 @@ export const aliases = pgTable(
     cannotBeDisabled: boolean().default(false).notNull(),
     // Created "on the fly" via the custom-domain catch-all.
     automaticCreation: boolean().default(false).notNull(),
+    // Pinned aliases sort first in the dashboard (SimpleLogin Alias.pinned).
+    pinned: boolean().default(false).notNull(),
     ...timestamps,
   },
   (t) => [
@@ -167,6 +197,44 @@ export const aliases = pgTable(
     index("aliases_mailbox_id_idx").on(t.mailboxId),
     index("aliases_custom_domain_id_idx").on(t.customDomainId),
   ],
+);
+
+// Which website an alias was created for (SimpleLogin AliasUsedOn) — recorded
+// from the `?hostname=` param on creation, drives options' `recommendation`.
+export const aliasUsedOn = pgTable(
+  "alias_used_on",
+  {
+    id: id(),
+    aliasId: integer()
+      .references(() => aliases.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: integer()
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    hostname: varchar({ length: 256 }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("alias_used_on_alias_hostname_uq").on(t.aliasId, t.hostname),
+    index("alias_used_on_user_hostname_idx").on(t.userId, t.hostname),
+  ],
+);
+
+// Additional delivery mailboxes beyond aliases.mailbox_id (SimpleLogin
+// alias_mailbox). The primary mailbox stays on the alias row.
+export const aliasMailboxes = pgTable(
+  "alias_mailboxes",
+  {
+    id: id(),
+    aliasId: integer()
+      .references(() => aliases.id, { onDelete: "cascade" })
+      .notNull(),
+    mailboxId: integer()
+      .references(() => mailboxes.id, { onDelete: "cascade" })
+      .notNull(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("alias_mailboxes_alias_mailbox_uq").on(t.aliasId, t.mailboxId)],
 );
 
 // Reverse aliases: one row per (alias, outside correspondent) pair.
@@ -385,6 +453,9 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type Alias = typeof aliases.$inferSelect;
 export type Mailbox = typeof mailboxes.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
+export type AliasUsedOn = typeof aliasUsedOn.$inferSelect;
+export type AliasMailbox = typeof aliasMailboxes.$inferSelect;
+export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type CustomDomain = typeof customDomains.$inferSelect;
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type OutboundMessage = typeof outboundMessages.$inferSelect;

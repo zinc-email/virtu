@@ -22,9 +22,14 @@ import { theme } from "src/theme";
 export const HOME_MARKER = "stub:home";
 export const LOGIN_MARKER = "stub:login";
 
+// Mirror the app's router basepath (src/app.tsx) so tests exercise the same
+// routing config the SPA runs under at /app.
+const BASE = "/app";
+
 /**
  * Render `Component` mounted at `path` (default "/register") with the app's
- * providers and a memory router. Returns the RTL utils plus the test router.
+ * providers and a memory router under the /app basepath. Returns the RTL utils
+ * plus the test router.
  */
 export function renderPage(Component: FunctionComponent, path = "/register") {
   const rootRoute = createRootRoute();
@@ -48,8 +53,9 @@ export function renderPage(Component: FunctionComponent, path = "/register") {
     );
   }
   const router = createRouter({
+    basepath: BASE,
     routeTree: rootRoute.addChildren(routes),
-    history: createMemoryHistory({ initialEntries: [path] }),
+    history: createMemoryHistory({ initialEntries: [`${BASE}${path}`] }),
   });
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

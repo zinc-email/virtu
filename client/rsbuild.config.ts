@@ -9,22 +9,31 @@ const isDocker = fs.existsSync("/.dockerenv");
 const apiTarget =
   process.env.API_PROXY_TARGET ?? (isDocker ? "http://api:3000" : "http://localhost:3000");
 
+// The SPA is mounted at /app behind the reverse proxy (www owns / for the
+// static homepage). server.base makes the dev server serve — and dev.assetPrefix
+// resolve assets — under /app; output.assetPrefix does the same for the prod
+// build. TanStack Router's basepath (src/app.tsx) must match.
+const BASE = "/app";
+
 export default defineConfig({
   plugins: [pluginReact()],
   source: { entry: { index: "./src/index.tsx" } },
   html: { title: "virtu" },
-  output: { distPath: { root: "dist" } },
+  output: { distPath: { root: "dist" }, assetPrefix: `${BASE}/` },
+  // Prefix dev asset URLs too, so <script>/<link> in the shell resolve under
+  // /app at the unified origin (not / , which the proxy routes to the homepage).
+  dev: { assetPrefix: `${BASE}/` },
   server: {
+    base: BASE,
     port: 9000,
     // Reachable from outside the container in the compose stack.
     host: "0.0.0.0",
-    // SPA fallback: every unmatched text/html GET serves the app shell.
-    historyApiFallback: {
-      rewrites: [{ from: /./, to: "/index.html" }],
-    },
+    // SPA fallback: unmatched GETs under the base serve the app shell.
+    historyApiFallback: true,
     proxy: {
       // The /api prefix is part of the real URL (SimpleLogin-style), so no
-      // path rewrite — requests reach Fastify verbatim.
+      // path rewrite — requests reach Fastify verbatim. (At the unified origin
+      // Caddy owns /api; this proxy only serves direct :9000 access.)
       "/api": {
         target: apiTarget,
         changeOrigin: true,

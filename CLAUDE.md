@@ -30,6 +30,15 @@ DKIM/ARC/SPF/DMARC (verify and sign, in-process — no milters) · a plain
 + TanStack Router/Query + Mantine) with a Kubb-generated SDK · Astro static
 homepage (`www/`).
 
+**Dev/prod topology.** A Caddy reverse proxy (`Caddyfile`) fronts everything at
+one origin with a fixed path split — `/` homepage, `/app/*` SPA, `/api/*` API
+— identical in dev and prod. So the SPA is served under `/app`: rsbuild's
+`server.base`/`assetPrefix` and TanStack Router's `basepath` are all `/app`
+(change them together). `just up` runs the whole thing behind
+`http://localhost:8080`; the homepage links to the app with absolute `/app/*`
+paths. The prod Caddyfile (file_server over the builds + TLS) is the remaining
+deploy-lane piece.
+
 ## Conventions
 
 - **Naming: concern first, action last** — `db-push`, `format-check`,

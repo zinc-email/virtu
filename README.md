@@ -13,8 +13,12 @@ build is: what's done, verified, stubbed, and not yet started.
 - `server/` — one package, several entrypoints (`api`, `mx`, `submission`,
   `deliverd`). Fastify + zod-openapi; Drizzle over Bun's native postgres.
   `server/spec/openapi.json` is the committed API contract.
-- `client/` — React SPA (rsbuild + TanStack Router/Query + Mantine). SDK
-  generated from the spec by Kubb into `client/src/gen` (gitignored).
+- `client/` — React SPA (rsbuild + TanStack Router/Query + Mantine), served
+  under `/app`. SDK generated from the spec by Kubb into `client/src/gen`
+  (gitignored).
+- `www/` — static marketing homepage (Astro), served at `/`.
+- A reverse proxy (Caddy) fronts all three at one origin — `/` homepage,
+  `/app` the SPA, `/api` the API — the same path topology in dev and prod.
 - `justfile` / `bin/` — one-liner recipes delegating to scripts.
 
 ## Quickstart
@@ -26,12 +30,18 @@ bun install                      # root tooling (biome, lefthook)
 bunx lefthook install            # pre-commit format hook (once per machine)
 
 cp server/.env.example server/.env  # optional; every var has a dev default
-just up                          # docker compose: db + api + client
+just up                          # docker compose: db, api, client, homepage, proxy
 just db push                     # apply the Drizzle schema
 ```
 
-- API: http://localhost:3000/api (docs spec: `server/spec/openapi.json`)
-- Client: http://localhost:9000/
+Everything is behind one origin (the Caddy proxy), matching production:
+
+- **http://localhost:8080/** — homepage (Astro)
+- **http://localhost:8080/app** — the SPA (login, aliases, …)
+- **http://localhost:8080/api** — the API (spec: `server/spec/openapi.json`)
+
+(Direct access still works for debugging: the SPA at http://localhost:9000/app,
+the API at http://localhost:3000/api.)
 
 Config lives in `server/.env` (gitignored); `server/.env.example` documents
 every variable and which ones production must override.
@@ -47,7 +57,7 @@ just user-create                 # register + activate + login wes@qmail.com / p
 just login-code <email>          # print the newest emailed code for an address
 ```
 
-Then sign in at http://localhost:9000/ with the email + password.
+Then sign in at http://localhost:8080/app/login with the email + password.
 
 ## Billing (optional, Stripe)
 

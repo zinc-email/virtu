@@ -48,7 +48,7 @@ with a regression test encoding the observed sequence).
 | D — Queue + deliverd | ✅ done* | SKIP LOCKED worker, backoff, RFC 3464 DSNs (null reverse path, rate-limited). *Gap: bounces OF transactional mail are log-only |
 | E — API (SimpleLogin-compat) | ~85% | 25+ spec paths incl. custom domains + billing extras. Deferred: MFA, forgot_password, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone |
 | F — Client | ~75% | Login, register/activation (single route, auto-login on activate + resend), aliases (create/pin/toggle/multi-mailbox), contacts, settings, billing pages. Missing: custom-domain UI, mailboxes page, notifications, activities view |
-| G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Assumes SPA mounts at `/app` behind the reverse proxy |
+| G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Served at `/` behind the Caddy proxy; SPA under `/app`, API under `/api` — one origin, same topology dev and prod (dev proxy built; see below) |
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |
 
@@ -75,10 +75,15 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
 
 ## Not started
 
-- **Production/deploy story** — prod compose, Dockerfile targets, caddy
-  (serve `www/` at `/`, SPA at `/app`, API at `/api`, mail ports 25/465/587),
-  real TLS (certs for MX + web), outbound deliverability setup (rDNS, SPF
-  record, DKIM key publication, DMARC), backups, host provisioning docs.
+- **Production/deploy story** — prod compose, Dockerfile targets, mail ports
+  25/465/587, real TLS (certs for MX + web), outbound deliverability setup
+  (rDNS, SPF record, DKIM key publication, DMARC), backups, host provisioning
+  docs. _Partial progress:_ the web path topology is settled and built — the
+  SPA is served under `/app` (rsbuild base + router basepath) and a Caddy
+  reverse proxy (`Caddyfile`) fronts `/` (www), `/app` (SPA), `/api` (API) at
+  one origin, wired into `docker-compose.yml` for dev (`http://localhost:8080`).
+  What remains for web is the **prod** Caddyfile (file_server over `www/dist` +
+  `client/dist` with SPA fallback, reverse_proxy `/api`) and TLS.
   **Secrets management**: `server/.env` is gitignored, so nothing sensitive is
   in git — CI and any deploy must provide the production secrets out-of-band
   (`VERP_SECRET`, TLS cert/key paths, and the Stripe keys if billing is on).

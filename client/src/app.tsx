@@ -66,6 +66,9 @@ const registerRoute = createRoute({
 });
 
 export const router = createRouter({
+  // The SPA is served under /app behind the reverse proxy; must match
+  // rsbuild's server.base / output.assetPrefix (rsbuild.config.ts).
+  basepath: "/app",
   routeTree: rootRoute.addChildren([
     indexRoute,
     billingRoute,

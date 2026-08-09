@@ -1,0 +1,39 @@
+# Dev reverse proxy — presents ONE origin over the three dev servers, so the
+# path topology matches production exactly:
+#
+#   /        -> www   (Astro homepage)
+#   /app/*   -> client SPA (rsbuild, served under base /app)
+#   /api/*   -> server (Fastify, routes already carry the /api prefix)
+#
+# This is what makes `/app/register` resolve the same in dev and prod, so the
+# homepage's app links (www/src/**: /app/register, /app/login) work everywhere.
+#
+# The PRODUCTION Caddyfile (deploy lane, not yet built) keeps this same
+# topology but serves static builds instead of proxying dev servers:
+# `file_server` over www/dist at /, over client/dist at /app (with
+# `try_files {path} /app/index.html` for SPA deep links), and reverse_proxy
+# /api to the api process — plus automatic TLS.
+
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	# Bare /app -> /app/ so the homepage's `<a href="/app">` reaches the SPA
+	# (the /app/* matcher below doesn't catch the slashless form).
+	redir /app /app/ 308
+
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+
+	handle /app/* {
+		reverse_proxy client:9000
+	}
+
+	# Everything else is the static homepage.
+	handle {
+		reverse_proxy www:4321
+	}
+}

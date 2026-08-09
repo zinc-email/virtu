@@ -54,12 +54,43 @@ services:
     environment:
       HOME: /tmp
     ports:
+      # The SPA is served under /app; direct access is http://localhost:9000/app.
       - "127.0.0.1:${CLIENT_PORT:-9000}:9000"
     init: true
     depends_on:
       - api
     volumes:
       - ".:/app"
+
+  # Static marketing homepage (Astro dev server). Serves / at the unified
+  # origin. Reached only by the proxy on the compose network (www:4321), so no
+  # host port — go through http://localhost:8080.
+  www:
+    image: "oven/bun:1.3"
+    working_dir: /app/www
+    command: ["sh", "-c", "bun install && bun run dev"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      HOME: /tmp
+      # Astro's telemetry reads os.cpus(), which returns [] under Bun-in-docker
+      # and crashes the dev server on startup. We don't want telemetry anyway.
+      ASTRO_TELEMETRY_DISABLED: "1"
+    init: true
+    volumes:
+      - ".:/app"
+
+  # Reverse proxy — the unified dev origin (mirrors prod topology, see Caddyfile).
+  # This is the front door: http://localhost:8080 (/, /app, /api).
+  proxy:
+    image: "caddy:2-alpine"
+    ports:
+      - "127.0.0.1:${PROXY_PORT:-8080}:8080"
+    depends_on:
+      - api
+      - client
+      - www
+    volumes:
+      - "./Caddyfile:/etc/caddy/Caddyfile:ro"
 
 volumes:
   pg_data:

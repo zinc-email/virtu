@@ -1,0 +1,37 @@
+---
+// Static (logged-out) port of the legacy auth-login-form
+// (tmp/virtu/server/src/views/auth/auth-login-form.php).
+//
+// The legacy form was a combined login/signup handled server-side with a JS
+// captcha. This static site has no auth state: the form submits the email as
+// a GET param to the client SPA's register page, assumed to be reverse-proxy
+// mounted at /app. A small "log in" link covers returning users.
+
+interface Props {
+  note?: string;
+  autofocus?: boolean;
+}
+
+const {
+  note = "Enter your e-mail address to login or signup.",
+  autofocus = false,
+} = Astro.props;
+---
+
+<form class="auth-login-form form" action="/app/register" method="GET">
+  <div class="field">
+    <input
+      type="email"
+      name="email"
+      placeholder="yourname@gmail.com"
+      autofocus={autofocus}
+    />
+    <div class="note">{note}</div>
+  </div>
+  <div class="field">
+    <button class="submit" type="submit">Protect My Inbox</button>
+  </div>
+  <div class="note">
+    Already have an account? <a href="/app/login">Log in</a>.
+  </div>
+</form>

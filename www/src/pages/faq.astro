@@ -1,0 +1,42 @@
+---
+// Ported from tmp/virtu/server/src/views/hello/faq.php
+// (section id "terms" kept verbatim from the legacy view)
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout
+  title="Questions — Zinc"
+  description="Frequently asked questions about Zinc: customizing your email addresses, and why the service costs money."
+>
+  <section id="terms" class="section mini">
+    <header>
+      <div class="cta">
+        <h1>Questions</h1>
+      </div>
+    </header>
+    <div class="question">
+      <h2>Can I customize my email addresses?</h2>
+      <p>
+        <strong>Yes!</strong> You can customize the domain. However, we require
+        unguessable/random email usernames (the part before the @).
+      </p>
+      <p>
+        This prevents the bad habit of sharing the same email address more than
+        once and it prevents spammers from guessing email addresses in the
+        system.
+      </p>
+    </div>
+    <div class="question">
+      <h2>Why does it cost $5?</h2>
+      <p>
+        Zinc costs money to run. It's a service for the community and by the
+        community. We charge a nominal fee to ensure that we never, ever have
+        to consider advertising or selling your information.
+      </p>
+      <p>
+        With Zinc you can be certain that you are the customer and not the
+        product.
+      </p>
+    </div>
+  </section>
+</Layout>

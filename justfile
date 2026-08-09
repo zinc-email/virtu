@@ -84,6 +84,18 @@ test-story *args="":
   docker compose -f docker-compose.test.yml exec test-runner bun test test/ {{args}}
 
 # ----------------------------------------------------------------------------
+# Homepage — static marketing site (Astro, www/)
+# ----------------------------------------------------------------------------
+
+# Build the static homepage into www/dist/
+www-build:
+  cd www && bun install && bun run build
+
+# Astro dev server for the homepage
+www-dev:
+  cd www && bun run dev
+
+# ----------------------------------------------------------------------------
 # Checks — format, typecheck, and the CI gauntlet
 # ----------------------------------------------------------------------------
 

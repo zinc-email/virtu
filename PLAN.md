@@ -294,7 +294,19 @@ Settled (2026-08-08):
 4. **Spam check** is a pluggable pre-queue hook, initially wired to nothing.
 5. **Homepage** uses Astro (Lane G).
 6. **This file is the design doc**; decisions get recorded here as they're made.
-7. **No milters.** All verification is in-process via `mailauth.authenticate()`
+7. **Mobile: native thin shells, never react-native** (2026-08-08). iOS/Android
+   apps (post-MVP) are small Swift/Kotlin shells hosting the production React
+   client in a WKWebView / Android WebView, plus native-only capabilities where
+   they earn their place: a share/action extension ("new alias for this site"
+   from the browser share sheet — also the App Store guideline 4.2 answer),
+   push notifications, Keychain/Keystore for the API key. JS↔native bridge is a
+   small enumerable message protocol, not a generic eval channel. Precedent:
+   HEY (an email product) ships this architecture; expo/react-native/RNW is
+   rejected from experience (upgrade treadmill, RNW jank). Implication for
+   Lane F **now**: the client stays webview-friendly — safe-area CSS, `100dvh`,
+   touch targets, no hover-only affordances, and a platform seam for
+   shell detection.
+8. **No milters.** All verification is in-process via `mailauth.authenticate()`
    (SPF/DKIM/DMARC/ARC in one call, custom DNS resolver, results in the shape the
    ARC sealer consumes). Drops the milter protocol client and both milter
    containers; the verify → rewrite → sign/seal chain lives in one process. Lane B

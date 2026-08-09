@@ -1,14 +1,13 @@
 // Mailboxes — SimpleLogin-compatible (docs/api.md + app/api/views/mailbox.py
 // + app/mailbox_utils.py error strings):
 //   GET    /v2/mailboxes        all mailboxes incl. unverified
-//   POST   /mailboxes           create (MVP: created verified=true — see TODO)
+//   POST   /mailboxes           create unverified + email a 6-digit code
+//   POST   /mailboxes/:id/verify  enter the code (deviation: SimpleLogin
+//                               verifies via a web LINK; an API needs a code
+//                               flow, so we mail a code and accept it here —
+//                               error strings from mailbox_utils.py)
 //   PUT    /mailboxes/:id       set default; email change not supported yet
 //   DELETE /mailboxes/:id       with optional transfer_aliases_to
-//
-// TODO(MVP deviation): SimpleLogin creates mailboxes unverified and sends a
-// verification email. We have no outbound transactional mail yet, so new
-// mailboxes are created verified=true. Flip to verified=false + send the
-// activation email once the transactional-mail lane lands.
 
 import { count, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -16,6 +15,13 @@ import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { db } from "../db";
 import { aliases, deletedAliases, mailboxes, users } from "../db/schema";
+import {
+  consumeVerificationCode,
+  createVerificationCode,
+  mailboxVerificationAlertType,
+  mailboxVerificationEmail,
+  sendWithRateLimit,
+} from "../pipeline/transactional";
 import { ALIAS_DOMAINS } from "./aliasConfig";
 import { timestampOf } from "./aliasText";
 import { normalizeEmail } from "./auth";
@@ -43,6 +49,10 @@ const UpdateMailboxBody = z
 const DeleteMailboxBody = z
   .object({ transfer_aliases_to: z.number().int().optional() })
   .meta({ id: "DeleteMailboxRequest" });
+
+const VerifyMailboxBody = z
+  .object({ code: z.string() })
+  .meta({ id: "VerifyMailboxRequest", example: { code: "662302" } });
 
 function looksLikeEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -90,8 +100,8 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
     config: { rateLimit: { max: 20, timeWindow: "1 hour" } },
     schema: {
       description:
-        "Create a new mailbox. MVP deviation: created verified=true (no verification " +
-        "email is sent yet).",
+        "Create a new mailbox. It starts unverified: a 6-digit code (15-minute expiry) " +
+        "is emailed to the address; confirm it via POST /mailboxes/{mailbox_id}/verify.",
       tags: ["Mailbox"],
       security: [{ apiKeyAuth: [] }],
       body: CreateMailboxBody,
@@ -115,7 +125,7 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       try {
         const inserted = await db
           .insert(mailboxes)
-          .values({ userId: req.user.id, email, verified: true })
+          .values({ userId: req.user.id, email, verified: false })
           .returning();
         mb = inserted[0];
       } catch (err) {
@@ -129,8 +139,79 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       }
       if (!mb) throw new Error("mailbox insert returned no row");
 
+      const { code, row } = await createVerificationCode(db, {
+        userId: req.user.id,
+        purpose: "mailbox",
+        mailboxId: mb.id,
+      });
+      const { subject, textBody } = mailboxVerificationEmail(email, code);
+      await sendWithRateLimit(db, {
+        userId: req.user.id,
+        alertType: mailboxVerificationAlertType(mb.id),
+        to: email,
+        subject,
+        textBody,
+        refId: row.id,
+      });
+
       reply.status(201);
       return mailboxToDict(mb, req.user.defaultMailboxId);
+    },
+  });
+
+  a.route({
+    method: "POST",
+    url: "/mailboxes/:mailbox_id/verify",
+    config: { rateLimit: { max: 100, timeWindow: "1 hour" } },
+    schema: {
+      description:
+        "Verify a mailbox with the emailed 6-digit code. Deviation from SimpleLogin " +
+        "(which verifies through a web link): the API accepts the code directly. " +
+        "Error strings follow mailbox_utils.py; 410 once the code has been tried " +
+        "wrongly too many times (re-create the mailbox to get a fresh code). " +
+        "Verifying an already-verified mailbox is a no-op that returns it.",
+      tags: ["Mailbox"],
+      security: [{ apiKeyAuth: [] }],
+      params: MailboxIdParams,
+      body: VerifyMailboxBody,
+      response: {
+        200: MailboxDto,
+        400: ErrorResponse,
+        401: ErrorResponse,
+        410: ErrorResponse,
+        429: ErrorResponse,
+      },
+    },
+    handler: async (req) => {
+      const rows = await db
+        .select()
+        .from(mailboxes)
+        .where(eq(mailboxes.id, req.params.mailbox_id))
+        .limit(1);
+      const mb = rows[0];
+      // Same string for "not yours" and "no such mailbox" (SimpleLogin's
+      // verify_mailbox_code) — ownership is not probeable.
+      if (!mb || mb.userId !== req.user.id) throw new HttpError(400, "Invalid mailbox");
+      if (mb.verified) return mailboxToDict(mb, req.user.defaultMailboxId);
+
+      const result = await consumeVerificationCode(db, {
+        userId: req.user.id,
+        purpose: "mailbox",
+        mailboxId: mb.id,
+        code: req.body.code,
+        toEmail: mb.email,
+      });
+      if (result === "none") throw new HttpError(400, "Invalid code");
+      if (result === "expired") {
+        throw new HttpError(400, "Invalid activation code. Please request another code.");
+      }
+      if (result === "too_many") {
+        throw new HttpError(410, "Invalid activation code. Please request another code.");
+      }
+      if (result === "wrong") throw new HttpError(400, "Invalid activation code");
+
+      await db.update(mailboxes).set({ verified: true }).where(eq(mailboxes.id, mb.id));
+      return mailboxToDict({ ...mb, verified: true }, req.user.defaultMailboxId);
     },
   });
 

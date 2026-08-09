@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
-import { createAlias, registerAndLogin, uniqueEmail } from "./intHarness";
+import { createAlias, latestEmailedCode, registerAndLogin, uniqueEmail } from "./intHarness";
 
 let app: App;
 
@@ -29,8 +29,24 @@ async function createMailbox(apiKey: string, email = uniqueEmail()) {
   return res.json<{ id: number; email: string; verified: boolean; default: boolean }>();
 }
 
+async function verifyMailbox(apiKey: string, mailboxId: number, email: string) {
+  const res = await app.inject({
+    method: "POST",
+    url: `/api/mailboxes/${mailboxId}/verify`,
+    headers: auth(apiKey),
+    payload: { code: await latestEmailedCode(email) },
+  });
+  if (res.statusCode !== 200) throw new Error(`verify mailbox failed: ${res.body}`);
+  return res.json<{ id: number; email: string; verified: boolean; default: boolean }>();
+}
+
+async function createVerifiedMailbox(apiKey: string, email = uniqueEmail()) {
+  const mb = await createMailbox(apiKey, email);
+  return verifyMailbox(apiKey, mb.id, email);
+}
+
 describe("GET /api/v2/mailboxes", () => {
-  test("registration seeds the default mailbox", async () => {
+  test("registration seeds the default mailbox, already verified", async () => {
     const { email, apiKey } = await registerAndLogin(app);
     const res = await app.inject({
       method: "GET",
@@ -57,11 +73,15 @@ describe("GET /api/v2/mailboxes", () => {
 });
 
 describe("POST /api/mailboxes", () => {
-  test("creates a mailbox (MVP: verified immediately) and counts aliases", async () => {
+  test("creates an unverified mailbox; the emailed code verifies it", async () => {
     const { apiKey } = await registerAndLogin(app);
-    const mb = await createMailbox(apiKey);
-    expect(mb.verified).toBe(true);
+    const email = uniqueEmail();
+    const mb = await createMailbox(apiKey, email);
+    expect(mb.verified).toBe(false);
     expect(mb.default).toBe(false);
+
+    const verified = await verifyMailbox(apiKey, mb.id, email);
+    expect(verified.verified).toBe(true);
 
     await createAlias(app, apiKey);
     const list = await app.inject({
@@ -106,10 +126,126 @@ describe("POST /api/mailboxes", () => {
   });
 });
 
-describe("PUT /api/mailboxes/:id", () => {
-  test("sets the default mailbox", async () => {
+describe("POST /api/mailboxes/:id/verify", () => {
+  test("wrong code 400 twice, dead code 410 on the third try", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const email = uniqueEmail();
+    const mb = await createMailbox(apiKey, email);
+    const code = await latestEmailedCode(email);
+    const wrongCode = `${code.slice(0, 5)}${(Number(code[5]) + 1) % 10}`;
+
+    const attempt = () =>
+      app.inject({
+        method: "POST",
+        url: `/api/mailboxes/${mb.id}/verify`,
+        headers: auth(apiKey),
+        payload: { code: wrongCode },
+      });
+
+    for (let i = 0; i < 2; i++) {
+      const res = await attempt();
+      expect(res.statusCode).toBe(400);
+      expect(res.json<{ error: string }>()).toEqual({ error: "Invalid activation code" });
+    }
+    const third = await attempt();
+    expect(third.statusCode).toBe(410);
+    expect(third.json<{ error: string }>()).toEqual({
+      error: "Invalid activation code. Please request another code.",
+    });
+
+    // The real code is dead too now ("none" -> Invalid code).
+    const late = await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify`,
+      headers: auth(apiKey),
+      payload: { code },
+    });
+    expect(late.statusCode).toBe(400);
+    expect(late.json<{ error: string }>()).toEqual({ error: "Invalid code" });
+  });
+
+  test("verifying an already-verified mailbox is an idempotent 200", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const email = uniqueEmail();
+    const mb = await createVerifiedMailbox(apiKey, email);
+    const again = await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify`,
+      headers: auth(apiKey),
+      payload: { code: "000000" },
+    });
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ verified: boolean }>().verified).toBe(true);
+  });
+
+  test("missing and foreign mailboxes are the same Invalid mailbox", async () => {
+    const alice = await registerAndLogin(app);
+    const bob = await registerAndLogin(app);
+    const email = uniqueEmail();
+    const mb = await createMailbox(alice.apiKey, email);
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/api/mailboxes/999999999/verify",
+      headers: auth(alice.apiKey),
+      payload: { code: "123456" },
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json<{ error: string }>()).toEqual({ error: "Invalid mailbox" });
+
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify`,
+      headers: auth(bob.apiKey),
+      payload: { code: await latestEmailedCode(email) },
+    });
+    expect(foreign.statusCode).toBe(400);
+    expect(foreign.json<{ error: string }>()).toEqual({ error: "Invalid mailbox" });
+  });
+
+  test("unverified mailboxes cannot own new aliases", async () => {
     const { apiKey } = await registerAndLogin(app);
     const mb = await createMailbox(apiKey);
+
+    const options = await app.inject({
+      method: "GET",
+      url: "/api/v5/alias/options",
+      headers: auth(apiKey),
+    });
+    const suffix = options.json<{ suffixes: { signed_suffix: string }[] }>().suffixes[0]!;
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v3/alias/custom/new",
+      headers: auth(apiKey),
+      payload: {
+        alias_prefix: "unverified",
+        signed_suffix: suffix.signed_suffix,
+        mailbox_ids: [mb.id],
+      },
+    });
+    expect(created.statusCode).toBe(400);
+    expect(created.json<{ error: string }>()).toEqual({ error: "Errors with Mailbox" });
+  });
+});
+
+describe("PUT /api/mailboxes/:id", () => {
+  test("sets the default mailbox once verified; refuses while unverified", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const email = uniqueEmail();
+    const mb = await createMailbox(apiKey, email);
+
+    const tooEarly = await app.inject({
+      method: "PUT",
+      url: `/api/mailboxes/${mb.id}`,
+      headers: auth(apiKey),
+      payload: { default: true },
+    });
+    expect(tooEarly.statusCode).toBe(400);
+    expect(tooEarly.json<{ error: string }>()).toEqual({
+      error: "Unverified mailbox cannot be used as default mailbox",
+    });
+
+    await verifyMailbox(apiKey, mb.id, email);
     const res = await app.inject({
       method: "PUT",
       url: `/api/mailboxes/${mb.id}`,
@@ -162,7 +298,7 @@ describe("DELETE /api/mailboxes/:id", () => {
 
   test("transfers aliases to another mailbox", async () => {
     const { apiKey } = await registerAndLogin(app);
-    const mb = await createMailbox(apiKey);
+    const mb = await createVerifiedMailbox(apiKey);
     await app.inject({
       method: "PUT",
       url: `/api/mailboxes/${mb.id}`,
@@ -228,7 +364,7 @@ describe("DELETE /api/mailboxes/:id", () => {
 
   test("deletes aliases (tombstoned) when not transferring", async () => {
     const { apiKey } = await registerAndLogin(app);
-    const mb = await createMailbox(apiKey);
+    const mb = await createVerifiedMailbox(apiKey);
     const options = await app.inject({
       method: "GET",
       url: "/api/v5/alias/options",

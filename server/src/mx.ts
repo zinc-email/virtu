@@ -1,0 +1,319 @@
+/**
+ * mx — port 25 inbound SMTP (PLAN Milestone 1).
+ *
+ * Per-message flow (onData):
+ *
+ *   VERP recipients → bounce accounting (mark email_log, auto-disable)
+ *   alias recipients → verifyInbound (SPF/DKIM/DMARC/ARC in-process;
+ *     verdict reject → SMTP reject with its code/enhanced; flag → deliver
+ *     with an `X-Virtu-Spam-Flag` annotation header — MVP treatment of the
+ *     abstract "flag" verdict)
+ *   → rewriteForward (contacts/email-log DB adapters injected)
+ *   → prepend mailauth's Received-SPF / Authentication-Results
+ *   → signOutbound (our domain DKIM key + ARC seal with the pre-rewrite
+ *     context) → enqueue (envelope from = VERP bounce_forward, rcpt = the
+ *     user's real mailbox)
+ *
+ * Policy at RCPT time (pipeline/policy.ts): nonexistent alias → 550,
+ * disabled alias → 250 accept-and-drop (blocked email_log, nothing queued).
+ */
+
+import { config } from "./config.ts";
+import { db } from "./db/index.ts";
+import type { Db } from "./db/index.ts";
+import {
+  type Address,
+  buildVerp,
+  type HeaderBlock,
+  parseAddressList,
+  parseMessage,
+  rewriteForward,
+  serializeMessage,
+} from "./mail/index.ts";
+import { type DnsResolver, signOutbound, verifyInbound } from "./mailauth/index.ts";
+import { getOrCreateContact } from "./pipeline/contacts.ts";
+import { loadDkimKey } from "./pipeline/dkim.ts";
+import { makeVerifyResolver } from "./pipeline/dnsTxt.ts";
+import { recordBounce } from "./pipeline/bounce.ts";
+import {
+  createBlockedLog,
+  createForwardLog,
+  resolveOriginalMessageId,
+} from "./pipeline/emailLog.ts";
+import { type EvaluatedRcpt, evaluateRcpt } from "./pipeline/policy.ts";
+import { loadSmtpTls } from "./pipeline/tls.ts";
+import { enqueue } from "./queue/index.ts";
+import {
+  createSmtpServer,
+  rejectWith,
+  type SmtpDataEvent,
+  type SmtpHookResult,
+  type SmtpServer,
+  type SmtpTlsConfig,
+} from "./smtp/index.ts";
+
+const encoder = new TextEncoder();
+
+/** Lazy singleton for the default verify resolver. */
+let cachedResolver: DnsResolver | null = null;
+function defaultResolver(): DnsResolver {
+  cachedResolver ??= makeVerifyResolver();
+  return cachedResolver;
+}
+
+/** Everything the mx needs; a subset of config plus injectables for tests. */
+export interface MxOptions {
+  db: Db;
+  mailDomain: string;
+  mailHostname: string;
+  dkimSelector: string;
+  verpSecret: string;
+  maxMessageSize: number;
+  tls?: SmtpTlsConfig;
+  /**
+   * DNS resolver override for verifyInbound. Defaults to
+   * {@link makeVerifyResolver} — node:dns except TXT, which goes through
+   * the wire-format client (Bun's builtin TXT API loses record grouping).
+   */
+  resolver?: DnsResolver;
+  log?: (message: string) => void;
+}
+
+/** Handle the completed DATA for one inbound message. */
+async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise<SmtpHookResult> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  const { envelope, session } = event;
+
+  // Policy re-evaluation per recipient (RCPT accepted them; rows may have
+  // changed since — the DATA-time decision is authoritative).
+  const evaluated: EvaluatedRcpt[] = [];
+  for (const rcpt of envelope.rcptTo) {
+    evaluated.push(
+      await evaluateRcpt(opts.db, rcpt.address, {
+        verpSecret: opts.verpSecret,
+        mailDomain: opts.mailDomain,
+      }),
+    );
+  }
+
+  // 1. Bounce handling: VERP recipients route straight to their email_log.
+  for (const rcpt of evaluated) {
+    if (rcpt.decision.kind !== "verp") continue;
+    const info = rcpt.decision.info;
+    if (info.type === "transactional") continue; // accept and discard (MVP)
+    const result = await recordBounce(opts.db, info.id);
+    log(
+      `mx: bounce for email_log ${info.id} (${info.type})` +
+        (result.aliasDisabled ? " — alias auto-disabled" : ""),
+    );
+  }
+
+  const deliverable = evaluated.filter((r) => r.decision.kind === "deliver");
+  const drops = evaluated.filter((r) => r.decision.kind === "drop");
+  if (deliverable.length === 0 && drops.length === 0) {
+    return { accept: true, message: "Ok" };
+  }
+
+  // 2. Authenticate the inbound message (once per message, not per rcpt).
+  const verification = await verifyInbound(
+    {
+      remoteAddress: session.remoteAddress,
+      heloHostname: envelope.heloName,
+      envelopeFrom: envelope.mailFrom,
+      mta: opts.mailHostname,
+    },
+    event.raw,
+    { resolver: opts.resolver ?? defaultResolver() },
+  );
+  if (verification.verdict.action === "reject") {
+    const v = verification.verdict;
+    log(`mx: rejected inbound from ${envelope.mailFrom || "<>"}: ${v.reason}`);
+    return rejectWith(v.code, v.enhanced, v.message);
+  }
+
+  const parsed = parseMessage(event.raw);
+  const fromValue = parsed.headers.get("From");
+  const fromAddr: Address = (fromValue !== undefined
+    ? parseAddressList(fromValue)[0]
+    : undefined) ?? {
+    address: envelope.mailFrom !== "" ? envelope.mailFrom : "unknown-sender@invalid",
+  };
+  const originalMessageId = parsed.headers.get("Message-ID") ?? null;
+  const prepended = parseMessage(encoder.encode(verification.prependHeaders));
+  const dkimKey =
+    deliverable.length > 0 ? await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector) : null;
+  if (deliverable.length > 0 && dkimKey === null) {
+    log(`mx: WARNING no active DKIM key for ${opts.mailDomain} — forwarding unsigned`);
+  }
+
+  // 3. Accept-and-drop recipients: blocked log, nothing queued.
+  for (const drop of drops) {
+    const { alias, user } = drop.facts;
+    if (alias === null || user === null) continue;
+    const scope = { userId: user.id, aliasId: alias.id };
+    const contact = await getOrCreateContact(opts.db, scope, fromAddr, "from", {
+      mailDomain: opts.mailDomain,
+      envelopeFrom: envelope.mailFrom,
+    });
+    await createBlockedLog(opts.db, {
+      userId: user.id,
+      contactId: contact.id,
+      aliasId: alias.id,
+      mailboxId: drop.facts.mailbox?.id ?? null,
+      messageId: originalMessageId,
+    });
+    log(`mx: dropped mail for ${drop.address} (${(drop.decision as { reason: string }).reason})`);
+  }
+
+  // 4. Forward pipeline per deliverable recipient.
+  for (const rcpt of deliverable) {
+    const alias = rcpt.facts.alias!;
+    const user = rcpt.facts.user!;
+    const mailbox = rcpt.facts.mailbox!;
+    const scope = { userId: user.id, aliasId: alias.id };
+
+    const fromContact = await getOrCreateContact(opts.db, scope, fromAddr, "from", {
+      mailDomain: opts.mailDomain,
+      envelopeFrom: envelope.mailFrom,
+    });
+    const emailLog = await createForwardLog(opts.db, {
+      userId: user.id,
+      contactId: fromContact.id,
+      aliasId: alias.id,
+      mailboxId: mailbox.id,
+      messageId: originalMessageId,
+    });
+
+    const rewritten = await rewriteForwardForAlias(opts, {
+      alias,
+      mailbox,
+      user,
+      emailLogId: emailLog.id,
+      parsedHeaders: parsed.headers,
+      envelopeFrom: envelope.mailFrom,
+    });
+
+    // Prepend the auth results (fields keep their raw bytes → verbatim).
+    rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
+    if (verification.verdict.action === "flag") {
+      rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
+    }
+
+    let message: Uint8Array;
+    if (dkimKey === null) {
+      message = serializeMessage(rewritten, parsed.body);
+    } else {
+      const signed = await signOutbound(rewritten, parsed.body, {
+        dkimKeys: [dkimKey],
+        arc:
+          verification.arcContext === null
+            ? undefined
+            : {
+                signingDomain: opts.mailDomain,
+                selector: dkimKey.selector,
+                privateKey: dkimKey.privateKey,
+                context: verification.arcContext,
+              },
+      });
+      for (const err of signed.errors) {
+        log(`mx: DKIM signing error (${err.signingDomain}/${err.selector}): ${err.err.message}`);
+      }
+      message = signed.message;
+    }
+
+    const envelopeFrom = buildVerp({
+      type: "bounce_forward",
+      id: emailLog.id,
+      secret: opts.verpSecret,
+      domain: opts.mailDomain,
+    });
+    const queueId = await enqueue(opts.db, {
+      raw: message,
+      envelopeFrom,
+      envelopeTo: mailbox.email,
+      maxRawBytes: opts.maxMessageSize,
+    });
+    log(`mx: queued #${queueId} for ${rcpt.address} -> ${mailbox.email} (log ${emailLog.id})`);
+  }
+
+  return { accept: true, message: "Ok: queued" };
+}
+
+/** The pure rewrite with its DB callbacks wired up. */
+async function rewriteForwardForAlias(
+  opts: MxOptions,
+  ctx: {
+    alias: { id: number; email: string };
+    mailbox: { email: string };
+    user: { id: number };
+    emailLogId: number;
+    parsedHeaders: HeaderBlock;
+    envelopeFrom: string;
+  },
+): Promise<HeaderBlock> {
+  const scope = { userId: ctx.user.id, aliasId: ctx.alias.id };
+  const result = await rewriteForward(
+    { headers: ctx.parsedHeaders },
+    {
+      alias: { email: ctx.alias.email },
+      mailbox: { email: ctx.mailbox.email },
+      envelopeFrom: ctx.envelopeFrom,
+      emailLogId: ctx.emailLogId,
+      getOrCreateContact: async (addr, source) => {
+        const contact = await getOrCreateContact(opts.db, scope, addr, source, {
+          mailDomain: opts.mailDomain,
+          envelopeFrom: ctx.envelopeFrom,
+        });
+        return { replyEmail: contact.replyEmail };
+      },
+      resolveOriginalMessageId: (ourId) => resolveOriginalMessageId(opts.db, ctx.user.id, ourId),
+    },
+  );
+  return result.headers;
+}
+
+/** Build the port-25 server (listeners not yet bound). */
+export function createMxServer(opts: MxOptions): SmtpServer {
+  return createSmtpServer({
+    hostname: opts.mailHostname,
+    banner: "virtu mx",
+    tls: opts.tls,
+    maxMessageSize: opts.maxMessageSize,
+    onRcptTo: async (event) => {
+      const { decision } = await evaluateRcpt(opts.db, event.address, {
+        verpSecret: opts.verpSecret,
+        mailDomain: opts.mailDomain,
+      });
+      if (decision.kind === "reject") {
+        return rejectWith(decision.code, decision.enhanced, decision.message);
+      }
+      return { accept: true };
+    },
+    onData: (event) => handleInboundData(event, opts),
+  });
+}
+
+/** Options assembled from config + env (the real entrypoint path). */
+export function mxOptionsFromConfig(): MxOptions {
+  return {
+    db,
+    mailDomain: config.mailDomain,
+    mailHostname: config.mailHostname,
+    dkimSelector: config.dkimSelector,
+    verpSecret: config.verpSecret,
+    maxMessageSize: config.smtpMaxMessageSize,
+    tls: loadSmtpTls(config.smtpTlsCertFile, config.smtpTlsKeyFile),
+  };
+}
+
+/** Start the mx listener on config.mxPort. */
+export async function startMx(): Promise<SmtpServer> {
+  const server = createMxServer(mxOptionsFromConfig());
+  const bound = await server.listen(config.mxPort, config.smtpHost);
+  console.log(`mx: listening on ${bound.host}:${bound.port}`);
+  return server;
+}
+
+if (import.meta.main) {
+  void startMx();
+}

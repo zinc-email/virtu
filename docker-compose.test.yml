@@ -26,8 +26,10 @@
 #   192.168.34.11   mail.void.com     blackhole (catch-all Maildir sink)
 #   192.168.34.12   mail.initech.com  legit correspondent, DMARC p=reject
 #   192.168.34.13   mail.open.relay   spammer's wide-open relay
-#   192.168.34.101  mail.virtu.email  RESERVED: our mx joins here in wave 2
-#   192.168.34.102  virtu.email/www   RESERVED: our api/web (wave 2)
+#   192.168.34.101  mail.virtu.email  OUR mail box (`mail` service below):
+#                                     one bun process runs mx (25) +
+#                                     submission (587/465) + deliverd
+#   192.168.34.102  virtu.email/www   RESERVED: our api/web (wave 3+)
 #   192.168.34.254  ns2.virtu.email   fake BIND (pretend side)
 #   192.168.43.254  ns.virtu.email    fake BIND (internal side)
 #
@@ -37,6 +39,22 @@
 # mail), while every statically-addressed peer — including our future mx at
 # .101 — is external (peer VERIFIES its signatures instead of re-signing).
 name: virtu-ts-test
+
+# Environment shared by our mail service and the test-runner: both talk to
+# the same Postgres (fixtures write rows the mail path reads) and must agree
+# on the VERP HMAC secret (tests parse queue rows' envelope froms).
+#
+# NOTE on `bun install`: the test networks are `internal: true`, so nothing
+# in here can reach the npm registry. The repo (with server/node_modules) is
+# bind-mounted at /repo — run `bun install` in server/ ON THE HOST before
+# `up`. All server deps are pure JS, so host-installed modules run fine on
+# the oven/bun images.
+x-virtu-env: &virtu-env
+  DATABASE_URL: postgres://virtu:virtu@db:5432/virtu
+  VERP_SECRET: test-verp-secret-test-verp-secret-42
+  MAIL_DOMAIN: virtu.email
+  MAIL_HOSTNAME: mail.virtu.email
+  DKIM_SELECTOR: mail
 
 x-peer: &peer
   build:
@@ -66,6 +84,69 @@ services:
         ipv4_address: 192.168.43.254
       pretend:
         ipv4_address: 192.168.34.254
+
+  # Our Postgres, internal net only. State persists across `up`s (the story
+  # tests are find-or-create against dirty state by design); `down -v` wipes.
+  db:
+    image: postgres:17-alpine
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: virtu
+      POSTGRES_PASSWORD: virtu
+    healthcheck:
+      test: pg_isready -U virtu -h 127.0.0.1
+      interval: 2s
+      timeout: 2s
+      retries: 45
+    networks:
+      internal:
+    volumes:
+      - pg_test:/var/lib/postgresql/data
+
+  # Our mail box: mail.virtu.email = 192.168.34.101 (the address the
+  # virtu.email/user.com zones already point MX + SPF at). One bun process
+  # (src/maild.ts) runs all three mail entrypoints — mx :25, submission
+  # :587/:465, deliverd — the simplest durable form for a one-IP deployment.
+  # Schema is push-applied on boot so a fresh `up` needs no manual step.
+  mail:
+    image: oven/bun:1
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["bun drizzle-kit push --force && exec bun src/maild.ts"]
+    working_dir: /repo/server
+    hostname: mail.virtu.email
+    dns:
+      - 192.168.43.254
+      - 192.168.34.254
+    environment:
+      <<: *virtu-env
+      SMTP_TLS_CERT_FILE: /repo/server/docker/test/mkcert/virtu.email.pem
+      SMTP_TLS_KEY_FILE: /repo/server/docker/test/mkcert/virtu.email-key.pem
+      QUEUE_POLL_MS: "500"
+    depends_on:
+      dns:
+        condition: service_started
+      db:
+        condition: service_healthy
+    networks:
+      internal:
+      pretend:
+        ipv4_address: 192.168.34.101
+    volumes:
+      - .:/repo
+    healthcheck:
+      # Healthy once the submission listener is up (it starts after the mx
+      # listener and after the schema push).
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const s = await Bun.connect({ hostname: '127.0.0.1', port: 587, socket: { data() {} } }); s.end(); process.exit(0)",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+      start_period: 5s
 
   qmail:
     <<: *peer
@@ -128,9 +209,13 @@ services:
         ipv4_address: 192.168.34.13
 
   # Where `bun test` runs: attached to both networks, resolving through the
-  # fake BIND, with read-only sight of every persona's Maildir.
+  # fake BIND, with read-only sight of every persona's Maildir. Built from a
+  # thin oven/bun image with nsupdate baked in (fixtures publish DKIM TXT
+  # records into the dynamic zones; see server/docker/test/runner).
   test-runner:
-    image: oven/bun:1
+    build:
+      context: ./server/docker/test
+      dockerfile: runner/Dockerfile
     entrypoint: ["/bin/sh", "-c"]
     command: ["sleep infinity"]
     working_dir: /repo/server
@@ -140,6 +225,10 @@ services:
     depends_on:
       dns:
         condition: service_started
+      db:
+        condition: service_healthy
+      mail:
+        condition: service_healthy
       qmail:
         condition: service_healthy
       docusign:
@@ -153,6 +242,7 @@ services:
       relay:
         condition: service_healthy
     environment:
+      <<: *virtu-env
       VIRTU_TEST_MAILDIR: /var/mail
       VIRTU_TEST_DNS: 192.168.43.254
     networks:
@@ -167,6 +257,8 @@ volumes:
   # Never truncated between tests — tests find their own mail by
   # X-Virtu-Test-Id, so dirty state is harmless by design.
   mail:
+  # Our Postgres data (test net only; the dev stack has its own volume).
+  pg_test:
 
 networks:
   internal:

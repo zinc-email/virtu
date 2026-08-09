@@ -1,0 +1,76 @@
+---
+// Ported from tmp/virtu/server/src/views/hello/why.php (FREE_TRIAL_DAYS = 0)
+import Layout from "../layouts/Layout.astro";
+import CtaForm from "../components/CtaForm.astro";
+import Icon from "../components/Icon.astro";
+---
+
+<Layout
+  title="Why Zinc? — Keep your email safe."
+  description="Zinc enables you to identify and stop spam with a single click. Protect your inbox from the #1 threat to your network: spam, phishing, and malware delivered via email."
+>
+  <section id="features" class="section mini">
+    <header>
+      <h1>Keep your email safe.</h1>
+    </header>
+    <p>
+      Zinc enables you to identify and stop spam with a single click. We help
+      protect your inbox from the #1 threat to your network: spam, phishing,
+      and malware delivered via email.
+    </p>
+    <ul class="featureList">
+      <li class="feature">
+        <div class="icon">
+          <Icon name="buoy" />
+        </div>
+        <div class="detail">
+          <h2>Protect your network.</h2>
+          <p>
+            Reduce the #1 threat to your network by flagging all email from
+            unauthorized senders. Easily identify BEC attacks, scams, phishing,
+            or malware.
+          </p>
+        </div>
+      </li>
+      <li class="feature">
+        <div class="icon">
+          <Icon name="helm" />
+        </div>
+        <div class="detail">
+          <h2>Invert control.</h2>
+          <p>
+            With Zinc you can <em>unshare</em> your contact information at any
+            time. You get unprecedented control over who can send you email.
+          </p>
+        </div>
+      </li>
+      <li class="feature">
+        <div class="icon">
+          <Icon name="tagged" />
+        </div>
+        <div class="detail">
+          <h2>Add accountibility.</h2>
+          <p>
+            Detect when anyone leaks or sells your email address, and stop them
+            in their tracks.
+          </p>
+        </div>
+      </li>
+    </ul>
+    <div class="cta">
+      <div class="hello-cta noUser noAccount noActive noOverdue noMinimal">
+        <h2>Get started.</h2>
+        <p>
+          Sign-up now to take control of your inbox, or
+          <a href="/how">learn how it works</a>. Enter your email to get
+          started.
+        </p>
+        <div class="actions">
+          <CtaForm
+            note="Protect your network for only $3.99/month. Cancel any time."
+          />
+        </div>
+      </div>
+    </div>
+  </section>
+</Layout>

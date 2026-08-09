@@ -1,0 +1,120 @@
+---
+// Ported from tmp/virtu/server/src/views/hello/pricing.php (FREE_TRIAL_DAYS = 0)
+import Layout from "../layouts/Layout.astro";
+import CtaForm from "../components/CtaForm.astro";
+import Icon from "../components/Icon.astro";
+---
+
+<Layout
+  title="Pricing — Zinc"
+  description="One price. Keep your inbox spam-free for only $3.99/month per user. All features included, premium support, pause any time."
+>
+  <section id="pricing" class="section mini">
+    <header>
+      <h1>One price.</h1>
+    </header>
+    <article class="article">
+      <p>
+        Keep your inbox spam-free for only <strong>$3.99/month</strong> per
+        user.
+      </p>
+
+      <ul class="checklist">
+        <li><Icon name="check" /><span>All features included</span></li>
+        <li><Icon name="check" /><span>Premium support</span></li>
+        <li><Icon name="check" /><span>Pause any time</span></li>
+        <li><Icon name="check" /><span>No Credit Card Required</span></li>
+      </ul>
+
+      <div class="cta">
+        <div class="hello-cta noUser noAccount noActive noOverdue isMinimal">
+          <a href="/app/register" class="button submit">
+            Try it Free for A Week
+          </a>
+        </div>
+      </div>
+
+      <ul class="featureList">
+        <li class="feature">
+          <div class="detail">
+            <h2>Secure data.</h2>
+            <p>
+              We respect you <strong>as our customer</strong>, and do
+              everything in our power to protect your personal info.
+            </p>
+            <ul class="checklist">
+              <li><Icon name="check" /><span>Latest TLS encryption</span></li>
+              <li>
+                <Icon name="check" /><span
+                  >SPF authentication &amp; compliance</span
+                >
+              </li>
+              <li>
+                <Icon name="check" /><span>DKIM cryptographic signatures</span>
+              </li>
+              <li><Icon name="check" /><span>DMARC compatability</span></li>
+              <li>
+                <Icon name="check" /><span>End-to-end encryption support</span>
+              </li>
+              <li>
+                <Icon name="check" /><span
+                  >Minimal to zero storage of your info</span
+                >
+              </li>
+            </ul>
+            <p>
+              Zero configuration required: we provide all this by default,
+              batteries included, so you don't even have to think about it.
+            </p>
+            <p>
+              We don't have a free plan because we believe in offering the best
+              possible service to real customers at the most affordable price
+              we can.
+            </p>
+          </div>
+        </li>
+
+        <li class="feature">
+          <div class="detail">
+            <h2>Secure payments.</h2>
+            <p>
+              Together, we trust
+              <a
+                href="https://www.braintreepayments.com/en-gg/features/data-security"
+                target="_blank">Braintree</a
+              >, a PayPal company, to processes all payments with top-level PCI
+              compliance. Your browser connects directly with Braintree to make
+              the transaction, so our servers never receive your payment
+              details.
+            </p>
+          </div>
+        </li>
+
+        <li class="feature">
+          <div class="detail">
+            <h2>Satisfaction guaranteed.</h2>
+            <p>
+              If you find our service unsatisfactory, contact us for a refund
+              of your last payment.
+            </p>
+          </div>
+        </li>
+      </ul>
+      <div class="cta">
+        <div class="hello-cta noUser noAccount noActive noOverdue noMinimal">
+          <h2>Protect your inbox.</h2>
+          <p>
+            Sign-up now to take control of your inbox, or
+            <a href="/how">learn how it works</a>. Enter your email address to
+            get started.
+          </p>
+          <div class="actions">
+            <CtaForm
+              note="Get all features for only $3.99/month. Cancel any time."
+            />
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+</Layout>

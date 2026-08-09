@@ -1,0 +1,22 @@
+---
+// Ported from tmp/virtu/server/src/views/hello/hello.php (FREE_TRIAL_DAYS = 0)
+import Layout from "../layouts/Layout.astro";
+import CtaForm from "../components/CtaForm.astro";
+---
+
+<Layout
+  title="Zinc — Protect your inbox from evil."
+  description="Instantly identify email spam, and stop it with a single click. Share email addresses you can unshare."
+>
+  <section id="hello" class="section mini">
+    <header>
+      <h1>Protect your inbox from evil.</h1>
+    </header>
+    <p class="last">
+      Instantly identify email spam, and stop it with a single click. Learn
+      about <a href="/how">how it works</a>.
+    </p>
+
+    <CtaForm autofocus={true} />
+  </section>
+</Layout>

@@ -1,0 +1,85 @@
+---
+// Single-column layout ported from the legacy virtu PHP app:
+//   tmp/virtu/server/src/layouts/{default,_header,_nav,_footer}.php
+// Public (logged-out) nav variant only — this is a static marketing site.
+import "../styles/global.scss";
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+
+// Normalize so both /how and /how/ match.
+const path = Astro.url.pathname.replace(/\/+$/, "") || "/";
+const active = (href: string) => (path === href ? "active" : "inactive");
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32" />
+  </head>
+  <body>
+    <div id="app" class="showNav">
+      <header>
+        <!-- Brand -->
+        <div id="brand">
+          <h1>Zinc</h1>
+        </div>
+
+        <!-- Nav -->
+        <nav>
+          <ul class="mainNav">
+            <li class="meta logo">
+              <a href="/">
+                <svg
+                  width="384"
+                  height="384"
+                  version="1.1"
+                  viewBox="0 0 101.6 101.6"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <g transform="translate(0 -195.4)">
+                    <path
+                      transform="matrix(.26458 0 0 .26458 0 195.4)"
+                      d="m0 0v384h384v-384zm19.15 19.15h345.7v345.7h-345.7zm60.916 54.533v229.86h229.86v-229.86zm22.391 23.094h184.62v57.922h-16.969l-68.768 68.768h85.736v57.922h-184.62v-57.922h16.969l68.77-68.768h-85.738z"
+                      fill="#10e4ec"
+                      stroke-width="1.1326"></path>
+                  </g>
+                </svg>
+              </a>
+            </li>
+          </ul>
+          <ul class="metaNav">
+            <li class={`meta how ${active("/how")}`}>
+              <a href="/how">How It Works</a>
+            </li>
+            <li class={`meta pricing ${active("/pricing")}`}>
+              <a href="/pricing">Pricing</a>
+            </li>
+            <li class={`about ${active("/why")}`}>
+              <a href="/why">Why Zinc?</a>
+            </li>
+          </ul>
+        </nav>
+      </header>
+      <main role="main">
+        <div class="container">
+          <slot />
+        </div>
+      </main>
+      <footer>
+        <ul>
+          <li><a href="/terms">Terms</a></li>
+          <li><a href="/privacy">Privacy</a></li>
+        </ul>
+      </footer>
+    </div>
+  </body>
+</html>

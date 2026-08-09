@@ -1,0 +1,144 @@
+---
+// Inline SVG icons ported verbatim from the legacy virtu PHP app:
+//   tmp/virtu/server/src/components/icon/icon.php ("check")
+//   tmp/virtu/server/src/components/icon/svg/*.svg (the rest)
+// The <virtu-icon> wrapper is a plain unknown element kept for CSS parity.
+
+interface Props {
+  name:
+    | "check"
+    | "anchor"
+    | "lighthouse"
+    | "shark"
+    | "buoy"
+    | "helm"
+    | "tagged";
+}
+
+const { name } = Astro.props;
+---
+
+<virtu-icon class={`icon-${name}`}>
+  {
+    name === "check" && (
+      <svg width="16" height="16" viewBox="0 0 1792 1792" xmlns="http://www.w3.org/2000/svg">
+        <path
+          d="M1671 566q0 40-28 68l-724 724-136 136q-28 28-68 28t-68-28l-136-136-362-362q-28-28-28-68t28-68l136-136q28-28 68-28t68 28l294 295 656-657q28-28 68-28t68 28l136 136q28 28 28 68z"
+          fill="#fff"
+        />
+      </svg>
+    )
+  }
+  {
+    name === "anchor" && (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="An anchor">
+        <g transform="translate(24,24) scale(1.04) translate(-24,-24)">
+          <path d="M10.5,28.5 L4.6,24.6 L8.4,34.6 Z" fill="#b08968" />
+          <path d="M37.5,28.5 L43.4,24.6 L39.6,34.6 Z" fill="#b08968" />
+          <path
+            d="M10.5,26.5 C10.5,36 16.6,41.6 24,41.6 C31.4,41.6 37.5,36 37.5,26.5"
+            fill="none"
+            stroke="#d9c8aa"
+            stroke-width="4.4"
+            stroke-linecap="round"
+          />
+          <rect x="21.8" y="10.5" width="4.4" height="30" rx="1.4" fill="#d9c8aa" />
+          <rect x="13.4" y="15.2" width="21.2" height="4.1" rx="2" fill="#d9c8aa" />
+          <circle cx="24" cy="8.6" r="4.4" fill="none" stroke="#d9c8aa" stroke-width="3.7" />
+        </g>
+      </svg>
+    )
+  }
+  {
+    name === "lighthouse" && (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="A lighthouse">
+        <g transform="translate(24,24) scale(1.03) translate(-24,-24)">
+          <path d="M17.8,8.4 L30.2,8.4 L27.4,3.8 L20.6,3.8 Z" fill="#b08968" />
+          <rect x="19.4" y="8.4" width="9.2" height="7" fill="#e0a33a" />
+          <rect x="15.8" y="15.4" width="16.4" height="2.6" rx=".9" fill="#b08968" />
+          <path d="M18.2,18 L29.8,18 L32.6,41.4 L15.4,41.4 Z" fill="#ece0c8" />
+          <path d="M17.63,22.8 L30.37,22.8 L30.79,26.3 L17.21,26.3 Z" fill="#c2603c" />
+          <path d="M16.52,32 L31.48,32 L31.89,35.5 L16.11,35.5 Z" fill="#c2603c" />
+          <rect x="13.6" y="41.4" width="20.8" height="3.6" rx="1.4" fill="#b08968" />
+        </g>
+      </svg>
+    )
+  }
+  {
+    name === "shark" && (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="A shark fin cutting the water">
+        <g transform="translate(24,24) scale(1.05) translate(-24,-24)">
+          <path d="M12,38.5 C15,25 21,14 33,6 C31,19 30.5,28 30,38.5 Z" fill="#4a6b93" />
+          <path
+            d="M4,38.6 C5.5,32.5 10,30.4 13,33.6 C15.5,36.3 17.5,36.8 20,34.2 C23,31 27,30.6 30,33.8 C32.5,36.5 35,37 37,35.4 C39.5,33.4 42.5,34.6 44,38.6 Q24,44 4,38.6 Z"
+            fill="#2f6f70"
+          />
+          <path
+            d="M4,38.6 C6,35.5 9,35.8 11.5,37.4 C14.5,39.3 17,38.6 19.5,36.4 C22.5,33.8 26.5,34 29.5,36.6 C32,38.8 35,39.2 37.5,37.6 C40,36 42.5,36.4 44,38.6 Q24,44 4,38.6 Z"
+            fill="#4f9d9d"
+          />
+        </g>
+      </svg>
+    )
+  }
+  {
+    name === "buoy" && (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="A life buoy">
+        <g transform="translate(24,24) scale(0.86) translate(-24,-24)">
+          <circle cx="24" cy="24" r="15" fill="none" stroke="#ece0c8" stroke-width="11" />
+          <circle
+            cx="24"
+            cy="24"
+            r="15"
+            fill="none"
+            stroke="#c2603c"
+            stroke-width="11"
+            stroke-dasharray="11.78 11.78"
+            transform="rotate(22.5 24 24)"
+          />
+          <circle cx="24" cy="24" r="15" fill="none" stroke="#b08968" stroke-width="1.2" opacity=".55" />
+        </g>
+      </svg>
+    )
+  }
+  {
+    name === "helm" && (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="A ship’s wheel">
+        <g transform="translate(24,24) scale(1.04) translate(-24,-24)">
+          <rect x="21.7" y="5.5" width="4.6" height="18.5" rx="2.3" fill="#b08968" transform="rotate(0.0 24 24)" />
+          <rect x="21.7" y="5.5" width="4.6" height="18.5" rx="2.3" fill="#b08968" transform="rotate(60.0 24 24)" />
+          <rect x="21.7" y="5.5" width="4.6" height="18.5" rx="2.3" fill="#b08968" transform="rotate(120.0 24 24)" />
+          <rect x="21.7" y="5.5" width="4.6" height="18.5" rx="2.3" fill="#b08968" transform="rotate(180.0 24 24)" />
+          <rect x="21.7" y="5.5" width="4.6" height="18.5" rx="2.3" fill="#b08968" transform="rotate(240.0 24 24)" />
+          <rect x="21.7" y="5.5" width="4.6" height="18.5" rx="2.3" fill="#b08968" transform="rotate(300.0 24 24)" />
+          <rect x="22.3" y="11.0" width="3.4" height="13.0" rx="1.7" fill="#d9c8aa" transform="rotate(0.0 24 24)" />
+          <rect x="22.3" y="11.0" width="3.4" height="13.0" rx="1.7" fill="#d9c8aa" transform="rotate(60.0 24 24)" />
+          <rect x="22.3" y="11.0" width="3.4" height="13.0" rx="1.7" fill="#d9c8aa" transform="rotate(120.0 24 24)" />
+          <rect x="22.3" y="11.0" width="3.4" height="13.0" rx="1.7" fill="#d9c8aa" transform="rotate(180.0 24 24)" />
+          <rect x="22.3" y="11.0" width="3.4" height="13.0" rx="1.7" fill="#d9c8aa" transform="rotate(240.0 24 24)" />
+          <rect x="22.3" y="11.0" width="3.4" height="13.0" rx="1.7" fill="#d9c8aa" transform="rotate(300.0 24 24)" />
+          <circle cx="24" cy="24" r="12.4" fill="none" stroke="#d9c8aa" stroke-width="4" />
+          <circle cx="24" cy="24" r="4.6" fill="#b08968" />
+        </g>
+      </svg>
+    )
+  }
+  {
+    name === "tagged" && (
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="A tagged fish">
+        <g transform="translate(24,24) scale(1.105) translate(-24,-24)">
+          <path d="M9,27 L2,20.5 L4,27 L2,33.5 Z" fill="#2f6f70" />
+          <path
+            d="M9,27 C13,18.5 25,15.5 33,20.5 C37,23 39,25.4 40,27 C39,28.6 37,31 33,33.5 C25,38.5 13,35.5 9,27 Z"
+            fill="#4f9d9d"
+          />
+          <path d="M20,20.6 C21.5,25 21.5,29 20,33.4 C24,32 24,22 20,20.6 Z" fill="#2f6f70" />
+          <circle cx="34.4" cy="25.4" r="1.7" fill="#ece0c8" />
+          <rect x="22.4" y="15.8" width="1.8" height="4.4" fill="#b08968" />
+          <rect x="18.6" y="9.6" width="9.4" height="6.6" rx="2" fill="#e0a33a" />
+          <circle cx="20.8" cy="12.9" r="1.05" fill="#b08968" />
+        </g>
+      </svg>
+    )
+  }
+</virtu-icon>

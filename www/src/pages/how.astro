@@ -1,0 +1,135 @@
+---
+// Ported from tmp/virtu/server/src/views/hello/how.php (FREE_TRIAL_DAYS = 0).
+// The .demo widgets are static illustrations here (no JS): a sample alias in
+// the shape Virtual::generateLocalPart() produces, a notice, and the
+// forwarding toggle rendered in its checked state.
+import Layout from "../layouts/Layout.astro";
+import CtaForm from "../components/CtaForm.astro";
+import Icon from "../components/Icon.astro";
+---
+
+<Layout
+  title="How It Works — Zinc"
+  description="Share an email alias instead of your real email address. See who leaks it, receive alerts on unwanted email, and stop spam with a single click."
+>
+  <section class="section mini" id="how">
+    <header>
+      <h1>Email addresses you can <em>unshare</em>.</h1>
+      <p>
+        Share an <strong>email alias</strong> instead of your real email
+        address. This puts you in control:
+      </p>
+      <ul class="checklist">
+        <li>
+          <Icon name="check" />
+          <span>Receive alerts on unwanted email.</span>
+        </li>
+        <li>
+          <Icon name="check" />
+          <span>See who leaks your email address.</span>
+        </li>
+        <li>
+          <Icon name="check" />
+          <span>Stop spam with a single click.</span>
+        </li>
+      </ul>
+    </header>
+
+    <ul class="featureList">
+      <li class="feature">
+        <div class="icon">
+          <Icon name="anchor" />
+        </div>
+        <div class="detail">
+          <h2>1. Guard your real email address.</h2>
+          <p>
+            Whenever someone wants your email, share a unique, permanent, and
+            secure Zinc Email address instead (via our <a href="/app">app</a>
+            or
+            <a
+              class="component-extension-link"
+              target="_blank"
+              href="https://chrome.google.com/webstore/detail/aoaliggjcdafnanjebcgjaaknoicpkec"
+              >integrations</a
+            >).
+          </p>
+          <p>
+            This puts you in control. You can see who shares it, and you can
+            <strong>revoke or restore</strong> the address at any time.
+          </p>
+          <div class="demo">
+            <div class="virtual">
+              <span class="username">xk4m</span><span class="at">@</span><span
+                class="domain">your.com</span
+              >
+            </div>
+          </div>
+        </div>
+      </li>
+      <li class="feature">
+        <div class="icon">
+          <Icon name="lighthouse" />
+        </div>
+        <div class="detail">
+          <h2>2. Send &amp; receive email securely.</h2>
+          <p>Emails securely forward to and from your normal email inbox.</p>
+          <p>
+            We secure all email with the latest authentication technology (SPF,
+            DKIM, ARC), 2048-bit TLS encryption, and we <a href="/privacy"
+              >care a lot about privacy</a
+            >.
+          </p>
+          <div class="demo">
+            <div class="notice">
+              You have <strong>2</strong> new emails.
+            </div>
+          </div>
+        </div>
+      </li>
+      <li class="feature">
+        <div class="icon">
+          <Icon name="shark" />
+        </div>
+        <div class="detail">
+          <h2>3. Stop evil in its tracks.</h2>
+          <p>
+            Identify how others share your information and revoke it at the
+            click of a button.
+          </p>
+          <p>
+            Never accidentally open malware, BEC, or phishing attacks. Use Zinc
+            to control the #1 threat to your network.
+          </p>
+          <div class="demo turnOff">
+            <div class="checkbox">
+              <virtu-checkbox checked>
+                <div class="container">
+                  <div class="track">
+                    <div class="label on">ON</div>
+                    <div class="slider"></div>
+                    <div class="label off">OFF</div>
+                  </div>
+                </div>
+              </virtu-checkbox>
+            </div>
+            <div class="info">Forward Mail?</div>
+          </div>
+        </div>
+      </li>
+    </ul>
+    <div class="cta">
+      <div class="hello-cta noUser noAccount noActive noOverdue noMinimal">
+        <h2>Try it free.</h2>
+        <p>
+          <a href="/why">See why it protects your network</a>, or verify your
+          email address to get started.
+        </p>
+        <div class="actions">
+          <CtaForm
+            note="Reach inbox zero for only $3.99/month. Cancel any time."
+          />
+        </div>
+      </div>
+    </div>
+  </section>
+</Layout>

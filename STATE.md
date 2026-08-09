@@ -80,11 +80,12 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
   (serve `www/` at `/`, SPA at `/app`, API at `/api`, mail ports 25/465/587),
   real TLS (certs for MX + web), outbound deliverability setup (rDNS, SPF
   record, DKIM key publication, DMARC), backups, host provisioning docs.
-- **LICENSE file** — PLAN says open-source; no license chosen/committed yet.
+  **Secrets management**: `server/.env` is gitignored, so nothing sensitive is
+  in git — CI and any deploy must provide the production secrets out-of-band
+  (`VERP_SECRET`, TLS cert/key paths, and the Stripe keys if billing is on).
+  `server/.env.example` is the checklist of what to inject.
 - **Mobile shells** — post-MVP by decision #7 (native Swift/Kotlin over the
   web client; share-extension is the flagship feature + App Store 4.2 answer).
-- **README completeness** — quickstart exists; local-testing guide and
-  architecture overview not yet written in.
 
 ## Upstream workarounds to revisit
 

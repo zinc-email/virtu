@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { db } from "../db";
-import { aliases, contacts, emailLogs, users } from "../db/schema";
+import { aliases, contacts, customDomains, emailLogs, users } from "../db/schema";
 import { createAlias, registerAndLogin } from "./intHarness";
 
 let app: App;
@@ -21,6 +21,62 @@ afterAll(async () => {
 });
 
 const auth = (apiKey: string) => ({ authentication: apiKey });
+
+interface CreatedAlias {
+  id: number;
+  email: string;
+  mailbox: { id: number; email: string };
+  mailboxes: { id: number; email: string }[];
+}
+
+/** Create an alias through the real flow with explicit mailbox_ids / hostname. */
+async function createAliasVia(
+  apiKey: string,
+  opts: { mailboxIds: number[]; hostname?: string },
+): Promise<CreatedAlias> {
+  const options = await app.inject({
+    method: "GET",
+    url: "/api/v5/alias/options",
+    headers: auth(apiKey),
+  });
+  const suffix = options.json<{ suffixes: { signed_suffix: string }[] }>().suffixes[0];
+  if (!suffix) throw new Error("no suffixes returned");
+  const qs = opts.hostname ? `?hostname=${encodeURIComponent(opts.hostname)}` : "";
+  const created = await app.inject({
+    method: "POST",
+    url: `/api/v3/alias/custom/new${qs}`,
+    headers: auth(apiKey),
+    payload: {
+      alias_prefix: `p${crypto.randomUUID().slice(0, 8)}`,
+      signed_suffix: suffix.signed_suffix,
+      mailbox_ids: opts.mailboxIds,
+    },
+  });
+  if (created.statusCode !== 201) throw new Error(`create alias failed: ${created.body}`);
+  return created.json<CreatedAlias>();
+}
+
+/** Create an extra (verified) mailbox through the API; returns its id. */
+async function addMailbox(apiKey: string): Promise<number> {
+  const res = await app.inject({
+    method: "POST",
+    url: "/api/mailboxes",
+    headers: auth(apiKey),
+    payload: { email: `mb-${crypto.randomUUID()}@ext.test` },
+  });
+  if (res.statusCode !== 201) throw new Error(`create mailbox failed: ${res.body}`);
+  return res.json<{ id: number }>().id;
+}
+
+const defaultMailboxId = async (apiKey: string): Promise<number> => {
+  const res = await app.inject({
+    method: "GET",
+    url: "/api/v2/mailboxes",
+    headers: auth(apiKey),
+  });
+  const mb = res.json<{ mailboxes: { id: number; default: boolean }[] }>().mailboxes;
+  return (mb.find((m) => m.default) ?? mb[0]!).id;
+};
 
 describe("GET /api/v5/alias/options", () => {
   test("returns signed suffixes and a prefix suggestion from hostname", async () => {
@@ -338,7 +394,7 @@ describe("GET /api/v2/aliases", () => {
 });
 
 describe("PUT/PATCH /api/aliases/:id", () => {
-  test("updates note and name; accepts-but-ignores disable_pgp and pinned", async () => {
+  test("updates note, name and pinned; accepts-but-ignores disable_pgp", async () => {
     const { apiKey } = await registerAndLogin(app);
     const alias = await createAlias(app, apiKey);
 
@@ -360,7 +416,21 @@ describe("PUT/PATCH /api/aliases/:id", () => {
     expect(body.note).toBe("new note");
     expect(body.name).toBe("NewName"); // linebreaks stripped like SimpleLogin
     expect(body.disable_pgp).toBe(false);
-    expect(body.pinned).toBe(false);
+    expect(body.pinned).toBe(true);
+
+    const unpin = await app.inject({
+      method: "PATCH",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+      payload: { pinned: false },
+    });
+    expect(unpin.statusCode).toBe(200);
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+    });
+    expect(after.json<{ pinned: boolean }>().pinned).toBe(false);
   });
 
   test("empty body -> SimpleLogin's dev error", async () => {
@@ -499,6 +569,346 @@ describe("DELETE /api/aliases/:id", () => {
       headers: auth(apiKey),
     });
     expect(get.statusCode).toBe(403);
+  });
+});
+
+describe("pinned aliases", () => {
+  test("?pinned filters; default sort is pinned-first then latest activity", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const a1 = await createAlias(app, apiKey);
+    const a2 = await createAlias(app, apiKey);
+    const a3 = await createAlias(app, apiKey);
+
+    // Pin the oldest.
+    const pin = await app.inject({
+      method: "PATCH",
+      url: `/api/aliases/${a1.id}`,
+      headers: auth(apiKey),
+      payload: { pinned: true },
+    });
+    expect(pin.statusCode).toBe(200);
+
+    const pinned = await app.inject({
+      method: "GET",
+      url: "/api/v2/aliases?page_id=0&pinned",
+      headers: auth(apiKey),
+    });
+    expect(
+      pinned.json<{ aliases: { id: number; pinned: boolean }[] }>().aliases.map((x) => x.id),
+    ).toEqual([a1.id]);
+    expect(pinned.json<{ aliases: { pinned: boolean }[] }>().aliases[0]!.pinned).toBe(true);
+
+    // No activity yet: pinned first, then newest created_at (a3 before a2).
+    const before = await app.inject({
+      method: "GET",
+      url: "/api/v2/aliases?page_id=0",
+      headers: auth(apiKey),
+    });
+    expect(before.json<{ aliases: { id: number }[] }>().aliases.map((x) => x.id)).toEqual([
+      a1.id,
+      a3.id,
+      a2.id,
+    ]);
+
+    // Give a2 activity: its latest email log outranks a3's created_at.
+    const contactRes = await app.inject({
+      method: "POST",
+      url: `/api/aliases/${a2.id}/contacts`,
+      headers: auth(apiKey),
+      payload: { contact: "sort@example.com" },
+    });
+    const contactId = contactRes.json<{ id: number }>().id;
+    const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
+    await db.insert(emailLogs).values({
+      userId: userRow.id,
+      contactId,
+      aliasId: a2.id,
+      isReply: false,
+      // Deterministically later than every alias's created_at.
+      createdAt: new Date(Date.now() + 60_000),
+    });
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/v2/aliases?page_id=0",
+      headers: auth(apiKey),
+    });
+    expect(after.json<{ aliases: { id: number }[] }>().aliases.map((x) => x.id)).toEqual([
+      a1.id,
+      a2.id,
+      a3.id,
+    ]);
+  });
+});
+
+describe("alias mailbox_ids (alias_mailboxes)", () => {
+  test("creation stores extras; serialization returns the full list", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mb1 = await defaultMailboxId(apiKey);
+    const mb2 = await addMailbox(apiKey);
+
+    const created = await createAliasVia(apiKey, { mailboxIds: [mb2, mb1] });
+    // First mailbox_ids entry is the primary (SimpleLogin request order).
+    expect(created.mailbox.id).toBe(mb2);
+    expect(created.mailboxes.map((m) => m.id).sort()).toEqual([mb1, mb2].sort());
+  });
+
+  test("PUT mailbox_ids replaces the set; lowest id becomes primary", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mb1 = await defaultMailboxId(apiKey);
+    const mb2 = await addMailbox(apiKey);
+    const alias = await createAliasVia(apiKey, { mailboxIds: [mb1] });
+
+    const put = await app.inject({
+      method: "PUT",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+      payload: { mailbox_ids: [mb2, mb1] },
+    });
+    expect(put.statusCode).toBe(200);
+
+    const get = await app.inject({
+      method: "GET",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+    });
+    const body = get.json<CreatedAlias>();
+    expect(body.mailbox.id).toBe(Math.min(mb1, mb2));
+    expect(body.mailboxes.map((m) => m.id).sort()).toEqual([mb1, mb2].sort());
+
+    // Shrink back to one mailbox: extras are removed.
+    const shrink = await app.inject({
+      method: "PATCH",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+      payload: { mailbox_ids: [mb2] },
+    });
+    expect(shrink.statusCode).toBe(200);
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+    });
+    expect(after.json<CreatedAlias>().mailbox.id).toBe(mb2);
+    expect(after.json<CreatedAlias>().mailboxes.map((m) => m.id)).toEqual([mb2]);
+  });
+
+  test("mailbox_ids validation: empty and foreign ids (SimpleLogin errors)", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const other = await registerAndLogin(app);
+    const alias = await createAliasVia(apiKey, {
+      mailboxIds: [await defaultMailboxId(apiKey)],
+    });
+
+    const empty = await app.inject({
+      method: "PATCH",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+      payload: { mailbox_ids: [] },
+    });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json<{ error: string }>()).toEqual({ error: "Must choose at least one mailbox" });
+
+    const foreign = await app.inject({
+      method: "PATCH",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+      payload: { mailbox_ids: [await defaultMailboxId(other.apiKey)] },
+    });
+    expect(foreign.statusCode).toBe(400);
+    expect(foreign.json<{ error: string }>()).toEqual({ error: "Forbidden" });
+  });
+
+  test("mailbox delete with transfer_aliases_to updates join rows", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mb2 = await addMailbox(apiKey);
+    const mb3 = await addMailbox(apiKey);
+
+    // A: primary mb2, extra mb3. B: primary mb3, extra mb2.
+    const a = await createAliasVia(apiKey, { mailboxIds: [mb2, mb3] });
+    const b = await createAliasVia(apiKey, { mailboxIds: [mb3, mb2] });
+
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/api/mailboxes/${mb3}`,
+      headers: auth(apiKey),
+      payload: { transfer_aliases_to: mb2 },
+    });
+    expect(del.statusCode).toBe(200);
+
+    // A keeps primary mb2; its mb3 extra would duplicate the target -> gone.
+    const aAfter = await app.inject({
+      method: "GET",
+      url: `/api/aliases/${a.id}`,
+      headers: auth(apiKey),
+    });
+    expect(aAfter.json<CreatedAlias>().mailbox.id).toBe(mb2);
+    expect(aAfter.json<CreatedAlias>().mailboxes.map((m) => m.id)).toEqual([mb2]);
+
+    // B's primary transfers to mb2; its mb2 extra now duplicates it -> gone.
+    const bAfter = await app.inject({
+      method: "GET",
+      url: `/api/aliases/${b.id}`,
+      headers: auth(apiKey),
+    });
+    expect(bAfter.json<CreatedAlias>().mailbox.id).toBe(mb2);
+    expect(bAfter.json<CreatedAlias>().mailboxes.map((m) => m.id)).toEqual([mb2]);
+  });
+
+  test("transfer repoints extras that do not collide", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mb1 = await defaultMailboxId(apiKey);
+    const mb2 = await addMailbox(apiKey);
+    const mb3 = await addMailbox(apiKey);
+
+    // Primary mb2, extra mb3; transferring mb3 -> mb1 repoints the extra.
+    const alias = await createAliasVia(apiKey, { mailboxIds: [mb2, mb3] });
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/api/mailboxes/${mb3}`,
+      headers: auth(apiKey),
+      payload: { transfer_aliases_to: mb1 },
+    });
+    expect(del.statusCode).toBe(200);
+
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/aliases/${alias.id}`,
+      headers: auth(apiKey),
+    });
+    expect(after.json<CreatedAlias>().mailbox.id).toBe(mb2);
+    expect(
+      after
+        .json<CreatedAlias>()
+        .mailboxes.map((m) => m.id)
+        .sort(),
+    ).toEqual([mb1, mb2].sort());
+  });
+});
+
+describe("alias_used_on (?hostname=)", () => {
+  test("custom creation records hostname; options returns recommendation", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const hostname = `www.${crypto.randomUUID().slice(0, 8)}.example.com`;
+    const created = await createAliasVia(apiKey, {
+      mailboxIds: [await defaultMailboxId(apiKey)],
+      hostname,
+    });
+
+    const options = await app.inject({
+      method: "GET",
+      url: `/api/v5/alias/options?hostname=${encodeURIComponent(hostname)}`,
+      headers: auth(apiKey),
+    });
+    expect(options.statusCode).toBe(200);
+    expect(options.json<{ recommendation?: unknown }>().recommendation).toEqual({
+      alias: created.email,
+      hostname,
+    });
+
+    // Another user gets no recommendation for the same hostname.
+    const other = await registerAndLogin(app);
+    const otherOptions = await app.inject({
+      method: "GET",
+      url: `/api/v5/alias/options?hostname=${encodeURIComponent(hostname)}`,
+      headers: auth(other.apiKey),
+    });
+    expect(otherOptions.json<{ recommendation?: unknown }>().recommendation).toBeUndefined();
+  });
+
+  test("random creation records hostname too (find-or-create)", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const hostname = `app.${crypto.randomUUID().slice(0, 8)}.example.com`;
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/alias/random/new?hostname=${encodeURIComponent(hostname)}`,
+      headers: auth(apiKey),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    const email = res.json<{ email: string }>().email;
+
+    const options = await app.inject({
+      method: "GET",
+      url: `/api/v5/alias/options?hostname=${encodeURIComponent(hostname)}`,
+      headers: auth(apiKey),
+    });
+    expect(options.json<{ recommendation?: unknown }>().recommendation).toEqual({
+      alias: email,
+      hostname,
+    });
+  });
+});
+
+describe("random alias generator settings", () => {
+  test("alias_generator=uuid is honored without ?mode", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: { alias_generator: "uuid" },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/alias/random/new",
+      headers: auth(apiKey),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<{ alias: string }>().alias).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}@virtu\.email$/);
+  });
+
+  test("default_alias_domain (verified custom domain) is honored", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
+    const domain = `d${crypto.randomUUID().slice(0, 8)}.example.com`;
+    const [cd] = await db
+      .insert(customDomains)
+      .values({ userId: userRow.id, domain, verified: true })
+      .returning();
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: { random_alias_default_domain: domain },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json<{ random_alias_default_domain: string }>().random_alias_default_domain).toBe(
+      domain,
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/alias/random/new?mode=word",
+      headers: auth(apiKey),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json<{ id: number; alias: string }>();
+    expect(body.alias.endsWith(`@${domain}`)).toBe(true);
+    const row = (await db.select().from(aliases).where(eq(aliases.id, body.id)))[0]!;
+    expect(row.customDomainId).toBe(cd!.id);
+  });
+
+  test("random_alias_suffix=word shapes the options suffixes", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: { random_alias_suffix: "word" },
+    });
+    const options = await app.inject({
+      method: "GET",
+      url: "/api/v5/alias/options",
+      headers: auth(apiKey),
+    });
+    const suffix = options.json<{ suffixes: { suffix: string }[] }>().suffixes[0]!;
+    expect(suffix.suffix).toMatch(/^\.[a-z]+\d{3}@/);
   });
 });
 

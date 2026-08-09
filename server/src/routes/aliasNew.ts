@@ -6,23 +6,41 @@
 // Sources: app/api/views/{alias_options,new_custom_alias,new_random_alias}.py.
 // Error strings and status codes verbatim.
 //
+// `?hostname=` on the creation endpoints is recorded in alias_used_on
+// (find-or-create on the unique pair) and drives the options
+// `recommendation` object, exactly like SimpleLogin's AliasUsedOn.
+//
 // Deviations (documented in the lane report):
-// - No alias_used_on table in schema v1: the `hostname` query param is
-//   accepted but not recorded, and options never returns `recommendation`.
-// - Custom domains are out of scope: suffixes are built from ALIAS_DOMAINS
-//   only (is_custom always false).
+// - Custom-domain SUFFIXES are out of scope: /v5/alias/options builds
+//   suffixes from ALIAS_DOMAINS only (is_custom always false). A verified
+//   custom domain can still be the user's default_alias_domain, which
+//   /alias/random/new honors.
 // - Multi-window rate limits (SimpleLogin ALIAS_LIMIT "100/day;50/hour;
 //   5/minute") collapse to the tightest window, 5/minute.
 
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { isPremium } from "../billing/premium";
 import { MAX_ALIAS_FREE_PLAN } from "../config";
 import { db } from "../db";
-import { type Alias, aliases, mailboxes, users } from "../db/schema";
-import { ALIAS_DOMAINS, SUFFIX_MAX_AGE_SECONDS, SUFFIX_SIGNING_SECRET } from "./aliasConfig";
+import {
+  type Alias,
+  aliases,
+  aliasUsedOn,
+  customDomains,
+  mailboxes,
+  type User,
+  users,
+} from "../db/schema";
+import {
+  ALIAS_DOMAINS,
+  FIRST_ALIAS_DOMAIN,
+  SUFFIX_MAX_AGE_SECONDS,
+  SUFFIX_SIGNING_SECRET,
+} from "./aliasConfig";
+import { insertExtraAliasMailboxes } from "./aliasMailboxes";
 import { aliasToDict, emailAvailable, loadAliasInfos } from "./aliasInfo";
 import {
   checkAliasPrefix,
@@ -54,7 +72,11 @@ const AliasOptionsResponse = z
     recommendation: z
       .object({ alias: z.string(), hostname: z.string() })
       .optional()
-      .meta({ description: "Never returned yet (alias_used_on tracking not implemented)" }),
+      .meta({
+        description:
+          "Present when ?hostname= is given and the user already created an alias " +
+          "for that hostname (latest one wins).",
+      }),
   })
   .meta({ id: "AliasOptionsResponse" });
 
@@ -108,6 +130,46 @@ function isUniqueViolation(err: unknown): boolean {
   return code === "23505" || message.includes("duplicate key");
 }
 
+/** Find-or-create the (alias, hostname) pair (SimpleLogin AliasUsedOn). */
+async function recordAliasUsedOn(aliasId: number, userId: number, hostname: string | undefined) {
+  if (!hostname) return;
+  await db.insert(aliasUsedOn).values({ aliasId, userId, hostname }).onConflictDoNothing();
+}
+
+/**
+ * The random suffix for custom-alias creation, honoring the user's
+ * random_alias_suffix setting (SimpleLogin `User.get_random_alias_suffix`):
+ * `word` -> one dictionary word + 3 digits, `random_string` -> 5 random
+ * alphanumerics.
+ */
+function randomAliasSuffixFor(user: User): string {
+  return user.randomAliasSuffix === "word" ? randomWords(1, 3) : randomString(5, true);
+}
+
+/**
+ * The domain for a random alias, honoring default_alias_domain when it is
+ * still usable: one of ALIAS_DOMAINS, or one of the user's verified custom
+ * domains. Falls back to FIRST_ALIAS_DOMAIN.
+ */
+export async function randomAliasDomainFor(
+  user: User,
+): Promise<{ domain: string; customDomainId: number | null }> {
+  const preferred = user.defaultAliasDomain;
+  if (preferred && preferred !== FIRST_ALIAS_DOMAIN) {
+    if (ALIAS_DOMAINS.includes(preferred)) return { domain: preferred, customDomainId: null };
+    const rows = await db
+      .select()
+      .from(customDomains)
+      .where(eq(customDomains.domain, preferred))
+      .limit(1);
+    const cd = rows[0];
+    if (cd && cd.userId === user.id && cd.verified) {
+      return { domain: preferred, customDomainId: cd.id };
+    }
+  }
+  return { domain: FIRST_ALIAS_DOMAIN, customDomainId: null };
+}
+
 export async function withAliasNewRoutes(authed: FastifyInstance) {
   const a = authed.withTypeProvider<FastifyZodOpenApiTypeProvider>();
 
@@ -124,8 +186,15 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       response: { 200: AliasOptionsResponse, 401: ErrorResponse },
     },
     handler: async (req) => {
-      const suffixes = ALIAS_DOMAINS.map((domain) => {
-        const suffix = `.${randomString(5, true)}@${domain}`;
+      const user = req.user;
+      const hostname = req.query.hostname;
+
+      // The user's default domain sorts first (SimpleLogin get_alias_suffixes).
+      const domains = [...ALIAS_DOMAINS].sort((a, b) =>
+        a === user.defaultAliasDomain ? -1 : b === user.defaultAliasDomain ? 1 : 0,
+      );
+      const suffixes = domains.map((domain) => {
+        const suffix = `.${randomAliasSuffixFor(user)}@${domain}`;
         return {
           suffix,
           signed_suffix: signSuffix(suffix, SUFFIX_SIGNING_SECRET),
@@ -133,12 +202,26 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
           is_premium: false,
         };
       });
+
+      // The latest alias already created for this hostname (AliasUsedOn).
+      let recommendation: { alias: string; hostname: string } | undefined;
+      if (hostname) {
+        const rows = await db
+          .select({ email: aliases.email })
+          .from(aliasUsedOn)
+          .innerJoin(aliases, eq(aliasUsedOn.aliasId, aliases.id))
+          .where(and(eq(aliases.userId, user.id), eq(aliasUsedOn.hostname, hostname)))
+          .orderBy(desc(aliasUsedOn.createdAt), desc(aliasUsedOn.id))
+          .limit(1);
+        const hit = rows[0];
+        if (hit) recommendation = { alias: hit.email, hostname };
+      }
+
       return {
-        can_create: await canCreateNewAlias(req.user),
-        prefix_suggestion: req.query.hostname
-          ? prefixSuggestionFromHostname(req.query.hostname)
-          : "",
+        can_create: await canCreateNewAlias(user),
+        prefix_suggestion: hostname ? prefixSuggestionFromHostname(hostname) : "",
         suffixes,
+        ...(recommendation ? { recommendation } : {}),
       };
     },
   });
@@ -150,7 +233,9 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
     schema: {
       description:
         "Create a new custom alias from a prefix and a signed suffix obtained from " +
-        "GET /v5/alias/options. ?hostname= is accepted but not recorded yet.",
+        "GET /v5/alias/options. The first mailbox_ids entry becomes the primary " +
+        "mailbox; the rest become extra delivery mailboxes. ?hostname= is recorded " +
+        "and drives the options `recommendation`.",
       tags: ["Alias"],
       security: [{ apiKeyAuth: [] }],
       querystring: HostnameQuery,
@@ -179,7 +264,9 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         throw new HttpError(400, "alias prefix invalid format or too long");
       }
 
-      const mailboxIds = req.body.mailbox_ids;
+      // Request order is preserved: the first id becomes the primary mailbox
+      // (SimpleLogin new_custom_alias_v3), duplicates collapse.
+      const mailboxIds = [...new Set(req.body.mailbox_ids)];
       if (mailboxIds.length === 0) {
         throw new HttpError(400, "At least one mailbox must be selected");
       }
@@ -224,19 +311,23 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
 
       let created: Alias | undefined;
       try {
-        const inserted = await db
-          .insert(aliases)
-          .values({
-            userId: user.id,
-            email: fullAlias,
-            note,
-            name,
-            // Single-mailbox aliases: extra mailbox_ids entries are validated
-            // but only the first is stored (documented deviation).
-            mailboxId: mailboxIds[0]!,
-          })
-          .returning();
-        created = inserted[0];
+        created = await db.transaction(async (tx) => {
+          const inserted = await tx
+            .insert(aliases)
+            .values({
+              userId: user.id,
+              email: fullAlias,
+              note,
+              name,
+              // First mailbox is the primary; the rest go to alias_mailboxes.
+              mailboxId: mailboxIds[0]!,
+            })
+            .returning();
+          const alias = inserted[0];
+          if (!alias) throw new Error("alias insert returned no row");
+          await insertExtraAliasMailboxes(tx, alias.id, mailboxIds.slice(1));
+          return alias;
+        });
       } catch (err) {
         if (isUniqueViolation(err)) {
           throw new HttpError(409, `alias ${fullAlias} already exists`);
@@ -244,6 +335,8 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         throw err;
       }
       if (!created) throw new Error("alias insert returned no row");
+
+      await recordAliasUsedOn(created.id, user.id, req.query.hostname);
 
       reply.status(201);
       return serializeCreated(created);
@@ -256,8 +349,9 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
     config: { rateLimit: ALIAS_CREATION_RATE_LIMIT },
     schema: {
       description:
-        "Create a new random alias. ?mode=uuid|word overrides the user's alias generator " +
-        "setting (default: word).",
+        "Create a new random alias on the user's default alias domain. ?mode=uuid|word " +
+        "overrides the user's alias_generator setting. ?hostname= is recorded and " +
+        "drives the options `recommendation`.",
       tags: ["Alias"],
       security: [{ apiKeyAuth: [] }],
       querystring: z.object({
@@ -282,11 +376,10 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       if (mode !== undefined && mode !== "uuid" && mode !== "word") {
         throw new HttpError(400, `${mode} must be either word or uuid`);
       }
-      // No per-user alias_generator column yet: default is word (matches the
-      // GET /setting default we return).
-      const scheme: "uuid" | "word" = mode ?? "word";
+      // ?mode= overrides the user's alias_generator setting (SimpleLogin).
+      const scheme: "uuid" | "word" = mode ?? (user.aliasGenerator === "uuid" ? "uuid" : "word");
       const note = req.body?.note ?? null;
-      const domain = ALIAS_DOMAINS[0]!;
+      const { domain, customDomainId } = await randomAliasDomainFor(user);
 
       // Always set after registration; null only in a half-created account.
       const mailboxId = user.defaultMailboxId;
@@ -300,7 +393,7 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         try {
           const inserted = await db
             .insert(aliases)
-            .values({ userId: user.id, email, note, mailboxId })
+            .values({ userId: user.id, email, note, mailboxId, customDomainId })
             .returning();
           created = inserted[0];
         } catch (err) {
@@ -308,6 +401,8 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         }
       }
       if (!created) throw new Error("Cannot generate alias after many retries");
+
+      await recordAliasUsedOn(created.id, user.id, req.query.hostname);
 
       reply.status(201);
       return serializeCreated(created);

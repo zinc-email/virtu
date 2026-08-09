@@ -2,21 +2,22 @@
 //   GET/POST /v2/aliases          list (paginated, pinned/disabled/enabled
 //                                 filters, POST variant carries {query})
 //   GET      /aliases/:id         serialize_alias_info_v2
-//   PUT/PATCH /aliases/:id        note, name, mailbox_id(s), pinned+disable_pgp
-//                                 (accepted-but-ignored — not in schema v1)
+//   PUT/PATCH /aliases/:id        note, name, mailbox_id(s), pinned
+//                                 (disable_pgp accepted-but-ignored, no PGP)
 //   DELETE   /aliases/:id         tombstone + delete
 //   POST     /aliases/:id/toggle  flip enabled
 //   GET      /aliases/:id/activities  from email_logs
 //
 // Error strings and status codes verbatim from the Python views.
 
-import { and, desc, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { db } from "../db";
 import { aliases, contacts, deletedAliases, emailLogs, mailboxes } from "../db/schema";
 import { PAGE_LIMIT } from "./aliasConfig";
+import { replaceAliasMailboxes, validateMailboxIdsForUpdate } from "./aliasMailboxes";
 import { aliasToDict, emailLogAction, loadAliasInfo, loadAliasInfos } from "./aliasInfo";
 import { timestampOf, websiteSendTo } from "./aliasText";
 import { HttpError } from "./httpError";
@@ -78,10 +79,8 @@ type ListFilters = {
 };
 
 async function listAliases(userId: number, { pageId, filter, query }: ListFilters) {
-  // Pinning is not in schema v1: the pinned filter matches nothing.
-  if (filter === "pinned") return { aliases: [] };
-
   const conds: SQL[] = [eq(aliases.userId, userId)];
+  if (filter === "pinned") conds.push(eq(aliases.pinned, true));
   if (filter === "disabled") conds.push(eq(aliases.enabled, false));
   if (filter === "enabled") conds.push(eq(aliases.enabled, true));
   if (query) {
@@ -94,11 +93,20 @@ async function listAliases(userId: number, { pageId, filter, query }: ListFilter
     if (searchCond) conds.push(searchCond);
   }
 
+  // SimpleLogin's default sort (construct_alias_query): pinned first, then
+  // latest activity — the created_at of the alias's latest email log (by log
+  // id), falling back to the alias's own created_at. Trailing id keeps
+  // pagination stable across ties.
+  const latestLogCreatedAt = sql`(select el.created_at from email_logs el where el.alias_id = ${aliases.id} order by el.id desc limit 1)`;
   const rows = await db
     .select()
     .from(aliases)
     .where(and(...conds))
-    .orderBy(desc(aliases.createdAt), desc(aliases.id))
+    .orderBy(
+      desc(aliases.pinned),
+      sql`greatest(${aliases.createdAt}, ${latestLogCreatedAt}) desc`,
+      desc(aliases.id),
+    )
     .limit(PAGE_LIMIT)
     .offset(pageId * PAGE_LIMIT);
 
@@ -174,9 +182,9 @@ export async function withAliasRoutes(authed: FastifyInstance) {
     url: "/aliases/:alias_id",
     schema: {
       description:
-        "Update alias fields. `disable_pgp` and `pinned` are accepted but ignored " +
-        "(PGP and pinning are not implemented yet). `mailbox_ids` keeps only the first " +
-        "id (single-mailbox aliases for now).",
+        "Update alias fields. `mailbox_ids` replaces the alias's mailbox set (all ids " +
+        "must be your verified mailboxes; the lowest id becomes the primary). " +
+        "`disable_pgp` is accepted but ignored (PGP is not implemented).",
       tags: ["Alias"],
       security: [{ apiKeyAuth: [] }],
       params: AliasIdParams,
@@ -201,6 +209,32 @@ export async function withAliasRoutes(authed: FastifyInstance) {
 
       if ("note" in body) updates.note = body.note ?? null;
 
+      // mailbox_id: change the primary only, extras untouched (SimpleLogin's
+      // separate branch, error string verbatim).
+      if (body.mailbox_id !== undefined) {
+        const owned = await db
+          .select()
+          .from(mailboxes)
+          .where(eq(mailboxes.id, body.mailbox_id))
+          .limit(1);
+        const mb = owned[0];
+        if (!mb || mb.userId !== req.user.id || !mb.verified) {
+          throw new HttpError(400, "Forbidden");
+        }
+        updates.mailboxId = mb.id;
+      }
+
+      // mailbox_ids: replace the whole set (SimpleLogin
+      // set_mailboxes_for_alias — lowest id becomes the primary).
+      if (body.mailbox_ids !== undefined) {
+        const validated = await validateMailboxIdsForUpdate(req.user.id, body.mailbox_ids);
+        await replaceAliasMailboxes(
+          alias.id,
+          validated.map((m) => m.id),
+        );
+        delete updates.mailboxId;
+      }
+
       if ("name" in body) {
         const newName = body.name ?? null;
         if (newName && newName.length > 128) {
@@ -209,30 +243,9 @@ export async function withAliasRoutes(authed: FastifyInstance) {
         updates.name = newName ? newName.replace(/\n/g, "") : newName;
       }
 
-      // mailbox_id / mailbox_ids: must be the user's own verified mailbox.
-      const requestedMailboxIds =
-        body.mailbox_ids !== undefined
-          ? body.mailbox_ids
-          : body.mailbox_id !== undefined
-            ? [body.mailbox_id]
-            : null;
-      if (requestedMailboxIds !== null) {
-        if (requestedMailboxIds.length === 0) {
-          throw new HttpError(400, "Must include at least one mailbox");
-        }
-        const owned = await db
-          .select()
-          .from(mailboxes)
-          .where(inArray(mailboxes.id, requestedMailboxIds));
-        const allValid =
-          owned.length === requestedMailboxIds.length &&
-          owned.every((m) => m.userId === req.user.id && m.verified);
-        if (!allValid) throw new HttpError(400, "Forbidden");
-        // Single-mailbox aliases: keep the first (documented deviation).
-        updates.mailboxId = requestedMailboxIds[0];
-      }
+      if (body.pinned !== undefined) updates.pinned = body.pinned;
 
-      // disable_pgp / pinned: accepted for compatibility, ignored (no columns).
+      // disable_pgp: accepted for compatibility, ignored (no PGP).
 
       if (Object.keys(updates).length > 0) {
         await db.update(aliases).set(updates).where(eq(aliases.id, alias.id));

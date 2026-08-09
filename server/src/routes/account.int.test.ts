@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { db } from "../db";
-import { emailLogs, users } from "../db/schema";
+import { customDomains, emailLogs, users } from "../db/schema";
 import { createAlias, PASSWORD, registerAndLogin } from "./intHarness";
 
 let app: App;
@@ -88,6 +88,92 @@ describe("GET+PATCH /api/setting", () => {
     expect(after.json<{ notification: boolean }>().notification).toBe(false);
   });
 
+  test("persists every setting column and round-trips through GET", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: {
+        alias_generator: "uuid",
+        sender_format: "NAME_ONLY",
+        random_alias_suffix: "word",
+        notification: false,
+      },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json<Record<string, unknown>>()).toEqual({
+      alias_generator: "uuid",
+      notification: false,
+      random_alias_default_domain: "virtu.email",
+      sender_format: "NAME_ONLY",
+      random_alias_suffix: "word",
+    });
+
+    const get = await app.inject({ method: "GET", url: "/api/setting", headers: auth(apiKey) });
+    expect(get.json<Record<string, unknown>>()).toEqual({
+      alias_generator: "uuid",
+      notification: false,
+      random_alias_default_domain: "virtu.email",
+      sender_format: "NAME_ONLY",
+      random_alias_suffix: "word",
+    });
+  });
+
+  test("random_alias_default_domain accepts only usable domains", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
+
+    // Built-in alias domain: fine.
+    const builtin = await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: { random_alias_default_domain: "virtu.email" },
+    });
+    expect(builtin.statusCode).toBe(200);
+
+    // Unverified custom domain: rejected.
+    const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(customDomains).values({ userId: userRow.id, domain: unverified });
+    const rejected = await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: { random_alias_default_domain: unverified },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json<{ error: string }>()).toEqual({ error: "invalid domain" });
+
+    // Someone else's verified custom domain: rejected.
+    const other = await registerAndLogin(app);
+    const otherRow = (await db.select().from(users).where(eq(users.email, other.email)))[0]!;
+    const foreign = `f${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(customDomains).values({ userId: otherRow.id, domain: foreign, verified: true });
+    const stolen = await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: { random_alias_default_domain: foreign },
+    });
+    expect(stolen.statusCode).toBe(400);
+    expect(stolen.json<{ error: string }>()).toEqual({ error: "invalid domain" });
+
+    // The user's own verified custom domain: accepted and round-trips.
+    const mine = `m${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(customDomains).values({ userId: userRow.id, domain: mine, verified: true });
+    const accepted = await app.inject({
+      method: "PATCH",
+      url: "/api/setting",
+      headers: auth(apiKey),
+      payload: { random_alias_default_domain: mine },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(
+      accepted.json<{ random_alias_default_domain: string }>().random_alias_default_domain,
+    ).toBe(mine);
+  });
+
   test("validates enum fields with SimpleLogin's error strings", async () => {
     const { apiKey } = await registerAndLogin(app);
     const cases: [Record<string, unknown>, string][] = [
@@ -119,6 +205,27 @@ describe("GET /api/v2/setting/domains", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json<unknown[]>()).toEqual([{ domain: "virtu.email", is_custom: false }]);
+  });
+
+  test("includes the user's verified custom domains", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
+    const verified = `v${crypto.randomUUID().slice(0, 8)}.example.com`;
+    const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(customDomains).values([
+      { userId: userRow.id, domain: verified, verified: true },
+      { userId: userRow.id, domain: unverified },
+    ]);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v2/setting/domains",
+      headers: auth(apiKey),
+    });
+    expect(res.json<{ domain: string; is_custom: boolean }[]>()).toEqual([
+      { domain: "virtu.email", is_custom: false },
+      { domain: verified, is_custom: true },
+    ]);
   });
 });
 

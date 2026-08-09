@@ -17,6 +17,7 @@ import { z } from "zod";
 import { db } from "../db";
 import { aliases, deletedAliases, mailboxes, users } from "../db/schema";
 import { ALIAS_DOMAINS } from "./aliasConfig";
+import { transferAliasMailboxJoins } from "./aliasMailboxes";
 import { timestampOf } from "./aliasText";
 import { normalizeEmail } from "./auth";
 import { HttpError } from "./httpError";
@@ -240,6 +241,8 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
             .update(aliases)
             .set({ mailboxId: transferId })
             .where(eq(aliases.mailboxId, mb.id));
+          // Extra-mailbox (alias_mailboxes) rows follow the transfer too.
+          await transferAliasMailboxJoins(tx, mb.id, transferId);
         } else {
           const doomed = await tx
             .select({ id: aliases.id, email: aliases.email })

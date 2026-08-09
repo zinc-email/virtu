@@ -7,7 +7,7 @@ import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { db } from "../db";
 import { aliases, contacts, customDomains, emailLogs, users } from "../db/schema";
-import { createAlias, registerAndLogin } from "./intHarness";
+import { createAlias, latestEmailedCode, registerAndLogin } from "./intHarness";
 
 let app: App;
 
@@ -58,14 +58,25 @@ async function createAliasVia(
 
 /** Create an extra (verified) mailbox through the API; returns its id. */
 async function addMailbox(apiKey: string): Promise<number> {
+  // Mailboxes are born unverified and must be code-verified before they can
+  // carry aliases (mailbox_ids validates owned + verified).
+  const email = `mb-${crypto.randomUUID()}@ext.test`;
   const res = await app.inject({
     method: "POST",
     url: "/api/mailboxes",
     headers: auth(apiKey),
-    payload: { email: `mb-${crypto.randomUUID()}@ext.test` },
+    payload: { email },
   });
   if (res.statusCode !== 201) throw new Error(`create mailbox failed: ${res.body}`);
-  return res.json<{ id: number }>().id;
+  const id = res.json<{ id: number }>().id;
+  const verify = await app.inject({
+    method: "POST",
+    url: `/api/mailboxes/${id}/verify`,
+    headers: auth(apiKey),
+    payload: { code: await latestEmailedCode(email) },
+  });
+  if (verify.statusCode !== 200) throw new Error(`verify mailbox failed: ${verify.body}`);
+  return id;
 }
 
 const defaultMailboxId = async (apiKey: string): Promise<number> => {

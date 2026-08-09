@@ -95,7 +95,11 @@ export async function createAlias(
     url: "/api/v2/mailboxes",
     headers: { authentication: apiKey },
   });
-  const mailboxId = mailboxesRes.json<{ mailboxes: { id: number }[] }>().mailboxes[0]?.id;
+  // Pick the DEFAULT mailbox deterministically — list order varies with
+  // randomized emails, and tests assert which mailbox the alias landed on.
+  const mailboxRows = mailboxesRes.json<{ mailboxes: { id: number; default: boolean }[] }>()
+    .mailboxes;
+  const mailboxId = (mailboxRows.find((m) => m.default) ?? mailboxRows[0])?.id;
   if (mailboxId === undefined) throw new Error("no mailbox");
 
   const created = await app.inject({

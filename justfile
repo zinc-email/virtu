@@ -69,6 +69,11 @@ test-unit *args="":
 test-int *args="":
   bin/test-int {{args}}
 
+# Client DOM tests (*.dom.test.tsx): real React pages driving the running
+# stack over HTTP. Requires `just up` + `just db push` first. See bin/test-client.
+test-client *args="":
+  bin/test-client {{args}}
+
 # Start the simulated internet (fake DNS, peer MTAs, test-runner).
 # Fully isolated from the dev stack; no published host ports.
 test-net-up:

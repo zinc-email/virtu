@@ -13,6 +13,7 @@ import { getApiKey } from "src/auth";
 import { AliasesPage } from "src/pages/Aliases";
 import { BillingPage } from "src/pages/Billing";
 import { LoginPage } from "src/pages/Login";
+import { RegisterPage } from "src/pages/Register";
 import { SettingsPage } from "src/pages/Settings";
 
 function Shell() {
@@ -58,8 +59,20 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
+const registerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/register",
+  component: RegisterPage,
+});
+
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, billingRoute, settingsRoute, loginRoute]),
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    billingRoute,
+    settingsRoute,
+    loginRoute,
+    registerRoute,
+  ]),
 });
 
 declare module "@tanstack/react-router" {

@@ -1,8 +1,18 @@
 // Login page: calls the real POST /api/auth/login through the generated SDK
 // and stores the returned api_key (SimpleLogin flow).
 
-import { Alert, Button, Paper, PasswordInput, Stack, Text, TextInput, Title } from "@mantine/core";
-import { useNavigate } from "@tanstack/react-router";
+import {
+  Alert,
+  Anchor,
+  Button,
+  Paper,
+  PasswordInput,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from "@mantine/core";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { apiErrorMessage } from "src/api/errors";
 import { setApiKey } from "src/auth";
@@ -57,6 +67,12 @@ export function LoginPage() {
             <Button type="submit" loading={login.isPending} color="brand.5" c="dark.8">
               Log in
             </Button>
+            <Text size="sm" c="dimmed" ta="center">
+              No account yet?{" "}
+              <Anchor component={Link} to="/register" c="brand.5">
+                Create one
+              </Anchor>
+            </Text>
           </Stack>
         </form>
       </Paper>

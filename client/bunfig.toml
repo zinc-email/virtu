@@ -1,0 +1,5 @@
+# Client test config. DOM component tests (*.dom.test.tsx) run under bun test
+# against a happy-dom document; preloads install the DOM (happydom.ts, first)
+# and register React Testing Library cleanup (setup.ts).
+[test]
+preload = ["./test/happydom.ts", "./test/setup.ts"]

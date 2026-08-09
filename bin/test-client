@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# test-client — run the client DOM tier (*.dom.test.tsx): real React pages
+# rendered in happy-dom, driving the RUNNING stack over real HTTP (no mocked
+# transport). A docker tier like test-int — NOT part of `just check`/CI.
+#
+# Prerequisites:
+#   just up        # start the compose stack (api on :3000, db on :5432)
+#   just db push   # apply the Drizzle schema
+#
+# Parallel-safe by construction (like the int tier: unique randomized data per
+# test). The emailed activation code is fetched over a process boundary
+# (client/test/tooling.ts -> bin/login-code), never a client DB reach-in.
+#
+# Args forward to `bun test` verbatim:
+#   bin/test-client                    # whole DOM tier
+#   bin/test-client Register.dom.test  # one file
+
+cd "$(dirname "$0")/../client"
+
+exec bun test dom.test "$@"

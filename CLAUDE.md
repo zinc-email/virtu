@@ -47,6 +47,14 @@ homepage (`www/`).
   ESLint**. Pre-commit runs biome on staged files — install once per machine
   with `bunx lefthook install`. Worktrees need the root `bun install` or the
   hook silently no-ops.
+- **Avoid `as` casts — type it properly instead.** A cast is an unchecked
+  claim; it's exactly where drift sneaks back past the type-safety spine. Fix
+  the types (generics, narrowing, discriminated unions, the generated SDK
+  types) rather than assert over them. Reach for `as` only when the language
+  genuinely leaves no alternative, and in tests only where a library's types
+  force it (e.g. stubbing a DOM global) — and justify each one with a nearby
+  comment. **Never** silence an error with `as any` / `as unknown as T` that
+  correct typing would resolve.
 
 ## Test tiers (by filename suffix)
 
@@ -59,9 +67,19 @@ homepage (`www/`).
   `just test-story`; `just test-net-logs` to watch the mail pipeline,
   `just test-net-down` to tear down. Messages are located by an
   `X-Virtu-Test-Id` header in Maildir — no resets, run in any order.
+- `*.dom.test.tsx` (client) — real React pages rendered in happy-dom, driving
+  the **running stack over real HTTP** (transport is *not* mocked; happy-dom's
+  document origin is the API). `just up && just db push`, then
+  `just test-client`. Parallel-safe by unique-data-per-test, like the int tier.
+  When a test needs something only the server can produce (the emailed
+  activation code today; DNS zone edits for custom domains later) it invokes a
+  `bin/` tool over a **process boundary** via `client/test/tooling.ts` — never a
+  client→server code import or a client DB reach-in. Harness:
+  `client/test/{happydom,setup,render,tooling}.ts` + `client/bunfig.toml`.
 
 `just check` = format + both typechecks (regenerates the SDK) + unit tests;
-green here means CI passes.
+green here means CI passes. The int/story/dom tiers need docker and run
+separately (like `just test-int`), so they're **not** in `just check` or CI.
 
 ## Code-gen pipeline (one direction) — the type-safety spine
 

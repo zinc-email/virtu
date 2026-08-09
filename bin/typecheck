@@ -5,22 +5,24 @@
 # and `just check`.
 #
 # The client typecheck descends into the generated SDK (client/src/gen), a
-# gitignored build artifact regenerated here when absent so a fresh clone /
-# CI runner typechecks the same code that ships. The generator reads the
-# committed server/spec/openapi.json — no network, no running server.
+# gitignored build artifact regenerated here when absent or older than the
+# committed server/spec/openapi.json, so a fresh clone, a CI runner, and a
+# checkout that just merged a spec-changing branch all typecheck the same
+# code that ships. The generator reads the committed spec — no network, no
+# running server.
 #
 # Assumes workspace deps are installed (bun install in server/ and client/).
-# If you changed routes or schemas, run `bin/gen` first — the "regenerate
-# only when missing" check below intentionally doesn't refresh stale output.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# 1. client SDK (src/gen from the committed openapi spec).
-if [ ! -d client/src/gen ]; then
+# 1. client SDK (src/gen from the committed openapi spec). Regenerate when
+# missing or stale (spec newer than the last generation stamp).
+if [ ! -d client/src/gen ] || [ server/spec/openapi.json -nt client/src/gen ]; then
   echo "typecheck: generating client SDK" >&2
   (cd client && ./node_modules/.bin/kubb generate)
+  touch client/src/gen
 fi
 
 # 2. typecheck each workspace.

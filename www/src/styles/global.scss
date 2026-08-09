@@ -1,0 +1,907 @@
+// ---------------------------------------------------------------------------
+// virtu-www global stylesheet
+//
+// Faithful port of the legacy virtu PHP app styles:
+//   tmp/virtu/server/src/styles/{reset,fonts,variables,mixins,main,header}.scss
+//   tmp/virtu/server/src/views/hello/{hello,how,why,pricing,cta}.scss
+//   tmp/virtu/server/src/components/checkbox/checkbox.scss
+//
+// Legacy sass ratio math ($P8 * $P5 * ...) is precomputed to decimals; legacy
+// lighten()/fade-out()/transparentize() calls are expressed with the modern
+// sass:color module. Values are unchanged.
+// ---------------------------------------------------------------------------
+
+@use "sass:color";
+
+// ---------------------------------------------------------------------------
+// Tokens (legacy variables.scss)
+// ---------------------------------------------------------------------------
+
+$c1: #2e4a77; // dkblue
+$c2: #12a0aa; // teal
+$c2b: #0bbac6; // teal bright
+$c3: #f9f9f5; // white
+$c4: #d9c8aa; // tan
+$c5: #fcbc17; // orange (CTA / links)
+$c6: #19191c; // dkgray (page bg)
+$c7: #0f0f11; // vdkgray
+$c8: rgba($c3, 0.5); // ltgray
+
+$f1: "Fira Sans", "Open Sans", "Lucida Grande", "Verdana", sans-serif;
+$f2: "DejaVu Sans Mono", "BitStream Vera Sans Mono", "Monaco", "Courier",
+  monospace;
+
+$s: 18px;
+
+// Musical ratios (precomputed)
+$M2: 1.125; // 9/8
+$M3: 1.25; // 5/4
+$P4: 1.3333333333; // 4/3
+$P5: 1.5; // 3/2
+$P8: 2; // 2/1
+
+$break-xs: 384px;
+$break-sm: 650px;
+$break-lg: 1200px;
+
+// Design tokens as CSS custom properties (for downstream/manual tweaking;
+// the sass vars above remain the source for computed colors).
+:root {
+  --c-dkblue: #{$c1};
+  --c-teal: #{$c2};
+  --c-teal-bright: #{$c2b};
+  --c-white: #{$c3};
+  --c-tan: #{$c4};
+  --c-cta: #{$c5};
+  --c-bg: #{$c6};
+  --c-bg-dark: #{$c7};
+  --f-sans: #{$f1};
+  --f-mono: #{$f2};
+}
+
+// ---------------------------------------------------------------------------
+// Fonts (legacy fonts.scss) — WOFFs vendored from the legacy tree.
+// Fira Sans: SIL Open Font License 1.1. DejaVu Sans Mono: DejaVu/Bitstream
+// Vera license. See public/fonts/LICENSE.txt.
+// ---------------------------------------------------------------------------
+
+@font-face {
+  font-family: "Fira Sans";
+  src: url("/fonts/FiraSans-Regular.woff") format("woff");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fira Sans";
+  font-weight: bold;
+  src: url("/fonts/FiraSans-Bold.woff") format("woff");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  src: url("/fonts/DejaVuSansMono-Regular.woff") format("woff");
+  font-display: swap;
+}
+
+// ---------------------------------------------------------------------------
+// Reset (legacy reset.scss)
+// ---------------------------------------------------------------------------
+
+html, body, div, span, applet, object, iframe, h1, h2, h3, h4, h5, h6, p,
+blockquote, pre, a, abbr, acronym, address, big, cite, code, del, dfn, em,
+img, ins, kbd, q, s, samp, small, strike, strong, sub, sup, tt, var, b, u,
+i, center, dl, dt, dd, ol, ul, li, fieldset, form, label, legend, table,
+caption, tbody, tfoot, thead, tr, th, td, article, aside, canvas, details,
+embed, figure, figcaption, footer, header, hgroup, menu, nav, output, ruby,
+section, summary, time, mark, audio, video {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 100%;
+  font: inherit;
+  vertical-align: baseline;
+}
+
+article, aside, details, figcaption, figure, footer, header, hgroup, menu,
+nav, section {
+  display: block;
+}
+
+body {
+  line-height: 1;
+}
+
+ol, ul {
+  list-style: none;
+}
+
+blockquote, q {
+  quotes: none;
+}
+
+blockquote {
+  &:before, &:after {
+    content: "";
+    content: none;
+  }
+}
+
+q {
+  &:before, &:after {
+    content: "";
+    content: none;
+  }
+}
+
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+// ---------------------------------------------------------------------------
+// Mixins (legacy mixins.scss + mixins/checklist.scss), trimmed to what the
+// marketing pages use.
+// ---------------------------------------------------------------------------
+
+@mixin fontStyles {
+  strong {
+    font-weight: bold;
+  }
+  em {
+    font-style: italic;
+  }
+}
+
+@mixin paragraph {
+  @include fontStyles;
+  margin-bottom: 1rem;
+  font-size: 1rem;
+  line-height: 1.4rem;
+  strong {
+    color: rgba($c3, 0.8);
+  }
+}
+
+@mixin finePrint {
+  line-height: 1.3em;
+  opacity: 0.75;
+  font-size: 0.9rem;
+  color: color.adjust($c1, $lightness: 33%);
+  strong {
+    color: color.adjust($c1, $lightness: 38%);
+  }
+}
+
+@mixin checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  margin-bottom: 2rem;
+  > li {
+    padding-left: 1rem;
+    margin-bottom: 0.666rem;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    text-align: left;
+    virtu-icon {
+      display: inline-block;
+      margin-right: 0.5rem;
+      height: $s * $P4;
+      width: $s * $P4;
+      flex-shrink: 0;
+      svg {
+        height: 100%;
+        width: 100%;
+      }
+      &.icon-check {
+        svg > path {
+          fill: $c2;
+        }
+      }
+      &.icon-x {
+        svg > path {
+          fill: $c5;
+        }
+      }
+    }
+  }
+}
+
+@mixin section {
+  margin-top: 4.21875rem; // 1rem * P8 * P5 * M3 * M2
+  @media (max-width: $break-sm) {
+    padding-top: 1.12rem;
+    padding-left: 1.12rem;
+    padding-right: 1.12rem;
+    margin-top: 0px;
+  }
+  code {
+    display: block;
+    font-family: $f2;
+    padding: 2rem;
+    margin: 2rem 0rem;
+    background-color: rgba($c1, 0.4);
+    white-space: nowrap;
+    overflow-x: auto;
+  }
+  header {
+    margin-bottom: 2.11rem;
+    h1 {
+      @include fontStyles;
+      font-weight: bold;
+      margin-bottom: 2.11rem;
+    }
+  }
+  h2,
+  h3,
+  h4 {
+    font-weight: bold;
+    font-size: 1em;
+    line-height: 1.2em;
+    color: $c3;
+    margin-top: 2.34375rem; // 1rem * M3 * P5 * M3
+    margin-bottom: 1rem;
+  }
+  h2 {
+    font-size: 1.5rem;
+    margin-top: $s * 2.34375; // $s * M3 * P5 * M3
+  }
+  h3 {
+    font-size: 1.3rem;
+  }
+  p {
+    @include paragraph;
+  }
+  hr {
+    border-color: $c1;
+    background-color: $c1;
+  }
+  small {
+    font-size: 0.8em;
+    &.note {
+      opacity: 0.75;
+    }
+  }
+  ul.checklist {
+    @include checklist;
+  }
+}
+
+@mixin section-mini {
+  max-width: 29.5rem;
+  margin-left: auto;
+  margin-right: auto;
+  @media (max-width: $break-sm) {
+    padding: 2rem;
+  }
+  ul,
+  ol {
+    @include paragraph;
+    list-style: disc;
+    margin-left: 2rem;
+    margin-bottom: 2rem;
+  }
+  ul.checklist {
+    @include checklist;
+  }
+}
+
+@mixin article {
+  sub,
+  sup {
+    font-size: 75%;
+    line-height: 0;
+    position: relative;
+    vertical-align: baseline;
+  }
+  sup {
+    top: -0.5em;
+  }
+  sub {
+    bottom: -0.25em;
+  }
+  > footer {
+    @include paragraph;
+    margin-top: 6rem;
+    font-size: 0.8rem;
+    color: rgba($c3, 0.5);
+    ol.refs {
+      list-style: none;
+      font-size: 0.8rem;
+    }
+    a {
+      color: color.adjust($c1, $lightness: 10%);
+      &:hover {
+        color: $c5;
+      }
+    }
+  }
+  ul,
+  ol {
+    @include paragraph;
+    list-style: disc;
+    margin-left: 2rem;
+  }
+  ol {
+    list-style: decimal;
+  }
+}
+
+@mixin form {
+  width: 100%;
+  .actions {
+    margin-top: 2.42rem;
+    margin-left: 0.25rem;
+  }
+  .field {
+    display: block;
+    margin-bottom: 1.618rem;
+  }
+  .note {
+    @include finePrint;
+    margin: 1rem 0.4rem;
+  }
+  .info {
+    color: $c2;
+    margin-bottom: 2rem;
+    strong {
+      color: color.adjust($c2, $lightness: 10%);
+    }
+  }
+  label {
+    display: block;
+    margin-bottom: 0.61rem;
+    color: color.adjust($c1, $lightness: 33%);
+  }
+  input,
+  select,
+  textarea {
+    &::placeholder {
+      color: color.adjust($c1, $lightness: 11%);
+    }
+    display: block;
+    border-radius: 0.25rem;
+    -webkit-appearance: none;
+    font-family: $f1;
+    font-size: 1rem;
+    padding: 1rem 1.1rem;
+    background-color: transparent;
+    color: color.adjust($c1, $lightness: 61%);
+    border: 0.111rem solid $c1;
+    width: 100%;
+    box-sizing: border-box;
+    &:hover {
+      background-color: rgba($c1, 0.25);
+      border-color: color.adjust($c1, $lightness: 10%);
+    }
+    &:focus {
+      background-color: rgba($c1, 0.25);
+      color: color.adjust($c1, $lightness: 75%);
+      outline: 0.111rem solid color.adjust($c1, $lightness: 50%);
+    }
+    &::selection {
+      background-color: $c5;
+    }
+  }
+}
+
+@mixin button {
+  text-align: center;
+  font-family: $f1;
+  font-size: 1rem;
+  background-color: transparent;
+  color: color.adjust($c1, $lightness: 61%);
+  border: 0.111rem solid $c1;
+  padding: 1rem 2rem 0.75rem 2rem;
+  line-height: 1.4rem;
+  border-radius: 0.111rem;
+  cursor: pointer;
+  &:hover {
+    border-color: color.adjust($c1, $lightness: 61%);
+    background-color: $c1;
+  }
+  &.link {
+    color: $c5;
+    border: none;
+    background-color: transparent;
+    font-family: $f2;
+  }
+  &.primary {
+    border-color: color.adjust($c1, $lightness: 10%);
+  }
+  &.submit {
+    border-color: $c2;
+    background-color: $c2;
+    color: $c3;
+    font-weight: bold;
+    &:hover {
+      background-color: color.adjust($c2, $lightness: 10%);
+      color: $c3;
+    }
+    &:active {
+      background-color: $c2;
+    }
+  }
+  &.cta {
+    display: block;
+    border-color: $c5;
+    background-color: transparent;
+    color: $c5;
+    &:hover {
+      color: $c6;
+      background-color: $c5;
+    }
+  }
+}
+
+@mixin featureList {
+  margin-bottom: 2rem;
+  margin-left: 0rem;
+  > .feature {
+    display: flex;
+    padding-bottom: 3rem;
+    padding-top: 3rem;
+    border-bottom: 0.08rem solid rgba($c7, 0.5);
+    &:last-child {
+      border-bottom-color: transparent;
+    }
+    .icon {
+      flex-grow: 0;
+      flex-shrink: 0;
+      margin-top: 1rem;
+      margin-right: 1.8rem;
+      height: 5rem;
+      width: 5rem;
+      svg {
+        height: 100%;
+        width: 100%;
+      }
+    }
+    .detail {
+      h2 {
+        margin-top: 1rem;
+      }
+      ul,
+      ol {
+        @include paragraph;
+        text-align: left;
+      }
+    }
+    @media (max-width: $break-sm) {
+      flex-direction: column;
+      text-align: center;
+      justify-content: center;
+      align-items: center;
+      .icon {
+        margin-right: 0;
+        margin-bottom: 0.5rem;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main (legacy main.scss)
+// ---------------------------------------------------------------------------
+
+$footer-height: 4.8rem;
+
+// Sticky footer
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-size: $s;
+  @media (min-width: $break-lg) {
+    font-size: $s * $P4;
+  }
+}
+
+#app {
+  display: block;
+  min-height: 100%;
+  position: relative;
+}
+
+body {
+  background-color: var(--c-bg);
+  font-family: var(--f-sans);
+  color: rgba($c3, 0.75);
+  margin: 0;
+  padding: 0;
+}
+
+main {
+  display: flex;
+  justify-content: center;
+  position: relative;
+  padding-bottom: $footer-height;
+  > .container {
+    flex: 1 0 100%;
+    max-width: 58rem;
+    // media query needs to be a static pixel number
+    @media (max-width: 58 * $s) {
+      max-width: 100%;
+    }
+  }
+}
+
+a {
+  color: var(--c-cta);
+  text-decoration: none;
+  &:hover,
+  &:active {
+    color: color.adjust($c5, $lightness: 15%);
+  }
+}
+
+h1 {
+  color: var(--c-white);
+  font-size: 1rem * $P8; // Perfect Octave
+  font-weight: normal;
+  letter-spacing: 0.025em;
+  line-height: 1.08em;
+}
+
+article.article {
+  @include article;
+}
+
+form.form,
+div.form {
+  @include form;
+}
+
+section.section {
+  @include section;
+}
+
+section.mini,
+section.error {
+  @include section-mini;
+}
+
+button,
+a.button {
+  @include button;
+}
+
+section.mini ul.featureList,
+ul.featureList {
+  @include featureList;
+}
+
+#app > footer {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0rem 2rem 2rem 2rem;
+  margin-top: 3rem;
+  font-size: 0.8rem;
+  line-height: 0.8rem;
+  > ul {
+    display: flex;
+    flex-flow: row-reverse;
+    width: 100%;
+    > li {
+      display: block;
+      margin-left: 1rem;
+    }
+  }
+  a {
+    font-size: inherit;
+    line-height: inherit;
+    border: none;
+    padding: 0;
+    display: inline;
+    margin: 0;
+    text-decoration: none;
+    color: color.adjust($c1, $lightness: 15%);
+    background-color: transparent;
+    cursor: pointer;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Header / nav (legacy header.scss)
+// ---------------------------------------------------------------------------
+
+#app > header {
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  #brand {
+    display: none;
+  }
+  > nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    > ul {
+      padding: 3rem 3rem 0rem 3rem;
+      display: flex;
+      align-items: center;
+      flex-direction: row;
+      @media (max-width: $break-sm) {
+        padding: 1rem;
+        .meta.virtuals {
+          display: none;
+        }
+        .about {
+          display: none;
+        }
+        svg {
+          height: 4rem;
+          width: 4rem;
+        }
+      }
+      svg {
+        height: 3rem;
+        width: 3rem;
+        path {
+          fill: $c2;
+        }
+      }
+      > li {
+        display: block;
+        margin-right: 2.5rem;
+        @media (max-width: $break-sm) {
+          margin-right: 1.5rem;
+        }
+        a {
+          padding: 0rem 0.4rem 1rem 0.4rem;
+          display: block;
+          color: color.adjust($c1, $lightness: 50%);
+          text-decoration: none;
+          font-size: 0.8em;
+          border-bottom: 0.1rem solid transparent;
+        }
+        &:last-child {
+          margin-right: 0;
+        }
+        &.active a {
+          color: color.adjust($c1, $lightness: 61.8%);
+          border-bottom: 0.1rem solid $c2;
+          font-weight: bold;
+        }
+        &:hover a {
+          color: color.adjust($c1, $lightness: 61.8%);
+          border-bottom: 0.1rem solid $c8;
+        }
+      }
+    }
+    > ul.metaNav {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------------
+
+a.component-extension-link {
+  display: inline;
+}
+
+// Checkbox (legacy components/checkbox/checkbox.scss) — rendered statically.
+virtu-checkbox {
+  font-size: 0.95rem;
+  cursor: pointer;
+  .container {
+    background-color: $c7;
+    border-radius: 1.5em;
+    height: 2em;
+    padding: 0.5em;
+    width: 4em;
+    transition: background-color 0.5s cubic-bezier(0.12, 1.12, 0.57, 0.98);
+    .track {
+      background-color: $c7;
+      border-radius: 1em;
+      height: 2em;
+      position: relative;
+      width: 4em;
+      transition: background-color 0.5s cubic-bezier(0.12, 1.12, 0.57, 0.98);
+      .label {
+        color: $c3;
+        font-size: 0.8em;
+        line-height: 1em;
+        position: absolute;
+        text-transform: uppercase;
+        top: 0.825em;
+        transition: opacity 0.5s cubic-bezier(0.12, 1.12, 0.57, 0.98);
+        &.on {
+          left: 0.75em;
+          text-shadow: 0em 0em 0.1em #fff;
+        }
+        &.off {
+          left: auto;
+          right: 0.5em;
+        }
+      }
+      .slider {
+        background-color: rgba($c3, 0.8);
+        border-radius: 1em;
+        box-shadow: -0.1em 0em 0.3em 0.1em rgba($c1, 0.1);
+        height: 2em;
+        left: 0px;
+        position: absolute;
+        top: 0px;
+        transition: left 0.5s cubic-bezier(0.12, 1.12, 0.57, 0.98);
+        width: 2em;
+      }
+    }
+  }
+
+  .on {
+    opacity: 0;
+  }
+
+  &[checked] {
+    .container {
+      .track {
+        box-shadow: 0px 0px 0.5em 0.1em rgba($c2, 0.4);
+        background-color: $c2;
+        .label {
+          &.on {
+            opacity: 1;
+          }
+          &.off {
+            opacity: 0;
+          }
+        }
+        .slider {
+          left: 2em;
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CTA block (legacy views/hello/cta.scss; class "views/hello/cta" renamed
+// to "hello-cta" for the static site)
+// ---------------------------------------------------------------------------
+
+.hello-cta {
+  &.hasAccount,
+  &.isMinimal {
+    text-align: center;
+  }
+  &.noUser {
+    .field {
+      text-align: center;
+    }
+  }
+  a.button.submit {
+    display: inline-block;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page: hello (legacy views/hello/hello.scss)
+// ---------------------------------------------------------------------------
+
+section#hello {
+  max-width: 29.5rem;
+  margin-right: auto;
+  margin-left: auto;
+  header {
+    margin-bottom: 2.8rem;
+  }
+  p,
+  ul {
+    margin-right: 2em;
+    > li {
+      margin-bottom: 0.25rem;
+    }
+  }
+  p.last {
+    margin-bottom: 2rem;
+  }
+  form {
+    text-align: center;
+    input {
+      display: block;
+      margin-bottom: 1.5rem;
+    }
+  }
+
+  // Too small! Make some adjustments
+  @media (max-width: $break-sm) {
+    padding: 2rem;
+    header,
+    p {
+      text-align: center;
+      margin-right: 0px;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page: how (legacy views/hello/how.scss)
+// ---------------------------------------------------------------------------
+
+section#how {
+  .cta {
+    padding-top: 1rem;
+    .actions {
+      text-align: center;
+    }
+  }
+  .demo {
+    margin-top: 2rem;
+    margin-left: 2rem;
+    color: rgba($c2, 0.6);
+    font-size: 1.1rem;
+    font-family: $f2;
+    line-height: 1.4rem;
+    strong {
+      font-weight: bold;
+      color: $c2;
+    }
+    @media (max-width: $break-sm) {
+      margin-left: 0;
+    }
+    &.turnOff {
+      display: flex;
+      align-items: center;
+      .checkbox {
+        margin-right: 1rem;
+      }
+      @media (max-width: $break-sm) {
+        justify-content: center;
+      }
+    }
+  }
+  .virtual {
+    font-family: $f2;
+    color: $c2;
+    font-size: 1.1rem;
+    .username {
+      font-weight: bold;
+      letter-spacing: 0.04rem;
+    }
+    .at {
+      margin-right: 0.2rem;
+      margin-left: 0.2rem;
+    }
+    .at,
+    .domain {
+      opacity: 0.6;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page: why (legacy views/hello/why.scss)
+// ---------------------------------------------------------------------------
+
+section#features {
+  .cta {
+    padding-top: 1rem;
+    .actions {
+      text-align: center;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page: pricing (legacy views/hello/pricing.scss)
+// ---------------------------------------------------------------------------
+
+section#pricing {
+  .cta {
+    padding-top: 1rem;
+    padding-bottom: 2rem;
+  }
+  ul.featureList {
+    margin-left: 0rem;
+  }
+}

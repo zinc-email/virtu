@@ -36,7 +36,9 @@ describe("POST /api/aliases/:id/contacts", () => {
     expect(body.block_forward).toBe(false);
     expect(body.last_email_sent_date).toBeNull();
     expect(body.last_email_sent_timestamp).toBeNull();
-    expect(body.reverse_alias_address).toMatch(/^[a-z]{20,50}@virtu\.email$/);
+    // Pipeline reverse-alias format: {sanitized}_at_{domain}_{random8}@mailDomain
+    // (shared with the forward pipeline via src/pipeline/contacts.ts).
+    expect(body.reverse_alias_address).toMatch(/^[a-z0-9_-]+_[a-z0-9]{8}@virtu\.email$/);
     expect(body.reverse_alias).toBe(
       `"First Last | first at example.com" <${body.reverse_alias_address}>`,
     );

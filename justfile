@@ -78,10 +78,10 @@ test-net-up:
 test-net-down:
   docker compose -f docker-compose.test.yml down -v
 
-# Story tests, run inside the simulated internet's test-runner container.
-# Requires `just test-net-up` first.
+# Story tests (*.story.test.ts), run inside the simulated internet's
+# test-runner container. Requires `just test-net-up` first.
 test-story *args="":
-  docker compose -f docker-compose.test.yml exec test-runner bun test test/ {{args}}
+  docker compose -f docker-compose.test.yml exec test-runner bun test story.test {{args}}
 
 # Logs from the simulated internet (default: follow the mail service —
 # its pipeline log lines are the fastest story-debug tool).

@@ -80,18 +80,19 @@ function truncate(s: string, max: number): string {
 }
 
 /**
- * Find or create the contact row for (alias, outside address). Concurrency-
- * safe: relies on the two unique constraints — (aliasId, websiteEmail) for
+ * Find or create the contact row for (alias, outside address), reporting
+ * which happened (the API needs `existed` / 200-vs-201). Concurrency-safe:
+ * relies on the two unique constraints — (aliasId, websiteEmail) for
  * find-or-create races, replyEmail for reverse-alias collisions — and
  * retries on violation rather than pre-checking.
  */
-export async function getOrCreateContact(
+export async function findOrCreateContact(
   db: Db,
   scope: ContactScope,
   addr: Address,
   source: ContactSource,
   opts: GetOrCreateContactOptions,
-): Promise<Contact> {
+): Promise<{ contact: Contact; created: boolean }> {
   const websiteEmail = truncate(addr.address.trim().toLowerCase(), MAX_WEBSITE_EMAIL);
   const name = addr.name === undefined ? null : truncate(addr.name.trim(), MAX_NAME) || null;
 
@@ -101,7 +102,7 @@ export async function getOrCreateContact(
       .from(contacts)
       .where(and(eq(contacts.aliasId, scope.aliasId), eq(contacts.websiteEmail, websiteEmail)))
       .limit(1);
-    if (existing[0] !== undefined) return existing[0];
+    if (existing[0] !== undefined) return { contact: existing[0], created: false };
 
     const inserted = await db
       .insert(contacts)
@@ -119,11 +120,22 @@ export async function getOrCreateContact(
       // loops back to the select / a fresh random suffix.
       .onConflictDoNothing()
       .returning();
-    if (inserted[0] !== undefined) return inserted[0];
+    if (inserted[0] !== undefined) return { contact: inserted[0], created: true };
   }
   throw new Error(
-    `getOrCreateContact: could not create contact for ${websiteEmail} (alias ${scope.aliasId})`,
+    `findOrCreateContact: could not create contact for ${websiteEmail} (alias ${scope.aliasId})`,
   );
+}
+
+/** {@link findOrCreateContact} without the created flag (pipeline callers). */
+export async function getOrCreateContact(
+  db: Db,
+  scope: ContactScope,
+  addr: Address,
+  source: ContactSource,
+  opts: GetOrCreateContactOptions,
+): Promise<Contact> {
+  return (await findOrCreateContact(db, scope, addr, source, opts)).contact;
 }
 
 /**

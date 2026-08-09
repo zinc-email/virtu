@@ -6,22 +6,22 @@
 //
 // Sources: app/api/views/alias.py + app/api/serializer.py serialize_contact.
 //
-// DUPLICATION FLAG: generateReplyEmail() reimplements SimpleLogin's
-// generate_reply_email (random 20-50 lowercase chars @ default domain). The
-// mx/forward pipeline (wave 2) must create reverse aliases the same way via
-// rewriteForward's getOrCreateContact callback — consolidate this helper into
-// a shared module (or the pipeline's DB adapter) when that lands.
+// Reverse aliases are minted by the shared pipeline adapter
+// (src/pipeline/contacts.ts) so API-created contacts and forward-pipeline
+// contacts share one format, one uniqueness strategy, and one domain
+// (config.mailDomain).
 
 import { and, desc, eq, inArray, max } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
+import { config } from "../config";
 import { db } from "../db";
 import { type Contact, contacts, emailLogs } from "../db/schema";
 import { parseAddressList } from "../mail";
-import { FIRST_ALIAS_DOMAIN, PAGE_LIMIT } from "./aliasConfig";
-import { emailAvailable } from "./aliasInfo";
-import { formatCreationDate, randomString, timestampOf, websiteSendTo } from "./aliasText";
+import { findOrCreateContact } from "../pipeline/contacts";
+import { PAGE_LIMIT } from "./aliasConfig";
+import { formatCreationDate, timestampOf, websiteSendTo } from "./aliasText";
 import { findOwnedAlias } from "./aliases";
 import { HttpError } from "./httpError";
 import { parsePageId } from "./paging";
@@ -42,16 +42,6 @@ const CreateContactBody = z.object({ contact: z.string() }).meta({
 const BlockForwardResponse = z
   .object({ block_forward: z.boolean() })
   .meta({ id: "BlockForwardResponse" });
-
-/** Mint an unused reverse-alias address (SimpleLogin generate_reply_email). */
-async function generateReplyEmail(): Promise<string> {
-  for (let i = 0; i < 100; i++) {
-    const length = 20 + Math.floor(Math.random() * 31);
-    const candidate = `${randomString(length)}@${FIRST_ALIAS_DOMAIN}`;
-    if (await emailAvailable(candidate)) return candidate;
-  }
-  throw new Error("Cannot generate reply email");
-}
 
 function contactToDict(contact: Contact, lastReplyAt: Date | null, existed: boolean) {
   return {
@@ -179,38 +169,19 @@ export async function withContactRoutes(authed: FastifyInstance) {
         return contactToDict(existing[0], lastReplies.get(existing[0].id) ?? null, true);
       }
 
-      const replyEmail = await generateReplyEmail();
-      let created: Contact | undefined;
-      try {
-        const inserted = await db
-          .insert(contacts)
-          .values({
-            userId: req.user.id,
-            aliasId: alias.id,
-            websiteEmail: address,
-            replyEmail,
-            name,
-          })
-          .returning();
-        created = inserted[0];
-      } catch (err) {
-        // Unique (alias_id, website_email) race: someone else won -> existed.
-        const isUnique =
-          typeof err === "object" &&
-          err !== null &&
-          (("code" in err && err.code === "23505") ||
-            (err instanceof Error && err.message.includes("duplicate key")));
-        if (!isUnique) throw err;
-        const winner = await db
-          .select()
-          .from(contacts)
-          .where(and(eq(contacts.aliasId, alias.id), eq(contacts.websiteEmail, address)))
-          .limit(1);
-        if (!winner[0]) throw err;
+      const { contact: created, created: isNew } = await findOrCreateContact(
+        db,
+        { userId: req.user.id, aliasId: alias.id },
+        { address, name: name ?? undefined },
+        "to",
+        { mailDomain: config.mailDomain, automaticCreated: false },
+      );
+      if (!isNew) {
+        // Lost a find-or-create race after our pre-check -> existed (SL 200).
+        const lastReplies = await lastReplyAtFor([created.id]);
         reply.status(200);
-        return contactToDict(winner[0], null, true);
+        return contactToDict(created, lastReplies.get(created.id) ?? null, true);
       }
-      if (!created) throw new Error("contact insert returned no row");
 
       reply.status(201);
       return contactToDict(created, null, false);

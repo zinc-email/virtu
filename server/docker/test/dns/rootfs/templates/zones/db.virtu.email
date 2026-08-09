@@ -1,0 +1,27 @@
+$ORIGIN virtu.email.
+$TTL 60
+;                    email    serial      refresh  retry  exp   ttl
+@       IN SOA  ns ( root     2026080801  1800     600    3600  900 )
+@       IN NS  ns
+
+; mail/mx1 = 192.168.34.101, the address RESERVED for our mx (wave 2).
+; @/www = 192.168.34.102, reserved for our api/web.
+@       IN MX  10 mail
+a       IN MX  10 mail
+@       IN A   192.168.34.102
+www     IN A   192.168.34.102
+ns      IN A   192.168.43.254
+ns2     IN A   192.168.34.254
+mx1     IN A   192.168.34.101
+mail    IN A   192.168.34.101
+
+; SPF: all mail from virtu.email (and alias subdomain a.virtu.email) is sent
+; by our mx/deliverd at .101. Customer domains include spf1 too (db.user.com).
+@       IN TXT "v=spf1 include:spf1.virtu.email -all"
+a       IN TXT "v=spf1 include:spf1.virtu.email ~all"
+mail    IN TXT "v=spf1 +a -all"
+spf1    IN TXT "v=spf1 ip4:192.168.34.101 -all"
+
+; No static DKIM records here on purpose: our server generates its signing
+; keys (dkim_keys table) and test fixtures publish the public halves via
+; nsupdate — this zone allows dynamic updates (see named.conf).

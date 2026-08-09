@@ -1,0 +1,106 @@
+#!/bin/sh
+
+set -a
+
+[ -z "$MAIL_ORIGIN" ]       && MAIL_ORIGIN="$MAIL_DOMAIN"
+[ -z "$MAIL_HOSTNAME" ]     && MAIL_HOSTNAME="mail.$MAIL_DOMAIN"
+[ -z "$MAIL_DESTINATION" ]  && MAIL_DESTINATION="$MAIL_HOSTNAME"
+[ -z "$MAIL_MILTER_DKIM" ]  && MAIL_MILTER_DKIM=inet:localhost:8891
+[ -z "$MAIL_MILTER_DMARC" ] && MAIL_MILTER_DMARC=inet:localhost:8892
+[ -z "$MAIL_NETWORKS" ]     && MAIL_NETWORKS=192.168.0.0/16,127.0.0.1,localhost
+[ -z "$MAILBOX_UID" ]       && MAILBOX_UID=1000
+[ -z "$MAILBOX_GID" ]       && MAILBOX_GID=1000
+
+[ -z "$DKIM_SELECTOR" ]       && DKIM_SELECTOR=default
+[ -z "$DKIM_KEY_FILE" ]       && DKIM_KEY_FILE=/var/db/dkim/default.private
+[ -z "$DKIM_SOCKET" ]         && DKIM_SOCKET=inet:8891@localhost
+[ -z "$DKIM_DOMAIN" ]         && DKIM_DOMAIN="$MAIL_DOMAIN"
+[ -z "$DKIM_INTERNAL_HOSTS" ] && DKIM_INTERNAL_HOSTS="192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12"
+[ -z "$DKIM_LOG_WHY" ]        && DKIM_LOG_WHY=no
+
+# Per-domain TLS material baked into the image from server/docker/test/mkcert.
+# Domains without a cert (docusign.com, void.com, user.com) gracefully fall
+# back to plaintext SMTP below.
+[ -z "$TLS_CERT_FILE" ] && TLS_CERT_FILE="/etc/mkcert/$MAIL_DOMAIN.pem"
+[ -z "$TLS_KEY_FILE" ]  && TLS_KEY_FILE="/etc/mkcert/$MAIL_DOMAIN-key.pem"
+
+# Make sure TLS stuff exists
+if [ ! -f "$TLS_KEY_FILE" ]; then
+  TLS_KEY_FILE=
+  TLS_CERT_FILE=
+fi
+
+# Easily disable DMARC
+if [ -z "$MAIL_MILTERS" ]; then
+  MAIL_MILTERS="$MAIL_MILTER_DKIM"
+  [ -z "$DMARC_DISABLED" ] && MAIL_MILTERS="$MAIL_MILTERS,$MAIL_MILTER_DMARC"
+fi
+
+set +a
+
+POSTFIX_ENV_VARS='
+  ${MAILBOX_GID}
+  ${MAILBOX_UID}
+  ${MAIL_DESTINATION}
+  ${MAIL_DOMAIN}
+  ${MAIL_HOSTNAME}
+  ${MAIL_MILTERS}
+  ${MAIL_MILTER_DKIM}
+  ${MAIL_MILTER_DMARC}
+  ${MAIL_NETWORKS}
+  ${MAIL_DEBUG_PEER_LIST}
+  ${MAIL_ORIGIN}
+  ${DKIM_DOMAIN}
+  ${DKIM_INTERNAL_HOSTS}
+  ${DKIM_KEY_FILE}
+  ${DKIM_SELECTOR}
+  ${DKIM_SOCKET}
+  ${POSTFIX_INET_INTERFACES}
+  ${TLS_CERT_FILE}
+  ${TLS_KEY_FILE}
+'
+
+POSTFIX_TEMPLATES='main.cf master.cf vmailbox'
+
+for template in $POSTFIX_TEMPLATES; do
+  if [ -f /templates/postfix/"$template" ]; then
+    echo "Creating config from template $template..." >&2
+    envsubst "$POSTFIX_ENV_VARS" \
+      < /templates/postfix/"$template" \
+      > /etc/postfix/"$template"
+  fi
+done
+
+DKIM_TEMPLATES='opendkim.conf'
+
+for template in $DKIM_TEMPLATES; do
+  if [ -f /templates/opendkim/"$template" ]; then
+    echo "Creating config from template $template..." >&2
+    envsubst \
+      < /templates/opendkim/"$template" \
+      > /etc/opendkim/"$template"
+  fi
+done
+
+# COMPAT: this behaves differently on Linux since there is no VM
+echo "Private key permissions..."
+chmod -R og-rwx /var/db/dkim
+
+echo "Compiling lookup tables..."
+cd /etc/postfix
+[ -f vmailbox ] && postmap vmailbox
+[ -f aliases ] && postalias aliases
+
+# Maildir spool: one dir per domain on the shared volume; postfix virtual(8)
+# creates {localpart}/{tmp,new,cur} beneath it on first delivery (as
+# MAILBOX_UID). Only touch our own domain — the volume is shared with the
+# other peers and may be mid-delivery for them.
+echo "Ensuring Maildir spool..."
+mkdir -p /var/mail/"$MAIL_DOMAIN"
+chown -R "$MAILBOX_UID":"$MAILBOX_GID" /var/mail/"$MAIL_DOMAIN"
+
+#echo "Setting permissions..." >&2
+#postfix set-permissions
+
+echo "Checking config..." >&2
+postfix check

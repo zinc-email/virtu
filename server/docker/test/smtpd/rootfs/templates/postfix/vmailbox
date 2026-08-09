@@ -1,0 +1,21 @@
+# Virtual mailboxes for every persona on the simulated internet.
+#
+# The trailing slash is load-bearing: it makes postfix virtual(8) deliver
+# qmail-style Maildir (one file per message in {path}/new/) instead of mbox.
+#
+# This table is shared by every peer instance; virtual_mailbox_domains
+# (= $MAIL_DOMAIN) limits which rows each instance serves.
+lumberg@initech.com initech.com/lumberg/
+milton@initech.com  initech.com/milton/
+peter@initech.com   initech.com/peter/
+alec@qmail.com      qmail.com/alec/
+bart@qmail.com      qmail.com/bart/
+new@qmail.com       qmail.com/new/
+test@qmail.com      qmail.com/test/
+wes@qmail.com       qmail.com/wes/
+spammer@open.relay  open.relay/spammer/
+# void.com is a blackhole: catch-all into a single Maildir sink.
+@void.com           void.com/void/
+dan@virtu.email     virtu.email/dan/
+wes@virtu.email     virtu.email/wes/
+xyz@virtu.email     virtu.email/xyz/

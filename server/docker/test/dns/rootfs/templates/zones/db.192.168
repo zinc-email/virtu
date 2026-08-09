@@ -1,0 +1,14 @@
+$ORIGIN 168.192.in-addr.arpa.
+$TTL 3600
+@ IN SOA ns.virtu.email. root.virtu.email. ( 2026080801 604800 86400 2419200 604800 )
+@ IN NS ns.virtu.email.
+254.43 IN PTR ns.virtu.email.
+254.34 IN PTR ns2.virtu.email.
+7.34 IN PTR mail.qmail.com.
+8.34 IN PTR mail.user.com.
+9.34 IN PTR mail.docusign.com.
+10.34 IN PTR mail.yahoo.com.
+11.34 IN PTR mail.void.com.
+12.34 IN PTR mail.initech.com.
+13.34 IN PTR mail.open.relay.
+101.34 IN PTR mail.virtu.email.

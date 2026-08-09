@@ -1,0 +1,12 @@
+#!/bin/sh
+
+TLS_CA_FILE="${CA_FILE:-/etc/mkcert/rootCA.pem}"
+TLS_CA_DEST=/usr/local/share/ca-certificates/app.crt
+
+if [ -f "$TLS_CA_FILE" ]; then
+  echo "Installing CA file $TLS_CA_FILE to $TLS_CA_DEST"
+  mkdir -p "$(dirname "$TLS_CA_DEST")"
+  cp "$TLS_CA_FILE" "$TLS_CA_DEST"
+  update-ca-certificates
+fi
+

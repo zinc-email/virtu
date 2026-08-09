@@ -1,0 +1,108 @@
+# CLAUDE.md
+
+Orientation for an agent working in this repo. Rules here override defaults.
+
+## What this is
+
+**virtu-ts** — an email alias/proxy service: users mint a unique address per
+sign-up and revoke it when it leaks or gets abused. A Bun + TypeScript rewrite
+of a legacy PHP/postfix stack, with a SimpleLogin-compatible API. Open source
+(AGPL-3.0).
+
+## Read these first, in order
+
+1. **`PLAN.md`** — the design doc: architecture, the mail pipeline, and the
+   settled decisions (numbered; e.g. no milters, in-process mailauth signing,
+   VERP bounce scheme, native mobile shells). When generic advice conflicts
+   with PLAN.md, **PLAN.md wins**.
+2. **`STATE.md`** — the progress ledger: what's built, how it was verified,
+   what's stubbed, what's not started, and the upstream workarounds. Keep it
+   current as you land work.
+
+## Stack
+
+Bun runtime · one `server/` package with several entrypoints (`api`, `mx`,
+`submission`, `deliverd`, and `maild` = all three mail processes in one) ·
+Fastify + `fastify-zod-openapi` · Drizzle over Bun's native postgres
+(`drizzle-orm/bun-sql`, push-based migrations) · `mailauth` for all
+DKIM/ARC/SPF/DMARC (verify and sign, in-process — no milters) · a plain
+`outbound_messages` Postgres table as the delivery queue · React SPA (rsbuild
++ TanStack Router/Query + Mantine) with a Kubb-generated SDK · Astro static
+homepage (`www/`).
+
+## Conventions
+
+- **Naming: concern first, action last** — `db-push`, `format-check`,
+  `test-net-up` (not `push-db`), so related recipes/scripts alpha-sort.
+  Applies to `bin/` scripts (no extension) and justfile recipes alike.
+- **`just` is convenience, not authority.** Recipes are one-liners delegating
+  to `bin/` scripts; anything with a loop/conditional/env munging is a
+  `bin/` script (`#!/usr/bin/env bash`, `set -euo pipefail`, `chmod +x`). If a
+  recipe grows past one line, extract it.
+- **No Bun workspaces.** Each of `server/`, `client/`, `www/` owns its own
+  `package.json` + lockfile; the root holds only biome + lefthook. Run
+  `bun install` per package. Server↔client couple only through the committed
+  `server/spec/openapi.json`, never a code import.
+- **Formatter is Biome** (`just format-write`); **linter is per-package
+  ESLint**. Pre-commit runs biome on staged files — install once per machine
+  with `bunx lefthook install`. Worktrees need the root `bun install` or the
+  hook silently no-ops.
+
+## Test tiers (by filename suffix)
+
+- `*.unit.test.ts` — pure, no DB/network/docker. `just test-unit`.
+- `*.int.test.ts` — Fastify routes via `app.inject()` against the dockerized
+  Postgres. `just up && just db push`, then `just test-int`. Parallel-safe by
+  unique-data-per-test; no truncation.
+- `*.story.test.ts` — end-to-end mail through the **simulated internet**
+  (fake DNS + peer MTAs, `docker-compose.test.yml`). `just test-net-up`, then
+  `just test-story`; `just test-net-logs` to watch the mail pipeline,
+  `just test-net-down` to tear down. Messages are located by an
+  `X-Virtu-Test-Id` header in Maildir — no resets, run in any order.
+
+`just check` = format + both typechecks (regenerates the SDK) + unit tests;
+green here means CI passes.
+
+## Code-gen pipeline (one direction)
+
+Server is the source of truth → OpenAPI spec → client SDK → client UI.
+**Never edit generated code or start downstream with a stale spec.**
+
+1. Change `server/src/db/schema.ts`, `routes/`, or response schemas.
+2. `bin/openapi-gen` writes `server/spec/openapi.json` (**committed artifact**).
+3. `cd client && bun run kubb` regenerates `client/src/gen` (gitignored).
+4. Update the client against the new SDK. `just gen` chains 2–3.
+
+`server/src/db/schema.ts` is the coordination point — changes there ripple
+everywhere, so review them; everything else is additive.
+
+## Local login (dev)
+
+Registration requires an emailed 6-digit code, and the dev stack runs no
+`deliverd`, so codes sit in the queue. Shortcuts:
+
+- `just user-create [email] [password]` — register + activate + login, prints
+  the API key (defaults `wes@qmail.com` / `password1234`). Idempotent.
+- `just login-code <email>` — newest emailed code for an address (also mailbox
+  verification).
+
+## Don't-break list
+
+- **Bun server-side STARTTLS bridge** (`server/src/smtp/server.ts`,
+  `upgradeServerSocket`) — a loopback `tls.Server` workaround for a Bun bug
+  (server `TLSSocket` upgrades don't complete; fixed upstream in PR #34598,
+  unreleased as of 1.3.14). Don't "simplify" it away until a Bun release ships
+  the fix; then swap to native and run `bun test server/src/smtp`.
+- **Bun `node:dns` TXT flattening** (`server/src/pipeline/dnsTxt.ts`) — a
+  wire-format TXT client, because Bun's `node:dns` merges multi-string TXT
+  records and DKIM keys span several strings. Use it for TXT lookups, not
+  `node:dns`.
+- `server/.env` is gitignored (holds Stripe test keys). `server/.env.example`
+  documents every var.
+
+## Where things live
+
+Mail: `server/src/{smtp,mailauth,mail,pipeline,queue}/` + `src/*.ts`
+entrypoints. API + committed spec: `server/src/routes/`, `server/spec/`.
+Simulated internet: `docker-compose.test.yml`, `server/docker/test/`, harness
++ stories in `server/test/`. Client: `client/src/`. Homepage: `www/`.

@@ -5,7 +5,8 @@ when leaked or abused. Bun + TypeScript rewrite of the legacy PHP/postfix
 stack. SimpleLogin-compatible API.
 
 **The design doc is [PLAN.md](./PLAN.md)** — architecture, work breakdown,
-and decisions live there.
+and decisions live there. **[STATE.md](./STATE.md)** tracks how far along the
+build is: what's done, verified, stubbed, and not yet started.
 
 ## Layout
 
@@ -24,12 +25,29 @@ bun install                      # root tooling (biome, lefthook)
 (cd client && bun install)
 bunx lefthook install            # pre-commit format hook (once per machine)
 
+cp server/.env.example server/.env  # optional; every var has a dev default
 just up                          # docker compose: db + api + client
 just db push                     # apply the Drizzle schema
 ```
 
 - API: http://localhost:3000/api (docs spec: `server/spec/openapi.json`)
 - Client: http://localhost:9000/
+
+Config lives in `server/.env` (gitignored); `server/.env.example` documents
+every variable and which ones production must override.
+
+### Logging in
+
+Registration requires an emailed 6-digit code, and the dev stack runs no
+`deliverd`, so codes sit in the outbound queue. Two shortcuts:
+
+```sh
+just user-create                 # register + activate + login wes@qmail.com / password1234
+                                 #   (prints the API key; idempotent; takes [email] [password])
+just login-code <email>          # print the newest emailed code for an address
+```
+
+Then sign in at http://localhost:9000/ with the email + password.
 
 ## Billing (optional, Stripe)
 
@@ -57,3 +75,29 @@ just test-unit   # pure-function tests, no docker
 just test-int    # route tests against the dockerized postgres (just up + just db push first)
 just gen         # regenerate spec + client SDK after changing routes/schema
 ```
+
+### Story tests (the simulated internet)
+
+End-to-end mail tests run against a self-contained fake internet — BIND with
+fake zones, peer MTAs (a pretend Gmail, a DMARC-strict correspondent, an open
+relay), and our own mail service — so SPF/DKIM/DMARC are verified for real, no
+external network. Messages are found by an `X-Virtu-Test-Id` header in
+Maildir, so tests run in any order without resets.
+
+```sh
+(cd server && bun install)       # containers bind-mount server/node_modules
+just test-net-up                 # build + start the fake internet
+just test-story                  # forwards, replies, bounces, DSNs, custom-domain DKIM
+just test-net-logs               # follow the mail pipeline (best debugging view)
+just test-net-down               # tear down
+```
+
+## Homepage
+
+Static Astro site in `www/`: `just www-dev` (dev server) or `just www-build`
+(static output to `www/dist/`).
+
+## License
+
+[AGPL-3.0](./LICENSE). Network use counts as distribution: run a modified
+version as a service and you must offer users its source.

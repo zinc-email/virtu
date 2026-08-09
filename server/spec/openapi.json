@@ -740,7 +740,7 @@
             }
           },
           "recommendation": {
-            "description": "Never returned yet (alias_used_on tracking not implemented)",
+            "description": "Present when ?hostname= is given and the user already created an alias for that hostname (latest one wins).",
             "type": "object",
             "properties": {
               "alias": {
@@ -1750,7 +1750,7 @@
         "tags": [
           "Alias"
         ],
-        "description": "Update alias fields. `disable_pgp` and `pinned` are accepted but ignored (PGP and pinning are not implemented yet). `mailbox_ids` keeps only the first id (single-mailbox aliases for now).",
+        "description": "Update alias fields. `mailbox_ids` replaces the alias's mailbox set (all ids must be your verified mailboxes; the lowest id becomes the primary). `disable_pgp` is accepted but ignored (PGP is not implemented).",
         "requestBody": {
           "required": true,
           "content": {
@@ -1825,7 +1825,7 @@
         "tags": [
           "Alias"
         ],
-        "description": "Update alias fields. `disable_pgp` and `pinned` are accepted but ignored (PGP and pinning are not implemented yet). `mailbox_ids` keeps only the first id (single-mailbox aliases for now).",
+        "description": "Update alias fields. `mailbox_ids` replaces the alias's mailbox set (all ids must be your verified mailboxes; the lowest id becomes the primary). `disable_pgp` is accepted but ignored (PGP is not implemented).",
         "requestBody": {
           "required": true,
           "content": {
@@ -2152,7 +2152,7 @@
         "tags": [
           "Alias"
         ],
-        "description": "Create a new custom alias from a prefix and a signed suffix obtained from GET /v5/alias/options. ?hostname= is accepted but not recorded yet.",
+        "description": "Create a new custom alias from a prefix and a signed suffix obtained from GET /v5/alias/options. The first mailbox_ids entry becomes the primary mailbox; the rest become extra delivery mailboxes. ?hostname= is recorded and drives the options `recommendation`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2246,7 +2246,7 @@
         "tags": [
           "Alias"
         ],
-        "description": "Create a new random alias. ?mode=uuid|word overrides the user's alias generator setting (default: word).",
+        "description": "Create a new random alias on the user's default alias domain. ?mode=uuid|word overrides the user's alias_generator setting. ?hostname= is recorded and drives the options `recommendation`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3020,7 +3020,7 @@
         "tags": [
           "Setting"
         ],
-        "description": "Get user settings (SimpleLogin-shaped; see PATCH for what persists).",
+        "description": "Get user settings.",
         "security": [
           {
             "apiKeyAuth": []
@@ -3053,7 +3053,7 @@
         "tags": [
           "Setting"
         ],
-        "description": "Update user settings. Only `notification` persists today; the other fields are validated (SimpleLogin error strings) but not yet stored.",
+        "description": "Update user settings (SimpleLogin error strings on invalid values). `random_alias_default_domain` must be a usable domain: one of the alias domains or one of your verified custom domains.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3108,7 +3108,7 @@
         "tags": [
           "Setting"
         ],
-        "description": "Domains usable for random aliases.",
+        "description": "Domains usable for random aliases: the built-in alias domains plus the user's verified custom domains.",
         "security": [
           {
             "apiKeyAuth": []

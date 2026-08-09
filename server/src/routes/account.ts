@@ -1,8 +1,9 @@
 // Account/misc endpoints — SimpleLogin-compatible:
 //   GET   /stats               nb_alias/nb_forward/nb_reply/nb_block
-//   GET   /setting             user settings (defaults for unimplemented ones)
-//   PATCH /setting             persists `notification`; validates the rest
-//   GET   /v2/setting/domains  domains usable for random aliases
+//   GET   /setting             user settings, read from the users columns
+//   PATCH /setting             validates (SimpleLogin error strings) + persists
+//   GET   /v2/setting/domains  domains usable for random aliases (built-in +
+//                              the user's verified custom domains)
 //   PATCH /sudo                password -> sudo mode on the current api key
 //   POST  /api_key             sudo-gated key creation (440 without sudo)
 //   GET   /logout              revokes the presented api key
@@ -10,9 +11,6 @@
 // Sources: app/api/views/{user_info,setting,sudo}.py + app/api/base.py.
 //
 // Deviations (documented in the lane report):
-// - Settings other than `notification` have no schema columns yet: GET
-//   returns SimpleLogin-shaped defaults; PATCH validates values (SimpleLogin
-//   error strings) but only persists `notification`.
 // - GET /logout revokes the presented API key (SimpleLogin only clears the
 //   web session cookie — we have no cookie sessions, and revoking is the
 //   only meaningful logout for an api-key client).
@@ -23,7 +21,7 @@ import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { generateApiKey, hashApiKey } from "../auth/apiKey";
 import { db } from "../db";
-import { aliases, apiKeys, emailLogs, users } from "../db/schema";
+import { aliases, apiKeys, customDomains, emailLogs, type User, users } from "../db/schema";
 import { ALIAS_DOMAINS, FIRST_ALIAS_DOMAIN, SUDO_MODE_MINUTES_VALID } from "./aliasConfig";
 import { HttpError } from "./httpError";
 import { ErrorResponse, OkResponse } from "./schema";
@@ -76,14 +74,34 @@ const ApiKeyResponse = z.object({ api_key: z.string() }).meta({ id: "ApiKeyRespo
 
 const LogoutResponse = z.object({ msg: z.string() }).meta({ id: "LogoutResponse" });
 
-function settingToDict(user: { notification: boolean }) {
+/**
+ * The user's default random-alias domain, verified still usable: one of
+ * ALIAS_DOMAINS or one of the user's verified custom domains; anything else
+ * (never set, custom domain deleted/unverified since) falls back to
+ * FIRST_ALIAS_DOMAIN — SimpleLogin `User.default_random_alias_domain()`.
+ */
+async function usableDefaultAliasDomain(user: User): Promise<string> {
+  const d = user.defaultAliasDomain;
+  if (!d) return FIRST_ALIAS_DOMAIN;
+  if (ALIAS_DOMAINS.includes(d)) return d;
+  const rows = await db.select().from(customDomains).where(eq(customDomains.domain, d)).limit(1);
+  const cd = rows[0];
+  if (cd && cd.userId === user.id && cd.verified) return d;
+  return FIRST_ALIAS_DOMAIN;
+}
+
+/** SimpleLogin `setting_to_dict` — unexpected stored values degrade to the
+ * SimpleLogin defaults rather than failing serialization. */
+function settingToDict(user: User, defaultDomain: string) {
   return {
-    // Defaults for settings without schema columns yet (see module doc).
-    alias_generator: "word" as const,
+    alias_generator: user.aliasGenerator === "uuid" ? ("uuid" as const) : ("word" as const),
     notification: user.notification,
-    random_alias_default_domain: FIRST_ALIAS_DOMAIN,
-    sender_format: "AT" as const,
-    random_alias_suffix: "random_string" as const,
+    random_alias_default_domain: defaultDomain,
+    sender_format: (SENDER_FORMATS as readonly string[]).includes(user.senderFormat)
+      ? (user.senderFormat as (typeof SENDER_FORMATS)[number])
+      : ("AT" as const),
+    random_alias_suffix:
+      user.randomAliasSuffix === "word" ? ("word" as const) : ("random_string" as const),
   };
 }
 
@@ -133,12 +151,12 @@ export async function withAccountRoutes(authed: FastifyInstance) {
     method: "GET",
     url: "/setting",
     schema: {
-      description: "Get user settings (SimpleLogin-shaped; see PATCH for what persists).",
+      description: "Get user settings.",
       tags: ["Setting"],
       security: [{ apiKeyAuth: [] }],
       response: { 200: SettingDto, 401: ErrorResponse },
     },
-    handler: async (req) => settingToDict(req.user),
+    handler: async (req) => settingToDict(req.user, await usableDefaultAliasDomain(req.user)),
   });
 
   a.route({
@@ -146,8 +164,9 @@ export async function withAccountRoutes(authed: FastifyInstance) {
     url: "/setting",
     schema: {
       description:
-        "Update user settings. Only `notification` persists today; the other fields are " +
-        "validated (SimpleLogin error strings) but not yet stored.",
+        "Update user settings (SimpleLogin error strings on invalid values). " +
+        "`random_alias_default_domain` must be a usable domain: one of the alias " +
+        "domains or one of your verified custom domains.",
       tags: ["Setting"],
       security: [{ apiKeyAuth: [] }],
       body: UpdateSettingBody,
@@ -155,37 +174,58 @@ export async function withAccountRoutes(authed: FastifyInstance) {
     },
     handler: async (req) => {
       const body = req.body;
+      const updates: Partial<typeof users.$inferInsert> = {};
 
-      if (body.alias_generator !== undefined && !["word", "uuid"].includes(body.alias_generator)) {
-        throw new HttpError(400, "Invalid alias_generator");
-      }
-      if (
-        body.sender_format !== undefined &&
-        !SENDER_FORMATS.includes(body.sender_format as (typeof SENDER_FORMATS)[number])
-      ) {
-        throw new HttpError(400, "Invalid sender_format");
-      }
-      if (
-        body.random_alias_suffix !== undefined &&
-        !ALIAS_SUFFIX_SETTINGS.includes(
-          body.random_alias_suffix as (typeof ALIAS_SUFFIX_SETTINGS)[number],
-        )
-      ) {
-        throw new HttpError(400, "Invalid random_alias_suffix");
-      }
-      if (
-        body.random_alias_default_domain !== undefined &&
-        !ALIAS_DOMAINS.includes(body.random_alias_default_domain)
-      ) {
-        throw new HttpError(400, "invalid domain");
+      if (body.notification !== undefined) updates.notification = body.notification;
+
+      if (body.alias_generator !== undefined) {
+        if (!["word", "uuid"].includes(body.alias_generator)) {
+          throw new HttpError(400, "Invalid alias_generator");
+        }
+        updates.aliasGenerator = body.alias_generator;
       }
 
-      let notification = req.user.notification;
-      if (body.notification !== undefined) {
-        notification = body.notification;
-        await db.update(users).set({ notification }).where(eq(users.id, req.user.id));
+      if (body.sender_format !== undefined) {
+        if (!SENDER_FORMATS.includes(body.sender_format as (typeof SENDER_FORMATS)[number])) {
+          throw new HttpError(400, "Invalid sender_format");
+        }
+        updates.senderFormat = body.sender_format;
       }
-      return settingToDict({ notification });
+
+      if (body.random_alias_suffix !== undefined) {
+        if (
+          !ALIAS_SUFFIX_SETTINGS.includes(
+            body.random_alias_suffix as (typeof ALIAS_SUFFIX_SETTINGS)[number],
+          )
+        ) {
+          throw new HttpError(400, "Invalid random_alias_suffix");
+        }
+        updates.randomAliasSuffix = body.random_alias_suffix;
+      }
+
+      if (body.random_alias_default_domain !== undefined) {
+        const domain = body.random_alias_default_domain;
+        if (!ALIAS_DOMAINS.includes(domain)) {
+          // Not a built-in domain: must be one of the user's verified custom
+          // domains (SimpleLogin's "invalid domain").
+          const rows = await db
+            .select()
+            .from(customDomains)
+            .where(eq(customDomains.domain, domain))
+            .limit(1);
+          const cd = rows[0];
+          if (!cd || cd.userId !== req.user.id || !cd.verified) {
+            throw new HttpError(400, "invalid domain");
+          }
+        }
+        updates.defaultAliasDomain = domain;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await db.update(users).set(updates).where(eq(users.id, req.user.id));
+      }
+      const updated: User = { ...req.user, ...updates } as User;
+      return settingToDict(updated, await usableDefaultAliasDomain(updated));
     },
   });
 
@@ -193,12 +233,24 @@ export async function withAccountRoutes(authed: FastifyInstance) {
     method: "GET",
     url: "/v2/setting/domains",
     schema: {
-      description: "Domains usable for random aliases.",
+      description:
+        "Domains usable for random aliases: the built-in alias domains plus the " +
+        "user's verified custom domains.",
       tags: ["Setting"],
       security: [{ apiKeyAuth: [] }],
       response: { 200: z.array(DomainDto), 401: ErrorResponse },
     },
-    handler: async () => ALIAS_DOMAINS.map((domain) => ({ domain, is_custom: false })),
+    handler: async (req) => {
+      const custom = await db
+        .select()
+        .from(customDomains)
+        .where(and(eq(customDomains.userId, req.user.id), eq(customDomains.verified, true)))
+        .orderBy(customDomains.domain);
+      return [
+        ...ALIAS_DOMAINS.map((domain) => ({ domain, is_custom: false })),
+        ...custom.map((cd) => ({ domain: cd.domain, is_custom: true })),
+      ];
+    },
   });
 
   a.route({

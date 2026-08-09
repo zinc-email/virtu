@@ -16,7 +16,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { apiErrorMessage } from "src/api/errors";
 import { clearApiKey } from "src/auth";
@@ -32,10 +32,11 @@ import {
   useGetStats,
   useGetUserInfo,
   useGetV2Aliases,
+  usePatchAliasesAliasId,
   usePostAliasesAliasIdToggle,
 } from "src/gen";
 
-type Filter = "all" | "enabled" | "disabled";
+type Filter = "all" | "pinned" | "enabled" | "disabled";
 
 const PAGE_SIZE = 20;
 
@@ -54,6 +55,7 @@ export function AliasesPage() {
   const params = {
     page_id: String(page),
     // Presence-based filters: the empty string makes axios send `enabled=`.
+    ...(filter === "pinned" ? { pinned: "" } : {}),
     ...(filter === "enabled" ? { enabled: "" } : {}),
     ...(filter === "disabled" ? { disabled: "" } : {}),
   };
@@ -65,6 +67,9 @@ export function AliasesPage() {
   };
 
   const toggle = usePostAliasesAliasIdToggle({
+    mutation: { onSuccess: invalidateAliases },
+  });
+  const pin = usePatchAliasesAliasId({
     mutation: { onSuccess: invalidateAliases },
   });
   const remove = useDeleteAliasesAliasId({
@@ -118,6 +123,9 @@ export function AliasesPage() {
           <Button variant="subtle" color="gray" onClick={() => void navigate({ to: "/billing" })}>
             Billing
           </Button>
+          <Button component={Link} to="/settings" variant="subtle" color="gray">
+            Settings
+          </Button>
           <Button variant="subtle" color="gray" onClick={() => void logout()}>
             Log out
           </Button>
@@ -149,6 +157,7 @@ export function AliasesPage() {
         }}
         data={[
           { value: "all", label: "All" },
+          { value: "pinned", label: "Pinned" },
           { value: "enabled", label: "Enabled" },
           { value: "disabled", label: "Disabled" },
         ]}
@@ -183,7 +192,9 @@ export function AliasesPage() {
               key={alias.id}
               alias={alias}
               toggling={toggle.isPending && toggle.variables?.alias_id === alias.id}
+              pinning={pin.isPending && pin.variables?.alias_id === alias.id}
               onToggle={(a) => toggle.mutate({ alias_id: a.id })}
+              onPin={(a) => pin.mutate({ alias_id: a.id, data: { pinned: !a.pinned } })}
               onContacts={setContactsFor}
               onDelete={setDeleteTarget}
             />

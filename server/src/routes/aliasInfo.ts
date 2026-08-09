@@ -12,6 +12,7 @@ import { db } from "../db";
 import {
   type Alias,
   aliases,
+  aliasMailboxes,
   type Contact,
   contacts,
   deletedAliases,
@@ -25,6 +26,10 @@ import { formatCreationDate, timestampOf, websiteSendTo } from "./aliasText";
 export interface AliasInfo {
   alias: Alias;
   mailbox: Mailbox;
+  /** Full delivery list: primary + alias_mailboxes extras (SimpleLogin's
+   * `Alias.mailboxes` property — de-duplicated, verified only, sorted by
+   * email). */
+  mailboxes: Mailbox[];
   nbForward: number;
   nbBlock: number;
   nbReply: number;
@@ -47,8 +52,21 @@ export function emailLogAction(log: EmailLog): "forward" | "reply" | "block" | "
 export async function loadAliasInfos(aliasRows: Alias[]): Promise<AliasInfo[]> {
   if (aliasRows.length === 0) return [];
   const aliasIds = aliasRows.map((a) => a.id);
-  const mailboxIds = [...new Set(aliasRows.map((a) => a.mailboxId))];
 
+  const joinRows = await db
+    .select()
+    .from(aliasMailboxes)
+    .where(inArray(aliasMailboxes.aliasId, aliasIds));
+  const extraIdsByAlias = new Map<number, number[]>();
+  for (const j of joinRows) {
+    const list = extraIdsByAlias.get(j.aliasId) ?? [];
+    list.push(j.mailboxId);
+    extraIdsByAlias.set(j.aliasId, list);
+  }
+
+  const mailboxIds = [
+    ...new Set([...aliasRows.map((a) => a.mailboxId), ...joinRows.map((j) => j.mailboxId)]),
+  ];
   const mailboxRows = await db.select().from(mailboxes).where(inArray(mailboxes.id, mailboxIds));
   const mailboxById = new Map(mailboxRows.map((m) => [m.id, m]));
 
@@ -82,9 +100,24 @@ export async function loadAliasInfos(aliasRows: Alias[]): Promise<AliasInfo[]> {
     const mailbox = mailboxById.get(alias.mailboxId);
     if (!mailbox) throw new Error(`alias ${alias.id} has no mailbox row`);
     const counts = countsByAlias.get(alias.id);
+
+    // SimpleLogin Alias.mailboxes: primary + extras, de-duplicated, verified
+    // only, sorted by email.
+    const seen = new Set<number>();
+    const fullList: Mailbox[] = [];
+    for (const id of [alias.mailboxId, ...(extraIdsByAlias.get(alias.id) ?? [])]) {
+      const mb = mailboxById.get(id);
+      if (mb && mb.verified && !seen.has(mb.id)) {
+        seen.add(mb.id);
+        fullList.push(mb);
+      }
+    }
+    fullList.sort((a, b) => (a.email < b.email ? -1 : a.email > b.email ? 1 : 0));
+
     return {
       alias,
       mailbox,
+      mailboxes: fullList,
       nbForward: counts?.nbForward ?? 0,
       nbBlock: counts?.nbBlock ?? 0,
       nbReply: counts?.nbReply ?? 0,
@@ -116,9 +149,7 @@ export function aliasToDict(info: AliasInfo) {
     nb_block: info.nbBlock,
     nb_reply: info.nbReply,
     mailbox: { id: info.mailbox.id, email: info.mailbox.email },
-    // Single-mailbox aliases for now (no alias_mailboxes join table — see the
-    // schema-change proposal in the lane report).
-    mailboxes: [{ id: info.mailbox.id, email: info.mailbox.email }],
+    mailboxes: info.mailboxes.map((m) => ({ id: m.id, email: m.email })),
     // PGP is not implemented (deviation): support_pgp/disable_pgp are
     // hardcoded false; disable_pgp is accepted-but-ignored on PATCH.
     support_pgp: false,
@@ -134,9 +165,7 @@ export function aliasToDict(info: AliasInfo) {
           },
         }
       : null,
-    // Pinning is not in schema v1 (accepted-but-ignored on PATCH; see the
-    // schema-change proposal).
-    pinned: false,
+    pinned: info.alias.pinned,
   };
 }
 

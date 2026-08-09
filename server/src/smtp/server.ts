@@ -55,8 +55,8 @@ type Resolved = SmtpServerOptions & typeof DEFAULTS & { requireAuthTls: boolean 
 export function createSmtpServer(options: SmtpServerOptions): SmtpServer {
   const opts: Resolved = {
     ...DEFAULTS,
-    requireAuthTls: options.requireAuthTls ?? options.tls != null,
     ...options,
+    requireAuthTls: options.requireAuthTls ?? options.tls != null,
   };
   if (opts.implicitTls && !opts.tls) {
     throw new Error("implicitTls requires the tls option (key/cert)");

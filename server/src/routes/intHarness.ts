@@ -2,10 +2,36 @@
 // construction: every caller registers its own unique user; nothing here
 // truncates or shares state.
 
+import { desc, eq } from "drizzle-orm";
 import type { App } from "../app/server";
+import { db } from "../db";
+import { outboundMessages } from "../db/schema";
+import { extractCodeFromBody } from "../pipeline/transactional";
 
 export const uniqueEmail = () => `it-${crypto.randomUUID()}@int.test`;
 export const PASSWORD = "correct horse battery staple";
+
+/**
+ * The 6-digit verification code from the latest transactional email queued
+ * for `email`. Register/mailbox-create enqueue into outbound_messages even
+ * without a mail stack (unsigned when no DKIM key), so the int tier reads
+ * the code straight off the queue row — the DB stand-in for an inbox.
+ */
+export async function latestEmailedCode(email: string): Promise<string> {
+  const rows = await db
+    .select()
+    .from(outboundMessages)
+    .where(eq(outboundMessages.envelopeTo, email))
+    .orderBy(desc(outboundMessages.id))
+    .limit(1);
+  const row = rows[0];
+  if (!row) throw new Error(`no queued transactional mail for ${email}`);
+  const text = Buffer.from(row.raw).toString("utf-8");
+  const bodyStart = text.search(/\r?\n\r?\n/);
+  const code = extractCodeFromBody(bodyStart === -1 ? text : text.slice(bodyStart));
+  if (code === undefined) throw new Error(`no verification code in the mail to ${email}`);
+  return code;
+}
 
 export interface TestUser {
   email: string;
@@ -19,7 +45,8 @@ function uniqueIp(): string {
   return `10.${b()}.${b()}.${b()}`;
 }
 
-/** Register + login a fresh user; returns the api key for the Authentication header. */
+/** Register + activate + login a fresh user; returns the api key for the
+ * Authentication header. */
 export async function registerAndLogin(app: App): Promise<TestUser> {
   const email = uniqueEmail();
   const remoteAddress = uniqueIp();
@@ -30,6 +57,13 @@ export async function registerAndLogin(app: App): Promise<TestUser> {
     remoteAddress,
   });
   if (reg.statusCode !== 200) throw new Error(`register failed: ${reg.body}`);
+  const act = await app.inject({
+    method: "POST",
+    url: "/api/auth/activate",
+    payload: { email, code: await latestEmailedCode(email) },
+    remoteAddress,
+  });
+  if (act.statusCode !== 200) throw new Error(`activate failed: ${act.body}`);
   const log = await app.inject({
     method: "POST",
     url: "/api/auth/login",

@@ -34,6 +34,39 @@
           "password": "correct horse battery staple"
         }
       },
+      "AuthActivateRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "code"
+        ],
+        "example": {
+          "email": "user@example.com",
+          "code": "662302"
+        }
+      },
+      "AuthReactivateRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "example": {
+          "email": "user@example.com"
+        }
+      },
       "AuthLoginRequest": {
         "type": "object",
         "properties": {
@@ -204,6 +237,20 @@
         ],
         "example": {
           "email": "second@example.com"
+        }
+      },
+      "VerifyMailboxRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "example": {
+          "code": "662302"
         }
       },
       "UpdateMailboxRequest": {
@@ -1122,7 +1169,7 @@
         "tags": [
           "Account"
         ],
-        "description": "Register a new account. MVP deviation: the account is activated immediately (no activation email is sent yet — TODO email verification).",
+        "description": "Register a new account. The account starts unactivated: a 6-digit activation code (15-minute expiry) is emailed to the address; confirm it via POST /auth/activate before logging in.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1167,12 +1214,122 @@
         }
       }
     },
+    "/auth/activate": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Enter the emailed activation code to confirm the account. 400 on a wrong email/code, 410 once the code has been tried wrongly too many times (request a new one via /auth/reactivate).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthActivateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MsgResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/reactivate": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Resend the activation code. Budgeted per account (3 emails/hour, the register email included): 429 when over budget — a deviation from SimpleLogin, which relies on its per-IP limit alone.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthReactivateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MsgResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/login": {
       "post": {
         "tags": [
           "Account"
         ],
-        "description": "Authenticate and obtain an api_key for the Authentication header. MFA is not implemented: mfa_enabled is always false and mfa_key null.",
+        "description": "Authenticate and obtain an api_key for the Authentication header. MFA is not implemented: mfa_enabled is always false and mfa_key null. An unactivated account gets 422 (activate first).",
         "requestBody": {
           "required": true,
           "content": {
@@ -2421,7 +2578,7 @@
         "tags": [
           "Mailbox"
         ],
-        "description": "Create a new mailbox. MVP deviation: created verified=true (no verification email is sent yet).",
+        "description": "Create a new mailbox. It starts unverified: a 6-digit code (15-minute expiry) is emailed to the address; confirm it via POST /mailboxes/{mailbox_id}/verify.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2459,6 +2616,93 @@
             }
           },
           "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mailboxes/{mailbox_id}/verify": {
+      "post": {
+        "tags": [
+          "Mailbox"
+        ],
+        "description": "Verify a mailbox with the emailed 6-digit code. Deviation from SimpleLogin (which verifies through a web link): the API accepts the code directly. Error strings follow mailbox_utils.py; 410 once the code has been tried wrongly too many times (re-create the mailbox to get a fresh code). Verifying an already-verified mailbox is a no-op that returns it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyMailboxRequest"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "mailbox_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Mailbox"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
             "description": "Default Response",
             "content": {
               "application/json": {

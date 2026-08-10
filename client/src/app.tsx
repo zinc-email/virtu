@@ -26,9 +26,19 @@ import { DomainsPage } from "src/pages/Domains";
 import { LoginPage } from "src/pages/Login";
 import { RegisterPage } from "src/pages/Register";
 import { SettingsPage } from "src/pages/Settings";
+import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
 
 // ── Header nav ───────────────────────────────────────────────────────────────
+// Below 900px the inline links can't fit (4 items + logo + padding needs
+// ~670px at the 18px root) — they collapse into a hamburger + drawer.
+
+const NAV_ITEMS = [
+  { to: "/", label: "Emails" },
+  { to: "/domains", label: "Domains" },
+  { to: "/settings", label: "Settings" },
+  { to: "/billing", label: "Billing" },
+];
 
 const navList = css({
   display: "flex",
@@ -36,6 +46,7 @@ const navList = css({
   listStyle: "none",
   margin: 0,
   padding: "3rem 3rem 0 3rem",
+  "@media (max-width: 900px)": { padding: "1.5rem 1.5rem 0 1.5rem" },
   "@media (max-width: 650px)": { padding: "1rem" },
 });
 
@@ -62,6 +73,81 @@ function NavItem({ to, active, children }: { to: string; active: boolean; childr
         {children}
       </Link>
     </li>
+  );
+}
+
+/** Which nav item a path belongs to (details roll up to their section). */
+function activeNavItem(path: string): string {
+  if (path === "/" || path.startsWith("/aliases")) return "/";
+  if (path.startsWith("/domains")) return "/domains";
+  if (path.startsWith("/settings")) return "/settings";
+  if (path.startsWith("/billing")) return "/billing";
+  return "";
+}
+
+// The collapsed menu: same items, stacked with room to tap, plus Log out.
+function MobileMenu({
+  opened,
+  onClose,
+  path,
+  onLogout,
+}: {
+  opened: boolean;
+  onClose: () => void;
+  path: string;
+  onLogout: () => void;
+}) {
+  const active = activeNavItem(path);
+  const itemCss = css({
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "0.9rem 0.2rem",
+    color: "navLink",
+    textDecoration: "none",
+    fontSize: "1rem",
+    background: "none",
+    border: "none",
+    borderBottom: "1px solid token(colors.border)",
+    cursor: "pointer",
+    fontFamily: "sans",
+    _hover: { color: "navLinkActive" },
+  });
+  return (
+    <Drawer opened={opened} onClose={onClose} title={<Logo size="2.2rem" />}>
+      <nav>
+        <ul className={css({ listStyle: "none", margin: 0, padding: 0 })}>
+          {NAV_ITEMS.map((item) => (
+            <li key={item.to}>
+              <Link
+                to={item.to}
+                onClick={onClose}
+                className={cx(
+                  itemCss,
+                  item.to === active
+                    ? css({ color: "navLinkActive", fontWeight: "bold", borderColor: "primary" })
+                    : undefined,
+                )}
+              >
+                {item.label}
+              </Link>
+            </li>
+          ))}
+          <li>
+            <button
+              type="button"
+              className={itemCss}
+              onClick={() => {
+                onClose();
+                onLogout();
+              }}
+            >
+              Log out
+            </button>
+          </li>
+        </ul>
+      </nav>
+    </Drawer>
   );
 }
 
@@ -105,6 +191,7 @@ const footerLink = css({
 function Shell() {
   const navigate = useNavigate();
   const { location } = useRouterState();
+  const [menuOpen, setMenuOpen] = useState(false);
   // location.pathname includes the /app basepath; compare against app paths.
   const path = location.pathname.replace(/^\/app(?=\/|$)/, "") || "/";
   const isAuthPage = path === "/login" || path === "/register";
@@ -113,6 +200,7 @@ function Shell() {
   // Detail pages swap the logo for the big back arrow.
   const backTo = isAliasDetail ? "/" : isDomainDetail ? "/domains" : null;
   const authed = Boolean(getApiKey());
+  const active = activeNavItem(path);
 
   const logout = async () => {
     try {
@@ -133,6 +221,9 @@ function Shell() {
         backgroundColor: "bg",
         color: "text",
         fontFamily: "sans",
+        // Backstop: a stray wide element must never give the PAGE a
+        // horizontal scrollbar.
+        overflowX: "clip",
       })}
     >
       <header>
@@ -165,23 +256,46 @@ function Shell() {
             </li>
           </ul>
           {authed && !isAuthPage && (
-            <ul className={navList}>
-              <NavItem to="/" active={path === "/" || isAliasDetail}>
-                Emails
-              </NavItem>
-              <NavItem to="/domains" active={path === "/domains" || isDomainDetail}>
-                Domains
-              </NavItem>
-              <NavItem to="/settings" active={path === "/settings"}>
-                Settings
-              </NavItem>
-              <NavItem to="/billing" active={path === "/billing"}>
-                Billing
-              </NavItem>
-            </ul>
+            <>
+              <ul
+                className={cx(navList, css({ "@media (max-width: 900px)": { display: "none" } }))}
+              >
+                {NAV_ITEMS.map((item) => (
+                  <NavItem key={item.to} to={item.to} active={item.to === active}>
+                    {item.label}
+                  </NavItem>
+                ))}
+              </ul>
+              <button
+                type="button"
+                aria-label="Menu"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen(true)}
+                className={css({
+                  display: "none",
+                  "@media (max-width: 900px)": { display: "block" },
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "navLink",
+                  padding: "1rem",
+                  marginRight: "0.5rem",
+                  _hover: { color: "navLinkActive" },
+                })}
+              >
+                <Icon name="bars" size="1.4rem" />
+              </button>
+            </>
           )}
         </nav>
       </header>
+
+      <MobileMenu
+        opened={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        path={path}
+        onLogout={() => void logout()}
+      />
 
       <main className={css({ display: "flex", justifyContent: "center", flex: "1 0 auto" })}>
         <div className={css({ flex: "1 0 100%", maxWidth: "58rem", minWidth: 0 })}>

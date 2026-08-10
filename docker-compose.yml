@@ -8,6 +8,7 @@
 services:
   db:
     image: "postgres:17-alpine"
+    init: true
     shm_size: 128mb
     environment:
       POSTGRES_USER: virtu
@@ -68,7 +69,8 @@ services:
   www:
     image: "oven/bun:1.3"
     working_dir: /app/www
-    command: ["sh", "-c", "bun install && bun run dev"]
+    # --force replaces any stale astro dev lock left by a removed container.
+    command: ["sh", "-c", "bun install && bun run dev -- --force"]
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment:
       HOME: /tmp
@@ -83,6 +85,9 @@ services:
   # This is the front door: http://localhost:8080 (/, /app, /api).
   proxy:
     image: "caddy:2-alpine"
+    init: true
+    # Caddy drains connections on SIGTERM; cap the wait so `just down` is snappy.
+    stop_grace_period: 3s
     ports:
       - "127.0.0.1:${PROXY_PORT:-8080}:8080"
     depends_on:

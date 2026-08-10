@@ -236,7 +236,15 @@ async function resolveOutbound(
   mailFrom: string,
   rcptAddresses: string[],
 ): Promise<
-  { alias: Alias; plan: PlanEntry[]; mode: "send" | "reply" } | { reject: SmtpHookResult }
+  | {
+      alias: Alias;
+      plan: PlanEntry[];
+      mode: "send" | "reply";
+      /** Reply mode: the authenticated MAIL FROM mailbox — email_logs record
+       * it so a failed reply's DSN reaches the inbox that actually sent. */
+      sendingMailboxId: number | null;
+    }
+  | { reject: SmtpHookResult }
 > {
   const log = opts.log ?? ((m: string) => console.log(m));
   const ownership = await senderOwnership(opts.db, user.id, mailFrom);
@@ -276,6 +284,7 @@ async function resolveOutbound(
       alias,
       plan: contacts.map((contact) => ({ contact, kind: "reply" as const })),
       mode: "reply",
+      sendingMailboxId: ownership.mailbox.id,
     };
   }
 
@@ -309,7 +318,7 @@ async function resolveOutbound(
     plan.push({ kind: "cold", address: rcpt });
   }
   if (plan.length === 0) return { reject: NOT_REVERSE_ALIAS };
-  return { alias, plan, mode: "send" };
+  return { alias, plan, mode: "send", sendingMailboxId: null };
 }
 
 /** Handle a completed authenticated submission. */
@@ -330,7 +339,7 @@ async function handleSubmissionData(
     envelope.rcptTo.map((r) => r.address),
   );
   if ("reject" in resolved) return resolved.reject;
-  const { alias, plan, mode } = resolved;
+  const { alias, plan, mode, sendingMailboxId } = resolved;
 
   const parsed = parseMessage(event.raw);
   const aliasDomain = alias.email.slice(alias.email.indexOf("@") + 1);
@@ -418,7 +427,9 @@ async function handleSubmissionData(
         userId: user.id,
         contactId: target.contact.id,
         aliasId: alias.id,
-        mailboxId: alias.mailboxId,
+        // Reply mode: the mailbox that actually sent (DSNs route back to
+        // it); send mode has no sending mailbox — the alias's primary.
+        mailboxId: sendingMailboxId ?? alias.mailboxId,
       }),
     );
   }

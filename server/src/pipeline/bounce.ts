@@ -3,7 +3,7 @@
  *
  * A VERP recipient on the mx — or a permanent delivery failure in deliverd —
  * marks the referenced email_log bounced, then applies the auto-disable
- * thresholds to the alias (forward phase only):
+ * thresholds per (alias, mailbox) — forward phase only:
  *
  *   - more than 12 bounces in the last 24h, or
  *   - more than 10 bounces in the week BEFORE the last 24h AND more than 1
@@ -21,6 +21,7 @@ import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import {
   aliases,
+  aliasMailboxes,
   type EmailLog,
   emailLogs,
   mailboxes,
@@ -164,19 +165,36 @@ export interface DsnShapeFacts {
   contentType?: string;
   /** Auto-Submitted header value, if any (RFC 3834). */
   autoSubmitted?: string;
+  /**
+   * Decoded message body, when available: multipart/report DSNs carry
+   * per-recipient `Action:` fields (RFC 3464 §2.3.3) that distinguish a
+   * real failure from a delay/relay notification.
+   */
+  body?: string;
 }
 
 /**
  * True when a message addressed to one of our VERP addresses looks like a
- * real delivery status notification rather than an auto-responder reply.
- * Real DSNs are multipart/report (RFC 3464) or at least use the null
- * reverse path; RFC 3834 auto-responses mark themselves `Auto-Submitted:
- * auto-replied`. A vacation reply to a verification email's Return-Path
- * must NOT count as a bounce — the email was delivered fine, and treating
- * the reply as a failure would invalidate a perfectly live code.
+ * real delivery FAILURE notification rather than an auto-responder reply or
+ * a transient-delay notice. Real DSNs are multipart/report (RFC 3464) — but
+ * only `Action: failed` reports count; a "delivery delayed" report means
+ * the mail may yet arrive and must not invalidate anything. Outside
+ * multipart/report, a null reverse path counts unless the message marks
+ * itself `Auto-Submitted: auto-replied` (RFC 3834 vacation responders): a
+ * vacation reply to a verification email's Return-Path must NOT count as a
+ * bounce — the email was delivered fine.
  */
 export function looksLikeDsn(facts: DsnShapeFacts): boolean {
   if (facts.contentType !== undefined && /multipart\/report/i.test(facts.contentType)) {
+    if (facts.body !== undefined) {
+      const actions = [...facts.body.matchAll(/^action:\s*([a-z]+)/gim)].map((m) =>
+        m[1]!.toLowerCase(),
+      );
+      // Reports that state only delayed/relayed/expanded actions are not
+      // failures; no Action field at all is treated as a failure (the
+      // conservative reading of a malformed report).
+      if (actions.length > 0 && !actions.includes("failed")) return false;
+    }
     return true;
   }
   if (facts.envelopeFrom !== "") return false;
@@ -268,12 +286,24 @@ export interface RecordBounceResult {
   emailLog: EmailLog | null;
   /** True when this bounce tripped a threshold and disabled the alias. */
   aliasDisabled: boolean;
+  /**
+   * Set when the threshold tripped for a MULTI-mailbox alias: the dead
+   * mailbox was detached from the alias's delivery set instead of the whole
+   * alias being disabled (PLAN #12: a broken extra must not cut off the
+   * healthy mailboxes).
+   */
+  detachedMailboxId?: number;
 }
 
 /**
- * Mark an email_log bounced and apply the auto-disable thresholds to its
- * alias (forward phase only — reply bounces are recorded but never disable).
- * Idempotent: a log already marked bounced keeps its first bouncedAt.
+ * Mark an email_log bounced and apply the auto-disable thresholds (forward
+ * phase only — reply bounces are recorded but never disable). Accounting is
+ * per (alias, mailbox): only the bouncing mailbox's ledger counts. When the
+ * threshold trips and the alias delivers to OTHER mailboxes too, the dead
+ * mailbox is detached from this alias (extras dropped; a dead primary
+ * promotes the first extra) and the alias stays enabled; only a sole
+ * mailbox disables the alias itself. Idempotent: a log already marked
+ * bounced keeps its first bouncedAt.
  */
 export async function recordBounce(
   db: Db,
@@ -310,6 +340,11 @@ export async function recordBounce(
     .where(
       and(
         eq(emailLogs.aliasId, alias.id),
+        // Per-mailbox ledger: a dead extra's bounces must not count against
+        // the copies the healthy mailboxes received.
+        log.mailboxId === null
+          ? isNull(emailLogs.mailboxId)
+          : eq(emailLogs.mailboxId, log.mailboxId),
         eq(emailLogs.bounced, true),
         eq(emailLogs.isReply, false),
         isNotNull(emailLogs.bouncedAt),
@@ -320,6 +355,51 @@ export async function recordBounce(
 
   const verdict = shouldDisable(bounceTimes, now);
   if (!verdict.disable) return { emailLog: log, aliasDisabled: false };
+
+  // Threshold tripped. If the alias delivers to other mailboxes as well,
+  // detach the dead one and keep the alias alive for the rest.
+  if (log.mailboxId !== null) {
+    const deadMailboxId = log.mailboxId;
+    const extraRows = await db
+      .select({ mailboxId: aliasMailboxes.mailboxId })
+      .from(aliasMailboxes)
+      .where(eq(aliasMailboxes.aliasId, alias.id))
+      .orderBy(aliasMailboxes.mailboxId);
+    const others = [alias.mailboxId, ...extraRows.map((r) => r.mailboxId)].filter(
+      (id, i, all) => id !== deadMailboxId && all.indexOf(id) === i,
+    );
+    if (others.length > 0) {
+      await db.transaction(async (tx) => {
+        if (alias.mailboxId === deadMailboxId) {
+          // Dead primary: promote the first surviving mailbox.
+          await tx.update(aliases).set({ mailboxId: others[0]! }).where(eq(aliases.id, alias.id));
+          await tx
+            .delete(aliasMailboxes)
+            .where(
+              and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, others[0]!)),
+            );
+        }
+        await tx
+          .delete(aliasMailboxes)
+          .where(
+            and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, deadMailboxId)),
+          );
+      });
+      await sendAlertOnce(db, {
+        userId: alias.userId,
+        toEmail: alias.email,
+        alertType: `bounce_detached_mailbox_${alias.id}_${deadMailboxId}`,
+        title: `A mailbox was removed from ${alias.email}`,
+        message:
+          `Deliveries of ${alias.email} to one of its mailboxes kept bouncing ` +
+          `(${verdict.reason}), so that mailbox was removed from the alias. ` +
+          `Its other mailbox(es) continue to receive mail; re-add the mailbox ` +
+          `from the dashboard once it works again.`,
+        now,
+      });
+      return { emailLog: log, aliasDisabled: false, detachedMailboxId: deadMailboxId };
+    }
+  }
 
   await db.update(aliases).set({ enabled: false }).where(eq(aliases.id, alias.id));
   await sendAlertOnce(db, {

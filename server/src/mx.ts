@@ -105,12 +105,15 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     if (rcpt.decision.kind !== "verp") continue;
     const info = rcpt.decision.info;
     if (info.type === "transactional") {
-      // Only a DSN-shaped message counts: a vacation auto-reply to the
-      // verification email's Return-Path must not invalidate a live code.
+      // Only a failure-DSN-shaped message counts: a vacation auto-reply to
+      // the verification email's Return-Path, or a "delivery delayed"
+      // report, must not invalidate a live code.
       const dsnish = looksLikeDsn({
         envelopeFrom: envelope.mailFrom,
         contentType: parsed.headers.get("Content-Type"),
         autoSubmitted: parsed.headers.get("Auto-Submitted"),
+        // utf-8 with replacement chars is fine: the Action fields are ASCII.
+        body: new TextDecoder().decode(parsed.body),
       });
       if (!dsnish) {
         log(`mx: ignored non-DSN mail to transactional VERP (ref ${info.id})`);

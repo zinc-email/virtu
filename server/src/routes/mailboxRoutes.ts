@@ -12,7 +12,7 @@
 //                               the trash mailbox clears users.trash_mailbox_id
 //                               via its ON DELETE SET NULL)
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
@@ -282,6 +282,11 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
         if (!mb.verified) {
           throw new HttpError(400, "Unverified mailbox cannot be used as default mailbox");
         }
+        if (mb.disabled) {
+          // Same silent-drop hazard the trash branch guards against: new
+          // aliases would point at a mailbox the delivery set filters out.
+          throw new HttpError(400, "Disabled mailbox cannot be used as default mailbox");
+        }
         await db.update(users).set({ defaultMailboxId: mb.id }).where(eq(users.id, req.user.id));
       }
 
@@ -296,8 +301,13 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
           throw new HttpError(400, "Disabled mailbox cannot be used as trash mailbox");
         }
         await db.update(users).set({ trashMailboxId: mb.id }).where(eq(users.id, req.user.id));
-      } else if (req.body.trash === false && req.user.trashMailboxId === mb.id) {
-        await db.update(users).set({ trashMailboxId: null }).where(eq(users.id, req.user.id));
+      } else if (req.body.trash === false) {
+        // Conditional in SQL, not on the request-cached user row: a
+        // concurrent trash move must not be wiped by a stale clear.
+        await db
+          .update(users)
+          .set({ trashMailboxId: null })
+          .where(and(eq(users.id, req.user.id), eq(users.trashMailboxId, mb.id)));
       }
 
       return { updated: true };

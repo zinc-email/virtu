@@ -24,11 +24,11 @@ and the entire production/deploy story, which has not been started.
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~412 tests / 28 files | `just test-unit` | green |
+| Unit | ~417 tests / 28 files | `just test-unit` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit | `just check` | green |
 | Integration (API vs real Postgres) | 112 tests / 8 files | `just up && just db push && just test-int` | green |
 | Client DOM (real React vs running stack) | 8 tests / 3 files | `just up && just db push && just test-client` | green |
-| Stories (simulated internet) | 23 stories / 13 files | `just test-net-up && just test-story` | green ×2 against dirty state |
+| Stories (simulated internet) | 24 stories / 13 files | `just test-net-up && just test-story` | green ×2 against dirty state |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
 
 Story coverage: forward with `dkim=pass` at the receiving peer (M1), authed
@@ -47,7 +47,9 @@ mixed-alias recipients refused, cold email from an alias (`dkim=pass` at
 initech + contact minted), Cc-of-own-mailbox refused, per-device SMTP
 password lifecycle (API create → real 587 send → revoke → 535), disabled
 alias → trash inbox with `X-Virtu-Trash` (and on-alias mail unmarked), and
-multi-mailbox fan-out (one send → both Maildirs, one email_log per mailbox).
+multi-mailbox fan-out (one send → both Maildirs, one email_log per mailbox;
+a dead extra mailbox detaches at the bounce threshold while the alias and
+its healthy primary keep going).
 
 The live Stripe pass caught a real bug the self-signed tests missed
 (out-of-order `subscription.created` regressing status — fixed in `fdf36a2`
@@ -95,11 +97,13 @@ Return-Path can't kill a live code. Also resolved: the mx prepends a
 `Received:` trace header, and submission AUTH sits behind a per-(IP,username)
 failed-attempt throttle (`pipeline/authThrottle.ts`) so wrong passwords can't
 buy unbounded argon2id work. Known residual: an auto-responder that emits
-multipart/report — nonstandard but possible — still counts as a bounce; the
-forward/reply VERP intake paths take any mail to the VERP address at face
-value, as before this wave; and a broken trash mailbox fails silently — trash
-copies ride the null reverse path by design (PLAN #11), so nothing bumps its
-nb_failed_checks.)
+multipart/report — nonstandard but possible — still counts as a bounce
+unless its Action fields say only delayed/relayed; an async bounce with a
+NON-null sender and a plain-text body is ignored at the mx intake (the
+deliverd SMTP-time path catches the dominant case); the forward/reply VERP
+intake paths take any mail to the VERP address at face value, as before this
+wave; and a broken trash mailbox fails silently — trash copies ride the null
+reverse path by design (PLAN #11), so nothing bumps its nb_failed_checks.)
 
 ## Not started
 

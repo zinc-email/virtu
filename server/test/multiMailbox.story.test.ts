@@ -14,7 +14,9 @@ import {
   ensureDkimKey,
   ensureMailbox,
   ensureWes,
+  getAlias,
   pollUntil,
+  randomTag,
   type UserFixture,
 } from "./fixtures.ts";
 import { getHeader, waitForMail } from "./maildir.ts";
@@ -85,4 +87,53 @@ describe("multi-mailbox delivery", () => {
     expect(mailboxIds.has(fixture.mailbox.id)).toBe(true);
     expect(mailboxIds.has(second.id)).toBe(true);
   }, 120_000);
+
+  test("a dead extra mailbox detaches after repeated bounces; the alias survives", async () => {
+    // The per-(alias, mailbox) bounce ledger: a broken EXTRA mailbox must
+    // not auto-disable the whole alias — past the threshold it is detached
+    // and the healthy primary keeps receiving (PLAN #12).
+    const alias = await createAlias(fixture);
+    const dead = await ensureMailbox(fixture.user.id, `nobody.${randomTag()}@qmail.com`);
+    await db
+      .insert(aliasMailboxes)
+      .values({ aliasId: alias.id, mailboxId: dead.id })
+      .onConflictDoNothing();
+
+    // Each send's dead copy 550s at qmail (unknown localpart) → permanent
+    // failure → one bounce on (alias, dead). The 13th trips >12/24h.
+    for (let i = 0; i < 13; i++) {
+      const testId = newTestId();
+      await smtpSend({
+        host: milton.submission.host,
+        port: milton.submission.port,
+        from: milton.email,
+        to: alias.email,
+        data: buildMessage({
+          from: milton.email,
+          to: alias.email,
+          subject: `Bounce fodder ${i + 1}/13`,
+          testId,
+        }),
+      });
+      // The healthy primary receives every copy throughout.
+      await waitForMail(wes, testId, { timeoutMs: 60_000 });
+    }
+
+    // The dead mailbox is detached from the alias…
+    await pollUntil(
+      async () => {
+        const rows = await db
+          .select({ id: aliasMailboxes.id })
+          .from(aliasMailboxes)
+          .where(and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, dead.id)));
+        return rows.length === 0 ? true : undefined;
+      },
+      { timeoutMs: 60_000, what: `dead mailbox ${dead.id} detached from alias ${alias.id}` },
+    );
+
+    // …and the alias itself stays enabled on its healthy primary.
+    const after = await getAlias(alias.id);
+    expect(after?.enabled).toBe(true);
+    expect(after?.mailboxId).toBe(fixture.mailbox.id);
+  }, 300_000);
 });

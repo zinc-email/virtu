@@ -113,7 +113,9 @@ function DeleteDialog({
       <p className={css({ marginBottom: "1.5rem", color: "textDim", fontSize: "0.9rem" })}>
         <strong>{mailbox.email}</strong>
         {mailbox.nb_alias > 0
-          ? ` currently receives mail for ${mailbox.nb_alias === 1 ? "1 alias" : `${mailbox.nb_alias} aliases`}.`
+          ? ` currently receives mail for ${mailbox.nb_alias === 1 ? "1 alias" : `${mailbox.nb_alias} aliases`}. ` +
+            "Deleting it deletes the aliases it is the primary mailbox for; aliases that " +
+            "only deliver an extra copy here just stop receiving that copy."
           : " receives mail for no aliases."}
       </p>
       {remove.isError && <Alert>{apiErrorMessage(remove.error)}</Alert>}
@@ -171,10 +173,16 @@ export function MailboxesPage() {
 
   const actionsFor = (mb: Mailbox) => {
     if (!mb.verified) {
+      // A typo'd address will never verify — it must still be removable.
       return (
-        <Button size="tiny" onClick={() => setVerifying(mb)}>
-          Enter code
-        </Button>
+        <>
+          <Button size="tiny" onClick={() => setVerifying(mb)}>
+            Enter code
+          </Button>
+          <Button size="tiny" variant="cta" onClick={() => setDeleting(mb)}>
+            Delete
+          </Button>
+        </>
       );
     }
     return (

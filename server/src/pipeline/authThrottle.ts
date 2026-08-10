@@ -19,6 +19,15 @@ export interface AuthThrottleOptions {
   maxFailures?: number;
   /** Max tracked keys (bounded memory). Default 10_000. */
   maxKeys?: number;
+  /**
+   * Even a limited key admits one attempt once this long has passed since
+   * its newest failure — a trickle, not a hard lock. Caps an attacker at
+   * ~windowMs/trickleMs hash attempts per key per window while letting a
+   * VALID credential through within seconds; without it, one stale device
+   * retrying a revoked password would 454-lock every other device of the
+   * same user behind the same NAT. Default 5s.
+   */
+  trickleMs?: number;
 }
 
 export interface AuthThrottle {
@@ -39,6 +48,7 @@ export function createAuthThrottle(opts: AuthThrottleOptions = {}): AuthThrottle
   const windowMs = opts.windowMs ?? 60_000;
   const maxFailures = opts.maxFailures ?? 10;
   const maxKeys = opts.maxKeys ?? 10_000;
+  const trickleMs = opts.trickleMs ?? 5_000;
   // Insertion order doubles as recency: recordFailure re-inserts its key,
   // so the first map entry is always the least-recently-failing one.
   const failures = new Map<string, number[]>();
@@ -63,8 +73,12 @@ export function createAuthThrottle(opts: AuthThrottleOptions = {}): AuthThrottle
 
   return {
     isLimited(key, now = new Date()) {
-      const times = liveTimes(key, now.getTime());
+      const nowMs = now.getTime();
+      const times = liveTimes(key, nowMs);
       if (times.length < maxFailures) return false;
+      // Trickle: quiet for trickleMs since the newest failure → admit one
+      // attempt (a failure re-arms the limit; a success clears the key).
+      if (nowMs - times[times.length - 1]! >= trickleMs) return false;
       touch(key, times); // a limited key stays recent for as long as it's probed
       return true;
     },

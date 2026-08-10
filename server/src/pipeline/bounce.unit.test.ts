@@ -102,4 +102,40 @@ describe("looksLikeDsn", () => {
       false,
     );
   });
+
+  test("a multipart/report with only Action: delayed is NOT a failure", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: 'multipart/report; report-type=delivery-status; boundary="b"',
+        body:
+          "--b\r\nThis is a delay notification.\r\n--b\r\n" +
+          "Content-Type: message/delivery-status\r\n\r\n" +
+          "Reporting-MTA: dns; edge.example.com\r\n\r\n" +
+          "Final-Recipient: rfc822; someone@example.com\r\n" +
+          "Action: delayed\r\n" +
+          "Status: 4.4.1\r\n--b--\r\n",
+      }),
+    ).toBe(false);
+  });
+
+  test("a multipart/report with Action: failed IS a failure", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: "multipart/report; report-type=delivery-status",
+        body: "Final-Recipient: rfc822; x@y\r\nAction: failed\r\nStatus: 5.1.1\r\n",
+      }),
+    ).toBe(true);
+  });
+
+  test("a multipart/report with no Action field is treated as a failure", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: "multipart/report; report-type=delivery-status",
+        body: "malformed report with no action fields",
+      }),
+    ).toBe(true);
+  });
 });

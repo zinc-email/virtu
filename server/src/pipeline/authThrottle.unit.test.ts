@@ -55,6 +55,20 @@ describe("createAuthThrottle", () => {
     expect(throttle.isLimited("victim", at(60))).toBe(true);
   });
 
+  test("a limited key admits a trickle attempt after quiet trickleMs", () => {
+    // The NAT-collateral guard: a stale device's failure burst must not
+    // hard-lock a sibling device presenting VALID credentials — once the
+    // burst pauses for trickleMs, one attempt goes through to the verifier.
+    const throttle = createAuthThrottle({ windowMs: 60_000, maxFailures: 2, trickleMs: 5_000 });
+    throttle.recordFailure("k", at(0));
+    throttle.recordFailure("k", at(1_000));
+    expect(throttle.isLimited("k", at(2_000))).toBe(true);
+    expect(throttle.isLimited("k", at(6_500))).toBe(false); // quiet ≥ 5s → admitted
+    // A failed trickle attempt re-arms the limit immediately.
+    throttle.recordFailure("k", at(6_500));
+    expect(throttle.isLimited("k", at(7_000))).toBe(true);
+  });
+
   test("authThrottleKey normalizes the username", () => {
     expect(authThrottleKey("10.0.0.1", "  Wes@QMail.com ")).toBe("10.0.0.1|wes@qmail.com");
   });

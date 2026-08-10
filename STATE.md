@@ -110,7 +110,7 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
 3. **Bun `node:http` WebSocket upgrades hang** — rsbuild's HMR socket never
    completes its handshake under bun (stuck "connecting"; diagnosed
    2026-08-10 by running the identical server under node, which connects
-   instantly). The client dev container is therefore `node:22-bookworm-slim`
+   instantly). The client dev container is therefore `node:24-bookworm-slim`
    with a one-shot `client-deps` service (`oven/bun:1.3`) doing the
    `bun install` — bun remains the only package manager, node is only the
    dev-server runtime. HMR ws moved under the base (`/app/rsbuild-hmr`) so

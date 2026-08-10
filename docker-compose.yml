@@ -99,8 +99,15 @@ services:
   www:
     image: "oven/bun:1.3"
     working_dir: /app/www
-    # --force replaces any stale astro dev lock left by a removed container.
-    command: ["sh", "-c", "bun install && bun run dev -- --force"]
+    # --ignore-lock: astro's dev lock (www/.astro/dev.json) records a PID, and
+    # the file lives in the bind mount, so it outlives the container. On the
+    # next start the recorded PID is very much alive in the FRESH pid namespace
+    # — it's this astro process — so the lock reads as held rather than stale.
+    # `--force` then "replaces the running server" by SIGTERMing that pid, i.e.
+    # itself, and the container dies 0.5s in with exit 143. --ignore-lock skips
+    # the lock entirely: never read, never written. (Mutually exclusive with
+    # --force.) Host-side `just www-dev` keeps normal lock semantics.
+    command: ["sh", "-c", "bun install && bun run dev -- --ignore-lock"]
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment:
       HOME: /tmp

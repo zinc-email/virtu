@@ -155,12 +155,20 @@ reverse path by design (PLAN #11), so nothing bumps its nb_failed_checks.)
    version-pinned per account; the handler reads both pre-Basil and current
    `current_period_end` shapes, so upgrading the account's API version later
    is safe but should be followed by a re-run of the live loop.
-5. **Astro dev-server stale lock kills the www container** (diagnosed
-   2026-08-10): `www/.astro/dev.json` records the dev server's pid; after a
-   container recreation the fresh astro process can be assigned that SAME pid
-   and, seeing "another" dev server, SIGTERMs itself instantly (exit 143 in a
-   loop). Fix: delete `www/.astro/dev.json` and `docker compose up -d www`.
-   (`--force` does not help — it's astro itself doing the killing.)
+5. **Astro dev-server lock is pid-based and can't cross a pid namespace**
+   (diagnosed 2026-08-10, fixed same day): `www/.astro/dev.json` records the
+   dev server's pid, and the file lives in the bind mount, so it outlives the
+   container. Astro's staleness check is `process.kill(pid, 0)` — in a *fresh*
+   pid namespace that pid is reliably alive (it's this astro process; the tree
+   is deterministic, so it landed on 14 every time), so the lock never reads as
+   stale. `--force` then "replaces the running server" by SIGTERMing that pid,
+   i.e. itself: `www` died 0.5s after every start with exit 143, and
+   `just up --wait` failed on it. Fixed by running the container's dev server
+   with `--ignore-lock` (docker-compose.yml `www.command`) — the lock is
+   neither read nor written, so no stale `dev.json` is ever left behind;
+   host-side `just www-dev` keeps normal lock semantics. Upstream-reportable
+   (the lock should carry a boot id / process start-time, not a bare pid);
+   revisit if Astro hardens it.
 
 ## Deviations from SimpleLogin (all documented in code at the site)
 

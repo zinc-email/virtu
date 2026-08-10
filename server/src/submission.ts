@@ -30,15 +30,17 @@
  * recipient (envelope from = VERP bounce_reply, rcpt = the real address).
  */
 
+import { randomUUID } from "node:crypto";
 import { config } from "./config.ts";
 import { db } from "./db/index.ts";
 import type { Db } from "./db/index.ts";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   type Alias,
   aliases,
   type Contact,
   customDomains,
+  deletedAliases,
   mailboxes,
   smtpCredentials,
   type User,
@@ -152,7 +154,9 @@ async function authedUser(db: Db, authUser: string | undefined): Promise<User | 
  */
 async function refusesLocalAddress(db: Db, mailDomain: string, address: string): Promise<boolean> {
   const normalized = address.trim().toLowerCase();
-  const domain = normalized.slice(normalized.lastIndexOf("@") + 1);
+  const at = normalized.lastIndexOf("@");
+  if (at === -1) return true; // malformed (no domain) — never a deliverable target
+  const domain = normalized.slice(at + 1);
   if (domain !== mailDomain) {
     const domainRows = await db
       .select({ catchAll: customDomains.catchAll })
@@ -161,7 +165,16 @@ async function refusesLocalAddress(db: Db, mailDomain: string, address: string):
       .limit(1);
     const custom = domainRows[0];
     if (custom === undefined) return false; // not a domain of ours
-    if (custom.catchAll) return false; // the mx mints on arrival
+    if (custom.catchAll) {
+      // The mx mints on arrival — UNLESS the address is tombstoned, in which
+      // case it stays dead (never re-minted) and the send would black-hole.
+      const tomb = await db
+        .select({ id: deletedAliases.id })
+        .from(deletedAliases)
+        .where(eq(deletedAliases.email, normalized))
+        .limit(1);
+      return tomb[0] !== undefined;
+    }
   }
   const aliasRows = await db
     .select({ id: aliases.id })
@@ -171,6 +184,39 @@ async function refusesLocalAddress(db: Db, mailDomain: string, address: string):
   return aliasRows[0] === undefined;
 }
 
+/**
+ * True when `address` — allowing plus-tag variants on either side — resolves
+ * to one of the user's own mailboxes. The refuse-to-leak invariant (PLAN #9):
+ * an outbound recipient (envelope OR To/Cc) that lands back in the user's own
+ * inbox must never go out. Plus-addressing is normalized on both sides, so a
+ * mailbox stored as `wes+work@` and a recipient `wes+work+x@` still match.
+ */
+async function isOwnMailboxAddress(db: Db, userId: number, address: string): Promise<boolean> {
+  const base = (addr: string): string => {
+    const at = addr.trim().toLowerCase().lastIndexOf("@");
+    const lower = addr.trim().toLowerCase();
+    if (at === -1) return lower;
+    const local = lower.slice(0, at);
+    const domain = lower.slice(at);
+    const plus = local.indexOf("+");
+    return `${plus === -1 ? local : local.slice(0, plus)}${domain}`;
+  };
+  const target = base(address);
+  const rows = await db
+    .select({ email: mailboxes.email })
+    .from(mailboxes)
+    .where(eq(mailboxes.userId, userId));
+  return rows.some((r) => base(r.email) === target);
+}
+
+/** One classified envelope recipient (no rows created yet). */
+type PlanEntry =
+  /** rcpt was a reverse alias: the existing contact carries the metadata. */
+  | { kind: "reply"; contact: Contact }
+  /** rcpt is a real outside address; its contact is minted only after the
+   * WHOLE message (headers included) has been accepted. */
+  | { kind: "cold"; address: string };
+
 /** One resolved outbound recipient: the contact row that carries the metadata. */
 interface OutboundTarget {
   contact: Contact;
@@ -179,10 +225,10 @@ interface OutboundTarget {
 }
 
 /**
- * Resolve the sending alias, the mode, and the outbound targets for one
- * submission. Returns a rejection when anything violates the mode rules
- * (all-or-nothing; nothing is created for cold recipients until every
- * recipient — and the alias itself — resolves cleanly).
+ * Classify the sending alias, the mode, and the envelope recipients for one
+ * submission — READ-ONLY: refusal here (or later, by the header screen) must
+ * leave no trace, so cold contacts are minted by the caller only once the
+ * whole message is accepted.
  */
 async function resolveOutbound(
   opts: SubmissionOptions,
@@ -190,7 +236,7 @@ async function resolveOutbound(
   mailFrom: string,
   rcptAddresses: string[],
 ): Promise<
-  { alias: Alias; targets: OutboundTarget[]; mode: "send" | "reply" } | { reject: SmtpHookResult }
+  { alias: Alias; plan: PlanEntry[]; mode: "send" | "reply" } | { reject: SmtpHookResult }
 > {
   const log = opts.log ?? ((m: string) => console.log(m));
   const ownership = await senderOwnership(opts.db, user.id, mailFrom);
@@ -228,20 +274,17 @@ async function resolveOutbound(
     if (!alias.enabled) return { reject: ALIAS_DISABLED };
     return {
       alias,
-      targets: contacts.map((contact) => ({ contact, kind: "reply" as const })),
+      plan: contacts.map((contact) => ({ contact, kind: "reply" as const })),
       mode: "reply",
     };
   }
 
   // Send mode (MAIL FROM = the alias): reverse aliases reply; anything else
-  // is a cold email, contact minted so future replies thread. Two passes so
-  // refusal is all-or-nothing — nothing is created until every recipient
-  // classifies cleanly (and the alias-disabled refusal fires before any
-  // contact row exists).
+  // is a cold email, classified here and minted by the caller once the whole
+  // message — envelope AND headers — is accepted.
   const alias = ownership.alias;
   if (!alias.enabled) return { reject: ALIAS_DISABLED };
-  const scope = { userId: user.id, aliasId: alias.id };
-  const plan: Array<{ kind: "reply"; contact: Contact } | { kind: "cold"; address: string }> = [];
+  const plan: PlanEntry[] = [];
   for (const rcpt of rcptAddresses) {
     const reverse = await resolveReverseAlias(opts.db, rcpt);
     if (reverse !== null) {
@@ -252,6 +295,13 @@ async function resolveOutbound(
       plan.push({ kind: "reply", contact: reverse });
       continue;
     }
+    // Refuse-to-leak also on the envelope side: an RCPT TO naming the user's
+    // own mailbox (e.g. a Bcc-self MUA) would otherwise be minted as a cold
+    // contact and relayed back out — the same leak the To/Cc screen blocks.
+    if (await isOwnMailboxAddress(opts.db, user.id, rcpt)) {
+      log(`submission: refused rcpt ${rcpt} for ${alias.email}: own mailbox address`);
+      return { reject: MAILBOX_LEAK };
+    }
     if (await refusesLocalAddress(opts.db, opts.mailDomain, rcpt)) {
       log(`submission: refused rcpt ${rcpt} for ${alias.email}: unknown local address`);
       return { reject: NOT_REVERSE_ALIAS };
@@ -259,26 +309,7 @@ async function resolveOutbound(
     plan.push({ kind: "cold", address: rcpt });
   }
   if (plan.length === 0) return { reject: NOT_REVERSE_ALIAS };
-
-  const targets: OutboundTarget[] = [];
-  for (const entry of plan) {
-    if (entry.kind === "reply") {
-      targets.push({ contact: entry.contact, kind: "reply" });
-      continue;
-    }
-    const { contact } = await findOrCreateContact(
-      opts.db,
-      scope,
-      { address: entry.address },
-      "to",
-      {
-        mailDomain: opts.mailDomain,
-        automaticCreated: false,
-      },
-    );
-    targets.push({ contact, kind: "cold" });
-  }
-  return { alias, targets, mode: "send" };
+  return { alias, plan, mode: "send" };
 }
 
 /** Handle a completed authenticated submission. */
@@ -299,28 +330,21 @@ async function handleSubmissionData(
     envelope.rcptTo.map((r) => r.address),
   );
   if ("reject" in resolved) return resolved.reject;
-  const { alias, targets, mode } = resolved;
+  const { alias, plan, mode } = resolved;
 
   const parsed = parseMessage(event.raw);
-  const emailLogs = [];
-  for (const target of targets) {
-    emailLogs.push(
-      await createReplyLog(opts.db, {
-        userId: user.id,
-        contactId: target.contact.id,
-        aliasId: alias.id,
-        mailboxId: alias.mailboxId,
-      }),
-    );
-  }
-  const primaryLog = emailLogs[0]!;
-
   const aliasDomain = alias.email.slice(alias.email.indexOf("@") + 1);
+
+  // The rewrite (with its To/Cc leak screen) runs BEFORE anything is
+  // written: a refusal — envelope earlier, headers here — leaves no contact
+  // and no email_log behind. The public Message-ID is therefore minted
+  // independently of any log row id.
   const result = await rewriteReply(
     { headers: parsed.headers },
     {
       alias: { email: alias.email, name: alias.name },
-      emailLogId: primaryLog.id,
+      emailLogId: 0, // unused: generateMessageId below never embeds it
+      generateMessageId: () => `<${randomUUID()}@${aliasDomain}>`,
       resolveReverseAlias: async (addr) => {
         const contact = await resolveReverseAlias(opts.db, addr);
         if (contact === null || contact.userId !== user.id || contact.aliasId !== alias.id) {
@@ -342,15 +366,9 @@ async function handleSubmissionData(
           : {
               screen: async (addr) => {
                 const normalized = addr.trim().toLowerCase();
-                const candidates = [normalized];
-                const stripped = normalized.replace(/^([^@+]+)\+[^@]*(@.*)$/, "$1$2");
-                if (stripped !== normalized) candidates.push(stripped);
-                const rows = await opts.db
-                  .select({ id: mailboxes.id })
-                  .from(mailboxes)
-                  .where(and(eq(mailboxes.userId, user.id), inArray(mailboxes.email, candidates)))
-                  .limit(1);
-                if (rows[0] !== undefined) return "mailbox_address";
+                if (await isOwnMailboxAddress(opts.db, user.id, normalized)) {
+                  return "mailbox_address";
+                }
                 // Non-null here means SOME reverse alias — this alias's own
                 // were already translated by resolveReverseAlias above.
                 if ((await resolveReverseAlias(opts.db, normalized)) !== null) {
@@ -370,6 +388,39 @@ async function handleSubmissionData(
         `${result.refusal.header} entry ${result.refusal.address}`,
     );
     return result.refusal.reason === "mailbox_address" ? MAILBOX_LEAK : NOT_REVERSE_ALIAS;
+  }
+
+  // The whole message is accepted — NOW mint cold contacts and the per-
+  // target email_logs (metadata for threading + bounce accounting).
+  const scope = { userId: user.id, aliasId: alias.id };
+  const targets: OutboundTarget[] = [];
+  for (const entry of plan) {
+    if (entry.kind === "reply") {
+      targets.push({ contact: entry.contact, kind: "reply" });
+      continue;
+    }
+    const { contact } = await findOrCreateContact(
+      opts.db,
+      scope,
+      { address: entry.address },
+      "to",
+      {
+        mailDomain: opts.mailDomain,
+        automaticCreated: false,
+      },
+    );
+    targets.push({ contact, kind: "cold" });
+  }
+  const emailLogs = [];
+  for (const target of targets) {
+    emailLogs.push(
+      await createReplyLog(opts.db, {
+        userId: user.id,
+        contactId: target.contact.id,
+        aliasId: alias.id,
+        mailboxId: alias.mailboxId,
+      }),
+    );
   }
 
   // Persist the Message-ID pair so future forwards/replies can thread.

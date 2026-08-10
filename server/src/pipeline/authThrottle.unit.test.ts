@@ -43,6 +43,18 @@ describe("createAuthThrottle", () => {
     expect(throttle.isLimited("c", at(4))).toBe(true);
   });
 
+  test("a limited key survives a churn of cheap one-failure keys", () => {
+    // The attack this guards: burn the victim key to the limit, then flood
+    // unknown-username failures so eviction would flush the victim and
+    // re-open the hashing path. Eviction must prefer non-limited keys.
+    const throttle = createAuthThrottle({ windowMs: 60_000, maxFailures: 2, maxKeys: 2 });
+    throttle.recordFailure("victim", at(0));
+    throttle.recordFailure("victim", at(1));
+    expect(throttle.isLimited("victim", at(2))).toBe(true);
+    for (let i = 0; i < 50; i++) throttle.recordFailure(`junk-${i}`, at(3 + i));
+    expect(throttle.isLimited("victim", at(60))).toBe(true);
+  });
+
   test("authThrottleKey normalizes the username", () => {
     expect(authThrottleKey("10.0.0.1", "  Wes@QMail.com ")).toBe("10.0.0.1|wes@qmail.com");
   });

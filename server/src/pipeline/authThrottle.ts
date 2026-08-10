@@ -49,20 +49,43 @@ export function createAuthThrottle(opts: AuthThrottleOptions = {}): AuthThrottle
     return times;
   };
 
+  // How many stale entries an eviction pass may inspect. Bounds the work of
+  // a single recordFailure while still letting eviction prefer NON-limited
+  // keys — a flood of cheap unknown-username failures must not be able to
+  // push a currently-limited (attacked) key out of the map and re-open the
+  // hashing path for it.
+  const EVICTION_SCAN_LIMIT = 100;
+
+  const touch = (key: string, times: number[]) => {
+    failures.delete(key); // re-insert to move the key to the recent end
+    failures.set(key, times);
+  };
+
   return {
     isLimited(key, now = new Date()) {
-      return liveTimes(key, now.getTime()).length >= maxFailures;
+      const times = liveTimes(key, now.getTime());
+      if (times.length < maxFailures) return false;
+      touch(key, times); // a limited key stays recent for as long as it's probed
+      return true;
     },
     recordFailure(key, now = new Date()) {
       const nowMs = now.getTime();
       const times = liveTimes(key, nowMs);
       times.push(nowMs);
-      failures.delete(key); // re-insert to move the key to the recent end
-      failures.set(key, times);
-      if (failures.size > maxKeys) {
-        const oldest = failures.keys().next().value;
-        if (oldest !== undefined) failures.delete(oldest);
+      touch(key, times);
+      if (failures.size <= maxKeys) return;
+      // Evict the oldest NON-limited key (scan-bounded); only when every
+      // scanned key is itself limited fall back to the oldest outright.
+      let scanned = 0;
+      for (const candidate of failures.keys()) {
+        if (candidate === key || ++scanned > EVICTION_SCAN_LIMIT) break;
+        if (liveTimes(candidate, nowMs).length < maxFailures) {
+          failures.delete(candidate);
+          return;
+        }
       }
+      const oldest = failures.keys().next().value;
+      if (oldest !== undefined && oldest !== key) failures.delete(oldest);
     },
     clear(key) {
       failures.delete(key);

@@ -200,7 +200,9 @@ export async function evaluateRcpt(
     }
 
     // The full delivery set: primary + alias_mailboxes extras, healthy ones
-    // only, primary first, deduped by id.
+    // only (verified AND not disabled — same bar as the trash mailbox and the
+    // mailbox-set validation), primary first, deduped by id. Never forward to
+    // an address the user has not proven they control.
     if (alias !== null && alias.enabled) {
       const extraRows = await db
         .select({ mailbox: mailboxes })
@@ -210,7 +212,7 @@ export async function evaluateRcpt(
         .orderBy(mailboxes.id);
       const seen = new Set<number>();
       for (const mb of [mailbox, ...extraRows.map((r) => r.mailbox)]) {
-        if (mb === null || mb.disabled || seen.has(mb.id)) continue;
+        if (mb === null || mb.disabled || !mb.verified || seen.has(mb.id)) continue;
         seen.add(mb.id);
         deliveryMailboxes.push(mb);
       }

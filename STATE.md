@@ -95,9 +95,11 @@ Return-Path can't kill a live code. Also resolved: the mx prepends a
 `Received:` trace header, and submission AUTH sits behind a per-(IP,username)
 failed-attempt throttle (`pipeline/authThrottle.ts`) so wrong passwords can't
 buy unbounded argon2id work. Known residual: an auto-responder that emits
-multipart/report — nonstandard but possible — still counts as a bounce; and
-the forward/reply VERP intake paths take any mail to the VERP address at face
-value, as before this wave.)
+multipart/report — nonstandard but possible — still counts as a bounce; the
+forward/reply VERP intake paths take any mail to the VERP address at face
+value, as before this wave; and a broken trash mailbox fails silently — trash
+copies ride the null reverse path by design (PLAN #11), so nothing bumps its
+nb_failed_checks.)
 
 ## Not started
 

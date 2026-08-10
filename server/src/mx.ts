@@ -188,14 +188,11 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   }
 
   // Trace header for the hop we handled (RFC 5321 §4.4): topmost on every
-  // forwarded copy, above the auth results we prepend.
-  const receivedField = parseMessage(
-    encoder.encode(
-      `Received: from ${envelope.heloName || "unknown"} (${session.remoteAddress})\r\n` +
-        `\tby ${opts.mailHostname} (virtu) with ESMTP;\r\n` +
-        `\t${formatDateHeader(new Date())}\r\n`,
-    ),
-  ).headers.fields[0]!;
+  // forwarded copy, above the auth results we prepend. HeaderBlock folds
+  // and sanitizes at serialize time.
+  const receivedValue =
+    `from ${envelope.heloName || "unknown"} (${session.remoteAddress}) ` +
+    `by ${opts.mailHostname} (virtu) with ESMTP; ${formatDateHeader(new Date())}`;
 
   // 4. Forward pipeline per deliverable recipient × delivery mailbox (an
   //    alias can deliver to several mailboxes; each copy gets its own
@@ -232,7 +229,7 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       // Prepend the auth results (fields keep their raw bytes → verbatim),
       // then our Received on top.
       rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
-      rewritten.fields.unshift({ ...receivedField });
+      rewritten.prepend("Received", receivedValue);
       if (verification.verdict.action === "flag") {
         rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
       }
@@ -264,12 +261,19 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
         message = signed.message;
       }
 
-      const envelopeFrom = buildVerp({
-        type: "bounce_forward",
-        id: emailLog.id,
-        secret: opts.verpSecret,
-        domain: opts.mailDomain,
-      });
+      // Trash copies use the NULL reverse path: an off alias must not start
+      // emitting delivery-failure signals (DSNs to the outside sender,
+      // bounce accounting) that accept-and-drop never produced. A broken
+      // trash mailbox fails silently in the queue log — the dumpster's
+      // health is the user's dashboard concern, not the sender's.
+      const envelopeFrom = isTrash
+        ? ""
+        : buildVerp({
+            type: "bounce_forward",
+            id: emailLog.id,
+            secret: opts.verpSecret,
+            domain: opts.mailDomain,
+          });
       const queueId = await enqueue(opts.db, {
         raw: message,
         envelopeFrom,

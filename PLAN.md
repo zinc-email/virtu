@@ -363,7 +363,10 @@ Settled (2026-08-08):
     PUT /mailboxes/:id `{trash}`). Mail for a disabled ("off") alias is then
     forwarded there — stamped `X-Virtu-Trash: YES (alias disabled)` — instead
     of accept-and-dropped; with no trash mailbox the default accept-and-drop
-    stands. Either way the sender sees 250: existence is never probed.
+    stands. Either way the sender sees 250: existence is never probed. Trash
+    copies are enqueued with the NULL reverse path — an off alias must not
+    start emitting DSNs or bounce accounting that accept-and-drop never
+    produced; a broken trash mailbox fails silently in the queue log.
 12. **Multi-mailbox delivery** (2026-08-10). An alias delivers one copy per
     associated mailbox (primary + `alias_mailboxes` extras, unhealthy ones
     skipped), each copy with its own email_log and VERP so bounce accounting

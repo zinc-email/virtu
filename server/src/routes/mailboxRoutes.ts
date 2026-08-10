@@ -12,12 +12,12 @@
 //                               the trash mailbox clears users.trash_mailbox_id
 //                               via its ON DELETE SET NULL)
 
-import { count, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { db } from "../db";
-import { aliases, deletedAliases, mailboxes, users } from "../db/schema";
+import { aliases, aliasMailboxes, deletedAliases, mailboxes, users } from "../db/schema";
 import {
   consumeVerificationCode,
   createVerificationCode,
@@ -73,17 +73,28 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
     defaultMailboxId: number | null,
     trashMailboxId: number | null,
   ) {
-    const [aliasCount] = await db
-      .select({ n: count() })
-      .from(aliases)
-      .where(eq(aliases.mailboxId, mb.id));
+    // An alias delivers to this mailbox when it is the primary (aliases.mailbox_id)
+    // OR a member of the alias_mailboxes extras (multi-mailbox delivery). Count
+    // the distinct aliases across both so an extras-only mailbox never reads
+    // "0 aliases" (which would let the delete dialog silently sever delivery).
+    const [primaryRows, extraRows] = await Promise.all([
+      db.select({ aliasId: aliases.id }).from(aliases).where(eq(aliases.mailboxId, mb.id)),
+      db
+        .select({ aliasId: aliasMailboxes.aliasId })
+        .from(aliasMailboxes)
+        .where(eq(aliasMailboxes.mailboxId, mb.id)),
+    ]);
+    const aliasIds = new Set([
+      ...primaryRows.map((r) => r.aliasId),
+      ...extraRows.map((r) => r.aliasId),
+    ]);
     return {
       id: mb.id,
       email: mb.email,
       verified: mb.verified,
       default: defaultMailboxId === mb.id,
       creation_timestamp: timestampOf(mb.createdAt),
-      nb_alias: aliasCount?.n ?? 0,
+      nb_alias: aliasIds.size,
       trash: trashMailboxId === mb.id,
     };
   }

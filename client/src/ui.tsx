@@ -532,7 +532,11 @@ export function CopyButton({ text, className }: { text: string; className?: stri
     <Button
       type="button"
       size="tiny"
-      className={cx(css({ fontSize: "0.7rem", padding: "0.33rem 0.6rem" }), className)}
+      className={cx(
+        // Never collapses or wraps, wherever a flex row squeezes it.
+        css({ fontSize: "0.7rem", padding: "0.33rem 0.6rem", flexShrink: 0, whiteSpace: "nowrap" }),
+        className,
+      )}
       onClick={() => {
         void navigator.clipboard.writeText(text);
         setCopied(true);

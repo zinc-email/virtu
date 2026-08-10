@@ -55,33 +55,47 @@ function RecordSection({
       {verified ? (
         <p className={css({ color: "primary", marginTop: "1rem" })}>✓ {successText}</p>
       ) : (
-        <KeyValue>
-          {records.map((r) => (
-            <div
-              key={`${r.type}-${r.hostname}-${r.value}`}
-              className={css({ display: "contents" })}
-            >
+        records.map((r) => (
+          <div key={`${r.type}-${r.hostname}-${r.value}`}>
+            <KeyValue>
               <KV k="Type">{r.type}</KV>
               <KV k="Name">
                 <span className={css({ overflowWrap: "anywhere" })}>{r.hostname}</span>
               </KV>
               {r.priority !== undefined && <KV k="Priority">{r.priority}</KV>}
-              <KV k={r.type === "MX" ? "Target" : "Value"}>
-                <div
-                  className={css({
-                    display: "flex",
-                    gap: "0.6rem",
-                    alignItems: "flex-start",
-                    justifyContent: "space-between",
-                  })}
-                >
-                  <span className={css({ overflowWrap: "anywhere", minWidth: 0 })}>{r.value}</span>
-                  <CopyButton text={r.value} />
-                </div>
-              </KV>
+            </KeyValue>
+            {/* Long values (DKIM keys) never wrap: the legacy code-block
+                treatment — one line, scroll horizontally, copy beside it. */}
+            <div
+              className={css({
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+                marginTop: "-2rem",
+                marginBottom: "3rem",
+              })}
+            >
+              <code
+                className={css({
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  fontFamily: "mono",
+                  fontSize: "0.9rem",
+                  lineHeight: "1.4rem",
+                  color: "text",
+                  backgroundColor: "surfaceHover",
+                  borderRadius: "0.25rem",
+                  padding: "1rem 1.2rem",
+                  whiteSpace: "nowrap",
+                  overflowX: "auto",
+                })}
+              >
+                {r.value}
+              </code>
+              <CopyButton text={r.value} />
             </div>
-          ))}
-        </KeyValue>
+          </div>
+        ))
       )}
     </section>
   );

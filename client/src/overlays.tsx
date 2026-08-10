@@ -33,6 +33,13 @@ const drawerCss = css({
   borderBottom: "none",
   borderRight: "none",
   overflowY: "auto",
+  // Phones: a 92vw card crams — take the whole screen instead. maxWidth must
+  // come along: the UA stylesheet caps <dialog> at calc(100% - 6px - 2em).
+  "@media (max-width: 650px)": {
+    width: "100dvw",
+    maxWidth: "100dvw",
+    borderLeft: "none",
+  },
 });
 
 const headerCss = css({

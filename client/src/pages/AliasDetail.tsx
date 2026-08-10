@@ -25,6 +25,7 @@ import {
   Button,
   Checklist,
   CopyButton,
+  EmailBreak,
   EntityList,
   EntityRow,
   Section,
@@ -38,19 +39,6 @@ const ACTION_LABEL: Record<string, string> = {
   block: "Blocked",
   bounced: "Bounced",
 };
-
-// Break long addresses before the @ like the legacy page did with <wbr>.
-function EmailBreak({ email }: { email: string }) {
-  const at = email.indexOf("@");
-  if (at < 0) return <>{email}</>;
-  return (
-    <>
-      {email.slice(0, at)}
-      <wbr />
-      {email.slice(at)}
-    </>
-  );
-}
 
 export function AliasDetailPage() {
   const params = useParams({ strict: false });

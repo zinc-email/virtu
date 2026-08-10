@@ -24,6 +24,7 @@ import { BillingPage } from "src/pages/Billing";
 import { DomainDetailPage } from "src/pages/DomainDetail";
 import { DomainsPage } from "src/pages/Domains";
 import { LoginPage } from "src/pages/Login";
+import { MailboxDetailPage } from "src/pages/MailboxDetail";
 import { MailboxesPage } from "src/pages/Mailboxes";
 import { SettingsPage } from "src/pages/Settings";
 import { Drawer } from "src/overlays";
@@ -87,7 +88,9 @@ function activeNavItem(path: string): string {
   return "";
 }
 
-// The collapsed menu: same items, stacked with room to tap, plus Log out.
+// The collapsed menu: same items, stacked with room to tap. Log out is NOT a
+// nav item — it sits with the theme toggle in a quiet meta section pinned to
+// the bottom, where it can't be fat-fingered.
 function MobileMenu({
   opened,
   onClose,
@@ -117,28 +120,51 @@ function MobileMenu({
   });
   return (
     <Drawer opened={opened} onClose={onClose} title={<Logo size="2.2rem" />}>
-      <nav>
-        <ul className={css({ listStyle: "none", margin: 0, padding: 0 })}>
-          {NAV_ITEMS.map((item) => (
-            <li key={item.to}>
-              <Link
-                to={item.to}
-                onClick={onClose}
-                className={cx(
-                  itemCss,
-                  item.to === active
-                    ? css({ color: "navLinkActive", fontWeight: "bold", borderColor: "primary" })
-                    : undefined,
-                )}
-              >
-                {item.label}
-              </Link>
-            </li>
-          ))}
+      <div
+        className={css({
+          display: "flex",
+          flexDirection: "column",
+          // Fill the drawer below its header (padding 1.5rem+2rem, logo
+          // 2.2rem + 1.5rem margin) so the meta section pins to the bottom.
+          minHeight: "calc(100dvh - 7.2rem)",
+        })}
+      >
+        <nav>
+          <ul className={css({ listStyle: "none", margin: 0, padding: 0 })}>
+            {NAV_ITEMS.map((item) => (
+              <li key={item.to}>
+                <Link
+                  to={item.to}
+                  onClick={onClose}
+                  className={cx(
+                    itemCss,
+                    item.to === active
+                      ? css({ color: "navLinkActive", fontWeight: "bold", borderColor: "primary" })
+                      : undefined,
+                  )}
+                >
+                  {item.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <ul
+          className={css({
+            listStyle: "none",
+            margin: 0,
+            marginTop: "auto",
+            padding: "2rem 0 0 0",
+            display: "flex",
+            gap: "1.5rem",
+            fontSize: "0.8rem",
+            lineHeight: "0.8rem",
+          })}
+        >
           <li>
             <button
               type="button"
-              className={itemCss}
+              className={footerLink}
               onClick={() => {
                 onClose();
                 onLogout();
@@ -147,8 +173,11 @@ function MobileMenu({
               Log out
             </button>
           </li>
+          <li>
+            <ThemeToggle />
+          </li>
         </ul>
-      </nav>
+      </div>
     </Drawer>
   );
 }
@@ -200,8 +229,15 @@ function Shell() {
   const isAuthPage = path === "/login" || path === "/register";
   const isAliasDetail = path.startsWith("/aliases/");
   const isDomainDetail = path.startsWith("/domains/");
+  const isMailboxDetail = path.startsWith("/mailboxes/");
   // Detail pages swap the logo for the big back arrow.
-  const backTo = isAliasDetail ? "/" : isDomainDetail ? "/domains" : null;
+  const backTo = isAliasDetail
+    ? "/"
+    : isDomainDetail
+      ? "/domains"
+      : isMailboxDetail
+        ? "/mailboxes"
+        : null;
   const authed = Boolean(getApiKey());
   const active = activeNavItem(path);
 
@@ -371,6 +407,13 @@ const mailboxesRoute = createRoute({
   component: MailboxesPage,
 });
 
+const mailboxDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/mailboxes/$mailboxId",
+  beforeLoad: requireAuth,
+  component: MailboxDetailPage,
+});
+
 const domainsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/domains",
@@ -442,6 +485,7 @@ export const router = createRouter({
     indexRoute,
     aliasDetailRoute,
     mailboxesRoute,
+    mailboxDetailRoute,
     domainsRoute,
     domainDetailRoute,
     billingRoute,

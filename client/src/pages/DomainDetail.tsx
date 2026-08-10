@@ -20,7 +20,7 @@ import {
   type VerifyCustomDomainResponse,
 } from "src/gen";
 import { Dialog } from "src/overlays";
-import { Alert, Button, CodeBlock, KV, KeyValue, Section, Switch, ui } from "src/ui";
+import { Alert, Button, CodeBlock, KV, KVSwitch, KeyValue, Section, ui } from "src/ui";
 
 // One published-record section: explainer, success state or the rows to
 // enter at the DNS provider, and what the last verify found when it failed.
@@ -188,6 +188,17 @@ export function DomainDetailPage() {
   }
 
   const records = dns.data.records;
+  // The record sections are long — the verify button renders at the top AND
+  // beneath them, so retrying never means scrolling.
+  const verifyButton = (
+    <Button
+      variant="submit"
+      loading={verify.isPending}
+      onClick={() => verify.mutate({ custom_domain_id: domain.id })}
+    >
+      {domain.is_verified || lastVerify !== null ? "Re-verify" : "Verify"}
+    </Button>
+  );
   const allGreen =
     lastVerify !== null &&
     lastVerify.ownership.ok &&
@@ -228,25 +239,20 @@ export function DomainDetailPage() {
         ))}
       {verify.isError && <Alert>{apiErrorMessage(verify.error)}</Alert>}
 
+      {!domain.is_verified && (
+        <div className={cx(ui.actionsCenter, css({ marginBottom: "2rem" }))}>{verifyButton}</div>
+      )}
+
       <KeyValue>
         <KV k="Domain">{domain.domain_name}</KV>
         <KV k="Status">{domain.is_verified ? "Verified" : "Not verified"}</KV>
-        <div className={kvSwitchRow}>
-          <dt className={kvSwitchKey}>Catch-all</dt>
-          <dd className={kvSwitchValue}>
-            <Switch
-              checked={domain.catch_all}
-              disabled={patch.isPending}
-              onChange={(v) =>
-                patch.mutate({ custom_domain_id: domain.id, data: { catch_all: v } })
-              }
-              label="Catch-all"
-            />
-            <span className={ui.finePrint}>
-              Mail to any address on this domain creates the alias on the fly.
-            </span>
-          </dd>
-        </div>
+        <KVSwitch
+          k="Catch-all"
+          checked={domain.catch_all}
+          disabled={patch.isPending}
+          onChange={(v) => patch.mutate({ custom_domain_id: domain.id, data: { catch_all: v } })}
+          hint="Mail to any address on this domain creates the alias on the fly."
+        />
       </KeyValue>
       {patch.isError && <Alert>{apiErrorMessage(patch.error)}</Alert>}
 
@@ -298,15 +304,7 @@ export function DomainDetailPage() {
           ? "You can re-verify any time to double-check your settings."
           : "Make sure the DNS configuration for this domain matches all of the records above, then click verify."}
       </p>
-      <div className={cx(ui.actionsCenter, css({ marginTop: "1rem" }))}>
-        <Button
-          variant="submit"
-          loading={verify.isPending}
-          onClick={() => verify.mutate({ custom_domain_id: domain.id })}
-        >
-          {domain.is_verified || lastVerify !== null ? "Re-verify" : "Verify"}
-        </Button>
-      </div>
+      <div className={cx(ui.actionsCenter, css({ marginTop: "1rem" }))}>{verifyButton}</div>
 
       <div className={cx(ui.actionsCenter, css({ marginTop: "4rem" }))}>
         <Button variant="link" onClick={() => setConfirmingDelete(true)}>
@@ -346,43 +344,3 @@ export function DomainDetailPage() {
     </Section>
   );
 }
-
-// A KeyValue row whose value is a control (the catch-all switch) — same
-// visual grammar as KV but with room for the switch + fine print.
-const kvSwitchRow = css({
-  display: "flex",
-  alignItems: "flex-start",
-  backgroundColor: "surface",
-  borderBottom: "1px solid token(colors.border)",
-  padding: "1.4rem 0.5rem 1.4rem 0.1rem",
-  "@media (max-width: 480px)": { flexDirection: "column", gap: "0.4rem", padding: "1.2rem 1rem" },
-});
-const kvSwitchKey = css({
-  flex: "0 0 20%",
-  minWidth: "10rem",
-  marginRight: "1.5rem",
-  paddingLeft: "1rem",
-  textAlign: "right",
-  color: "primary",
-  fontFamily: "mono",
-  paddingTop: "0.6rem",
-  "@media (max-width: 650px)": { minWidth: "6rem" },
-  "@media (max-width: 480px)": {
-    flexBasis: "auto",
-    minWidth: 0,
-    marginRight: 0,
-    paddingLeft: 0,
-    paddingTop: 0,
-    textAlign: "left",
-    fontSize: "0.85rem",
-  },
-});
-const kvSwitchValue = css({
-  flex: "0 1 80%",
-  margin: 0,
-  display: "flex",
-  alignItems: "center",
-  gap: "1rem",
-  flexWrap: "wrap",
-  "@media (max-width: 480px)": { flexBasis: "auto" },
-});

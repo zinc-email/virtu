@@ -270,6 +270,25 @@ export function TextArea({ label, hint, id, className, ...props }: TextAreaProps
   );
 }
 
+// An [input][button] pair sharing a row: the field stretches, the button
+// hangs off the end — and the button flows beneath the field on small
+// screens instead of squeezing it. Use for every add/create inline form.
+export function FieldRow({ field, button }: { field: ReactNode; button: ReactNode }) {
+  return (
+    <div
+      className={css({
+        display: "flex",
+        gap: "0.75rem",
+        alignItems: "flex-end",
+        "@media (max-width: 650px)": { flexDirection: "column", alignItems: "stretch" },
+      })}
+    >
+      <div className={css({ flex: 1, minWidth: 0, "& > div": { marginBottom: 0 } })}>{field}</div>
+      {button}
+    </div>
+  );
+}
+
 // A labeled group of native checkboxes (e.g. mailbox pickers).
 export function CheckboxGroup({
   label,
@@ -664,6 +683,74 @@ export function KV({ k, children }: { k: string; children: ReactNode }) {
   );
 }
 
+// A KeyValue row whose value is a Switch — state shown, not inferred from a
+// verb button. Same visual grammar as KV with room for the control + fine
+// print (e.g. domain catch-all, mailbox default/trash).
+const kvSwitchRow = css({
+  display: "flex",
+  alignItems: "flex-start",
+  backgroundColor: "surface",
+  borderBottom: "1px solid token(colors.border)",
+  padding: "1.4rem 0.5rem 1.4rem 0.1rem",
+  "@media (max-width: 480px)": { flexDirection: "column", gap: "0.4rem", padding: "1.2rem 1rem" },
+});
+const kvSwitchKey = css({
+  flex: "0 0 20%",
+  minWidth: "10rem",
+  marginRight: "1.5rem",
+  paddingLeft: "1rem",
+  textAlign: "right",
+  color: "primary",
+  fontFamily: "mono",
+  paddingTop: "0.6rem",
+  "@media (max-width: 650px)": { minWidth: "6rem" },
+  "@media (max-width: 480px)": {
+    flexBasis: "auto",
+    minWidth: 0,
+    marginRight: 0,
+    paddingLeft: 0,
+    paddingTop: 0,
+    textAlign: "left",
+    fontSize: "0.85rem",
+  },
+});
+const kvSwitchValue = css({
+  flex: "0 1 80%",
+  margin: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: "1rem",
+  flexWrap: "wrap",
+  "@media (max-width: 480px)": { flexBasis: "auto" },
+});
+
+export function KVSwitch({
+  k,
+  checked,
+  onChange,
+  disabled,
+  label,
+  hint,
+}: {
+  k: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  /** Accessible name for the switch (defaults to the row key). */
+  label?: string;
+  hint?: ReactNode;
+}) {
+  return (
+    <div className={kvSwitchRow}>
+      <dt className={kvSwitchKey}>{k}</dt>
+      <dd className={kvSwitchValue}>
+        <Switch checked={checked} onChange={onChange} disabled={disabled} label={label ?? k} />
+        {hint && <span className={ui.finePrint}>{hint}</span>}
+      </dd>
+    </div>
+  );
+}
+
 // An action row: no key, an amber "»" link as the value (legacy li.action).
 export function KVAction({ children }: { children: ReactNode }) {
   return (
@@ -746,17 +833,26 @@ const entityMeta = css({
   paddingRight: "2rem",
   "@media (max-width: 384px)": { paddingRight: "1rem" },
 });
+// Rows whose controls also live on a detail page hide them on small screens
+// (tap the row instead). "xs" ≈ phones, "md" ≈ anything below the desktop nav.
+const entityMetaHide = {
+  xs: css({ "@media (max-width: 480px)": { display: "none" } }),
+  md: css({ "@media (max-width: 900px)": { display: "none" } }),
+};
 
 export function EntityRow({
   title,
   detail,
   meta,
+  hideMetaBelow,
   to,
   params,
 }: {
   title: ReactNode;
   detail?: ReactNode;
   meta?: ReactNode;
+  /** Hide the meta controls below this breakpoint (the row link remains). */
+  hideMetaBelow?: keyof typeof entityMetaHide;
   to?: LinkProps["to"];
   params?: LinkProps["params"];
 }) {
@@ -775,7 +871,11 @@ export function EntityRow({
       ) : (
         <div className={entityBody}>{body}</div>
       )}
-      {meta != null && <div className={entityMeta}>{meta}</div>}
+      {meta != null && (
+        <div className={cx(entityMeta, hideMetaBelow ? entityMetaHide[hideMetaBelow] : undefined)}>
+          {meta}
+        </div>
+      )}
     </li>
   );
 }
@@ -902,6 +1002,19 @@ export const ui = {
     flexWrap: "wrap",
   }),
 };
+
+// Break long addresses before the @ like the legacy pages did with <wbr>.
+export function EmailBreak({ email }: { email: string }) {
+  const at = email.indexOf("@");
+  if (at < 0) return <>{email}</>;
+  return (
+    <>
+      {email.slice(0, at)}
+      <wbr />
+      {email.slice(at)}
+    </>
+  );
+}
 
 // Centered checklist rows with teal check icons (legacy ul.checklist).
 export function Checklist({ items }: { items: ReactNode[] }) {

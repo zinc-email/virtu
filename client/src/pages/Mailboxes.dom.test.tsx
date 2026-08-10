@@ -10,12 +10,15 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MailboxDetailPage } from "src/pages/MailboxDetail";
 import { MailboxesPage } from "src/pages/Mailboxes";
 import { SettingsPage } from "src/pages/Settings";
 import { renderPage } from "../../test/render";
 import { createUser, latestLoginCode } from "../../test/tooling";
 
 const uniqueEmail = () => `dom-${crypto.randomUUID()}@qmail.com`;
+
+const DETAIL_ROUTE = { path: "/mailboxes/$mailboxId", component: MailboxDetailPage };
 
 type User = ReturnType<typeof userEvent.setup>;
 
@@ -44,7 +47,7 @@ describe("MailboxesPage — real transport against the running stack", () => {
     const user = userEvent.setup();
     const mailboxEmail = uniqueEmail();
     await loginFreshUser();
-    renderPage(MailboxesPage, "/mailboxes");
+    renderPage(MailboxesPage, "/mailboxes", "", [DETAIL_ROUTE]);
 
     // The registration mailbox renders, verified and default.
     await screen.findByText("Your mailboxes.");
@@ -72,24 +75,43 @@ describe("MailboxesPage — real transport against the running stack", () => {
       { timeout: 15_000 },
     );
 
-    // Designate it as the trash inbox — actions scoped to ITS row, since
-    // every verified mailbox offers the same buttons.
-    const rowOf = (email: string) => {
-      const row = screen.getByText(email).closest("li");
-      if (!row) throw new Error(`no row for ${email}`);
-      return within(row);
-    };
-    await user.click(rowOf(mailboxEmail).getByRole("button", { name: "Use as trash" }));
-    await screen.findByText(/Trash inbox\./, undefined, { timeout: 15_000 });
-    // …exactly one holder of the flag, and the action flips to clear.
-    expect(screen.getAllByText(/Trash inbox\./).length).toBe(1);
-    await user.click(rowOf(mailboxEmail).getByRole("button", { name: "Clear trash" }));
+    // Verified rows carry no manage controls — the row links to the detail
+    // page, where trash/default are switches showing the current state.
+    const row = screen.getByText(mailboxEmail).closest("li");
+    if (!row) throw new Error(`no row for ${mailboxEmail}`);
+    expect(within(row).queryByRole("button")).toBeNull();
+    await user.click(within(row).getByRole("link"));
+
+    // Flip the trash switch on: the PUT + refetch round-trip lands back as a
+    // checked switch, and the index detail line gains the flag.
+    const trashSwitch = await screen.findByRole("switch", { name: "Trash inbox" });
+    expect(trashSwitch.getAttribute("aria-checked")).toBe("false");
+    await user.click(trashSwitch);
     await waitFor(
       () => {
-        expect(screen.queryByText(/Trash inbox\./)).toBeNull();
+        expect(
+          screen.getByRole("switch", { name: "Trash inbox" }).getAttribute("aria-checked"),
+        ).toBe("true");
       },
       { timeout: 15_000 },
     );
+
+    // …and off again.
+    await user.click(screen.getByRole("switch", { name: "Trash inbox" }));
+    await waitFor(
+      () => {
+        expect(
+          screen.getByRole("switch", { name: "Trash inbox" }).getAttribute("aria-checked"),
+        ).toBe("false");
+      },
+      { timeout: 15_000 },
+    );
+
+    // The non-default mailbox's Default switch is live; the flag can move
+    // but never switch off, so the holder's switch would be disabled.
+    const defaultSwitch = screen.getByRole("switch", { name: "Default" });
+    expect(defaultSwitch.getAttribute("aria-checked")).toBe("false");
+    expect(defaultSwitch.hasAttribute("disabled")).toBe(false);
   }, 60_000);
 
   test("an unverified mailbox offers the code entry, not the manage actions", async () => {

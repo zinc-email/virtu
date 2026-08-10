@@ -112,6 +112,9 @@ export function AliasesPage() {
               params={{ aliasId: String(alias.id) }}
               title={alias.name || alias.email}
               detail={activityLine(alias)}
+              // Phones: the copy/toggle conveniences hide — tap the row, the
+              // detail page has them.
+              hideMetaBelow="xs"
               meta={
                 <>
                   <CopyButton text={alias.email} />

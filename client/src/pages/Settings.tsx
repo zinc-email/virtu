@@ -7,7 +7,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { css } from "styled-system/css";
+import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import {
   getSettingQueryKey,
@@ -28,6 +28,7 @@ import {
   Button,
   CopyButton,
   Field,
+  FieldRow,
   KV,
   KeyValue,
   Section,
@@ -83,8 +84,8 @@ function SmtpCredentialsSection() {
 
   return (
     <div className={css({ marginTop: "4rem" })}>
-      <h2 className={ui.h2}>SMTP passwords.</h2>
-      <p className={ui.finePrint}>
+      <h2 className={cx(ui.h2, css({ marginBottom: "1rem" }))}>SMTP passwords.</h2>
+      <p className={cx(ui.finePrint, css({ marginBottom: "2rem" }))}>
         One password per device — phone, laptop, mail client. Use your account email as the SMTP
         username on port 587 or 465. Revoke a device any time; the others keep working.
       </p>
@@ -129,8 +130,8 @@ function SmtpCredentialsSection() {
           create.mutate({ data: { name: trimmed } });
         }}
       >
-        <div className={css({ display: "flex", gap: "0.75rem", alignItems: "flex-end" })}>
-          <div className={css({ flex: 1, minWidth: 0, "& > div": { marginBottom: 0 } })}>
+        <FieldRow
+          field={
             <Field
               label="New device name"
               name="credential-name"
@@ -138,16 +139,18 @@ function SmtpCredentialsSection() {
               value={name}
               onChange={(e) => setName(e.currentTarget.value)}
             />
-          </div>
-          <Button
-            type="submit"
-            variant="submit"
-            loading={create.isPending}
-            className={css({ padding: "1rem 1.5rem 0.75rem 1.5rem", whiteSpace: "nowrap" })}
-          >
-            + Create
-          </Button>
-        </div>
+          }
+          button={
+            <Button
+              type="submit"
+              variant="submit"
+              loading={create.isPending}
+              className={css({ padding: "1rem 1.5rem 0.75rem 1.5rem", whiteSpace: "nowrap" })}
+            >
+              + Create
+            </Button>
+          }
+        />
       </form>
 
       {created !== null && (

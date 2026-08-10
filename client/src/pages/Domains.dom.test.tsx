@@ -54,8 +54,13 @@ describe("DomainsPage — real transport against the running stack", () => {
     expect(screen.getByText(`_dmarc.${domainName}`)).toBeTruthy();
 
     // Real DNS says no such records exist: every check fails, the UI says
-    // so, and the domain stays unverified.
-    await user.click(screen.getByRole("button", { name: "Verify" }));
+    // so, and the domain stays unverified. The verify button renders both
+    // above and beneath the record sections; either one runs the checks.
+    const verifyButtons = screen.getAllByRole("button", { name: "Verify" });
+    expect(verifyButtons.length).toBe(2);
+    const [topVerify] = verifyButtons;
+    if (!topVerify) throw new Error("no verify button");
+    await user.click(topVerify);
     await screen.findByText(/Sometimes DNS changes take a few minutes/, undefined, {
       timeout: 30_000,
     });

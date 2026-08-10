@@ -8,7 +8,17 @@ import { useState } from "react";
 import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import { getCustomDomainsQueryKey, useGetCustomDomains, usePostCustomDomains } from "src/gen";
-import { Alert, Button, Checklist, EntityList, EntityRow, Field, Section, ui } from "src/ui";
+import {
+  Alert,
+  Button,
+  Checklist,
+  EntityList,
+  EntityRow,
+  Field,
+  FieldRow,
+  Section,
+  ui,
+} from "src/ui";
 
 export function DomainsPage() {
   const navigate = useNavigate();
@@ -55,8 +65,8 @@ export function DomainsPage() {
         className={css({ marginTop: "2rem" })}
       >
         {create.isError && <Alert>{apiErrorMessage(create.error)}</Alert>}
-        <div className={css({ display: "flex", gap: "0.75rem", alignItems: "flex-end" })}>
-          <div className={css({ flex: 1, minWidth: 0, "& > div": { marginBottom: 0 } })}>
+        <FieldRow
+          field={
             <Field
               label="Add a domain"
               name="domain"
@@ -64,16 +74,18 @@ export function DomainsPage() {
               value={domain}
               onChange={(e) => setDomain(e.currentTarget.value)}
             />
-          </div>
-          <Button
-            type="submit"
-            variant="submit"
-            loading={create.isPending}
-            className={css({ padding: "1rem 1.5rem 0.75rem 1.5rem", whiteSpace: "nowrap" })}
-          >
-            + Add
-          </Button>
-        </div>
+          }
+          button={
+            <Button
+              type="submit"
+              variant="submit"
+              loading={create.isPending}
+              className={css({ padding: "1rem 1.5rem 0.75rem 1.5rem", whiteSpace: "nowrap" })}
+            >
+              + Add
+            </Button>
+          }
+        />
         <p className={cx(ui.finePrint, css({ marginTop: "0.8rem", marginBottom: 0 }))}>
           You'll get the DNS records to publish on the next screen.
         </p>
@@ -89,25 +101,14 @@ export function DomainsPage() {
         ) : rows.length > 0 ? (
           <EntityList>
             {rows.map((d) => (
+              // Verification is a whole flow, not a row action — the row
+              // links to the detail page, which owns the verify button.
               <EntityRow
                 key={d.id}
                 to="/domains/$domainId"
                 params={{ domainId: String(d.id) }}
                 title={d.domain_name}
                 detail={d.is_verified ? "Verified." : "Not verified."}
-                meta={
-                  <Button
-                    size="tiny"
-                    onClick={() =>
-                      void navigate({
-                        to: "/domains/$domainId",
-                        params: { domainId: String(d.id) },
-                      })
-                    }
-                  >
-                    {d.is_verified ? "Details" : "Verify"}
-                  </Button>
-                }
               />
             ))}
           </EntityList>

@@ -65,6 +65,10 @@ describe("DomainsPage — real transport against the running stack", () => {
       timeout: 30_000,
     });
     expect(screen.getByText("Not verified")).toBeTruthy();
+    // Every failed check explains itself — NXDOMAIN means "nothing published
+    // yet" on all five sections (ownership, MX, SPF, DKIM, DMARC), never a
+    // bare failure with no message.
+    expect(screen.getAllByText(/this record isn't published yet/)).toHaveLength(5);
   }, 60_000);
 
   test("the index lists the domain; catch-all toggles and persists", async () => {

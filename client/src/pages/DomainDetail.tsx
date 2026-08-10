@@ -44,11 +44,30 @@ function RecordSection({
       <h2 className={ui.h2}>{title}</h2>
       <p className={cx(ui.lead, css({ marginTop: "0.8rem" }))}>{blurb}</p>
 
-      {check && !check.ok && check.errors.length > 0 && (
+      {check && !check.ok && (
         <Alert>
-          {check.errors.map((e) => (
-            <div key={e}>{e}</div>
-          ))}
+          {check.errors.length === 0 ? (
+            "We looked, and this record isn't published yet."
+          ) : (
+            <>
+              <div>This record isn't right yet. We found:</div>
+              {check.errors.map((e, i) => (
+                <div
+                  // Found DNS values can repeat across records; position keys them.
+                  // biome-ignore lint/suspicious/noArrayIndexKey: static list, re-rendered whole
+                  key={i}
+                  className={css({
+                    fontFamily: "mono",
+                    fontSize: "0.85rem",
+                    overflowWrap: "anywhere",
+                    marginTop: "0.4rem",
+                  })}
+                >
+                  {e}
+                </div>
+              ))}
+            </>
+          )}
         </Alert>
       )}
 

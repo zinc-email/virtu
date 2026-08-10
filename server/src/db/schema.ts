@@ -333,10 +333,13 @@ export const emailLogs = pgTable(
       .notNull(),
     aliasId: integer().references(() => aliases.id, { onDelete: "cascade" }),
     // Forward phase: the mailbox that receives the email. Reply phase: the
-    // mailbox that sent it.
-    mailboxId: integer().references(() => mailboxes.id, { onDelete: "cascade" }),
+    // mailbox that SENT it (DSNs route back there). SET NULL on mailbox
+    // deletion: the activity/threading history (message-id maps) must
+    // outlive the mailbox — cascading here would break thread
+    // reconstruction for every reply ever sent from a deleted mailbox.
+    mailboxId: integer().references(() => mailboxes.id, { onDelete: "set null" }),
     // On bounce, which mailbox the email bounced at.
-    bouncedMailboxId: integer().references(() => mailboxes.id, { onDelete: "cascade" }),
+    bouncedMailboxId: integer().references(() => mailboxes.id, { onDelete: "set null" }),
     isReply: boolean().default(false).notNull(),
     // E.g. alias disabled — the forward was blocked.
     blocked: boolean().default(false).notNull(),

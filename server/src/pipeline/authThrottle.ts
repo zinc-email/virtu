@@ -76,9 +76,17 @@ export function createAuthThrottle(opts: AuthThrottleOptions = {}): AuthThrottle
       const nowMs = now.getTime();
       const times = liveTimes(key, nowMs);
       if (times.length < maxFailures) return false;
-      // Trickle: quiet for trickleMs since the newest failure → admit one
-      // attempt (a failure re-arms the limit; a success clears the key).
-      if (nowMs - times[times.length - 1]! >= trickleMs) return false;
+      // Trickle: quiet for trickleMs since the newest failure → admit ONE
+      // attempt. The admission is recorded immediately — the verifier takes
+      // hundreds of ms, and N concurrent connections probing the same quiet
+      // gap must not all be admitted (that would void the CPU cap). A
+      // successful attempt clears the key; a failed one re-arms via
+      // recordFailure like any other.
+      if (nowMs - times[times.length - 1]! >= trickleMs) {
+        times.push(nowMs);
+        touch(key, times);
+        return false;
+      }
       touch(key, times); // a limited key stays recent for as long as it's probed
       return true;
     },

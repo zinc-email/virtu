@@ -64,7 +64,10 @@ describe("createAuthThrottle", () => {
     throttle.recordFailure("k", at(1_000));
     expect(throttle.isLimited("k", at(2_000))).toBe(true);
     expect(throttle.isLimited("k", at(6_500))).toBe(false); // quiet ≥ 5s → admitted
-    // A failed trickle attempt re-arms the limit immediately.
+    // The admission itself is recorded: a CONCURRENT probe in the same
+    // quiet gap is NOT admitted (one trickle slot, not one per connection).
+    expect(throttle.isLimited("k", at(6_600))).toBe(true);
+    // A failed trickle attempt re-arms the limit like any other failure.
     throttle.recordFailure("k", at(6_500));
     expect(throttle.isLimited("k", at(7_000))).toBe(true);
   });

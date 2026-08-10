@@ -17,13 +17,14 @@
  * `shouldDisable` is pure over bounce timestamps + an injected clock.
  */
 
-import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import {
   aliases,
   aliasMailboxes,
   type EmailLog,
   emailLogs,
+  type Mailbox,
   mailboxes,
   notifications,
   sentAlerts,
@@ -281,6 +282,14 @@ export async function recordTransactionalBounce(
   return { code, mailboxFlagged: false };
 }
 
+/**
+ * sent_alerts ledger key marking "the (alias, mailbox) bounce ledger restarts
+ * here" — written on detach so a fixed-and-re-added mailbox starts from zero.
+ */
+function ledgerResetType(aliasId: number, mailboxId: number): string {
+  return `bounce_ledger_reset_${aliasId}_${mailboxId}`;
+}
+
 /** Result of {@link recordBounce}. */
 export interface RecordBounceResult {
   emailLog: EmailLog | null;
@@ -331,9 +340,27 @@ export async function recordBounce(
     return { emailLog: log, aliasDisabled: false };
   }
 
-  const windowStart = new Date(
-    now.getTime() - BOUNCE_DISABLE_THRESHOLDS.distinctDaysWindow * DAY_MS,
-  );
+  // Per-(alias, mailbox) ledger window: bounded by the threshold window AND
+  // by the newest ledger-reset marker — a mailbox that was detached and
+  // later re-added starts from zero instead of being re-detached on its
+  // first hiccup by the same still-in-window rows.
+  let ledgerStart = new Date(now.getTime() - BOUNCE_DISABLE_THRESHOLDS.distinctDaysWindow * DAY_MS);
+  if (log.mailboxId !== null) {
+    const marker = (
+      await db
+        .select({ createdAt: sentAlerts.createdAt })
+        .from(sentAlerts)
+        .where(
+          and(
+            eq(sentAlerts.userId, alias.userId),
+            eq(sentAlerts.alertType, ledgerResetType(alias.id, log.mailboxId)),
+          ),
+        )
+        .orderBy(desc(sentAlerts.createdAt))
+        .limit(1)
+    )[0];
+    if (marker !== undefined && marker.createdAt > ledgerStart) ledgerStart = marker.createdAt;
+  }
   const bounceRows = await db
     .select({ bouncedAt: emailLogs.bouncedAt })
     .from(emailLogs)
@@ -348,7 +375,7 @@ export async function recordBounce(
         eq(emailLogs.bounced, true),
         eq(emailLogs.isReply, false),
         isNotNull(emailLogs.bouncedAt),
-        gt(emailLogs.bouncedAt, windowStart),
+        gt(emailLogs.bouncedAt, ledgerStart),
       ),
     );
   const bounceTimes = bounceRows.map((r) => r.bouncedAt).filter((d): d is Date => d !== null);
@@ -356,35 +383,68 @@ export async function recordBounce(
   const verdict = shouldDisable(bounceTimes, now);
   if (!verdict.disable) return { emailLog: log, aliasDisabled: false };
 
-  // Threshold tripped. If the alias delivers to other mailboxes as well,
-  // detach the dead one and keep the alias alive for the rest.
+  // Threshold tripped. If the alias delivers to other HEALTHY mailboxes as
+  // well, detach the dead one and keep the alias alive for the rest. All
+  // rows are re-read INSIDE the transaction and the promote is guarded —
+  // a concurrent mailbox-set change (replaceAliasMailboxes, API process)
+  // must win over this path's snapshot, never be clobbered by it.
   if (log.mailboxId !== null) {
     const deadMailboxId = log.mailboxId;
-    const extraRows = await db
-      .select({ mailboxId: aliasMailboxes.mailboxId })
-      .from(aliasMailboxes)
-      .where(eq(aliasMailboxes.aliasId, alias.id))
-      .orderBy(aliasMailboxes.mailboxId);
-    const others = [alias.mailboxId, ...extraRows.map((r) => r.mailboxId)].filter(
-      (id, i, all) => id !== deadMailboxId && all.indexOf(id) === i,
-    );
-    if (others.length > 0) {
-      await db.transaction(async (tx) => {
-        if (alias.mailboxId === deadMailboxId) {
-          // Dead primary: promote the first surviving mailbox.
-          await tx.update(aliases).set({ mailboxId: others[0]! }).where(eq(aliases.id, alias.id));
-          await tx
-            .delete(aliasMailboxes)
-            .where(
-              and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, others[0]!)),
-            );
-        }
+    const detached = await db.transaction(async (tx) => {
+      const fresh = (await tx.select().from(aliases).where(eq(aliases.id, alias.id)).limit(1))[0];
+      if (fresh === undefined || !fresh.enabled) return false;
+      const primaryRow = (
+        await tx.select().from(mailboxes).where(eq(mailboxes.id, fresh.mailboxId)).limit(1)
+      )[0];
+      const extraRows = await tx
+        .select({ mailbox: mailboxes })
+        .from(aliasMailboxes)
+        .innerJoin(mailboxes, eq(aliasMailboxes.mailboxId, mailboxes.id))
+        .where(eq(aliasMailboxes.aliasId, alias.id))
+        .orderBy(mailboxes.id);
+      // Survivors must be deliverable (the delivery set's own predicate):
+      // promoting an unverified/disabled mailbox would leave an enabled
+      // alias that silently drops everything.
+      const seen = new Set<number>();
+      const survivors: Mailbox[] = [];
+      for (const mb of [primaryRow, ...extraRows.map((r) => r.mailbox)]) {
+        if (mb === undefined || mb.id === deadMailboxId || seen.has(mb.id)) continue;
+        seen.add(mb.id);
+        if (!mb.verified || mb.disabled) continue;
+        survivors.push(mb);
+      }
+      if (survivors.length === 0) return false; // nothing healthy left → disable below
+
+      if (fresh.mailboxId === deadMailboxId) {
+        // Dead primary: promote the first healthy survivor — conditionally,
+        // so a primary changed since the read is left alone.
+        await tx
+          .update(aliases)
+          .set({ mailboxId: survivors[0]!.id })
+          .where(and(eq(aliases.id, alias.id), eq(aliases.mailboxId, deadMailboxId)));
         await tx
           .delete(aliasMailboxes)
           .where(
-            and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, deadMailboxId)),
+            and(
+              eq(aliasMailboxes.aliasId, alias.id),
+              eq(aliasMailboxes.mailboxId, survivors[0]!.id),
+            ),
           );
+      }
+      await tx
+        .delete(aliasMailboxes)
+        .where(
+          and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, deadMailboxId)),
+        );
+      // Durable ledger-reset marker (see the counting window above).
+      await tx.insert(sentAlerts).values({
+        userId: alias.userId,
+        toEmail: alias.email,
+        alertType: ledgerResetType(alias.id, deadMailboxId),
       });
+      return true;
+    });
+    if (detached) {
       await sendAlertOnce(db, {
         userId: alias.userId,
         toEmail: alias.email,

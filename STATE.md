@@ -49,7 +49,8 @@ password lifecycle (API create → real 587 send → revoke → 535), disabled
 alias → trash inbox with `X-Virtu-Trash` (and on-alias mail unmarked), and
 multi-mailbox fan-out (one send → both Maildirs, one email_log per mailbox;
 a dead extra mailbox detaches at the bounce threshold while the alias and
-its healthy primary keep going).
+its healthy primary keep going, and re-adding it starts a fresh bounce
+ledger — the detach writes a durable reset marker into sent_alerts).
 
 The live Stripe pass caught a real bug the self-signed tests missed
 (out-of-order `subscription.created` regressing status — fixed in `fdf36a2`

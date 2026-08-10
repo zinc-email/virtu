@@ -135,5 +135,50 @@ describe("multi-mailbox delivery", () => {
     const after = await getAlias(alias.id);
     expect(after?.enabled).toBe(true);
     expect(after?.mailboxId).toBe(fixture.mailbox.id);
+
+    // Re-adding the mailbox starts a FRESH ledger: the 13 old bounces sit
+    // behind the detach's reset marker, so one more bounce must NOT
+    // instantly re-detach it (the user was told to re-add once fixed).
+    await db
+      .insert(aliasMailboxes)
+      .values({ aliasId: alias.id, mailboxId: dead.id })
+      .onConflictDoNothing();
+    const extraId = newTestId();
+    await smtpSend({
+      host: milton.submission.host,
+      port: milton.submission.port,
+      from: milton.email,
+      to: alias.email,
+      data: buildMessage({
+        from: milton.email,
+        to: alias.email,
+        subject: "One fresh bounce after re-add",
+        testId: extraId,
+      }),
+    });
+    await waitForMail(wes, extraId, { timeoutMs: 60_000 });
+    // Wait for the 14th bounce to be recorded on the (alias, dead) ledger…
+    await pollUntil(
+      async () => {
+        const rows = await db
+          .select({ id: emailLogs.id })
+          .from(emailLogs)
+          .where(
+            and(
+              eq(emailLogs.aliasId, alias.id),
+              eq(emailLogs.mailboxId, dead.id),
+              eq(emailLogs.bounced, true),
+            ),
+          );
+        return rows.length >= 14 ? true : undefined;
+      },
+      { timeoutMs: 60_000, what: `the 14th bounce for alias ${alias.id}` },
+    );
+    // …the join row survives: one fresh bounce, not 13 stale ones.
+    const stillAttached = await db
+      .select({ id: aliasMailboxes.id })
+      .from(aliasMailboxes)
+      .where(and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, dead.id)));
+    expect(stillAttached).toHaveLength(1);
   }, 300_000);
 });

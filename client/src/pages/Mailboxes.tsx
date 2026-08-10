@@ -172,6 +172,11 @@ export function MailboxesPage() {
   const defaultMailbox = rows.find((m) => m.default);
 
   const actionsFor = (mb: Mailbox) => {
+    const deleteButton = (
+      <Button size="tiny" variant="cta" onClick={() => setDeleting(mb)}>
+        Delete
+      </Button>
+    );
     if (!mb.verified) {
       // A typo'd address will never verify — it must still be removable.
       return (
@@ -179,9 +184,7 @@ export function MailboxesPage() {
           <Button size="tiny" onClick={() => setVerifying(mb)}>
             Enter code
           </Button>
-          <Button size="tiny" variant="cta" onClick={() => setDeleting(mb)}>
-            Delete
-          </Button>
+          {deleteButton}
         </>
       );
     }
@@ -203,11 +206,7 @@ export function MailboxesPage() {
         >
           {mb.trash ? "Clear trash" : "Use as trash"}
         </Button>
-        {!mb.default && (
-          <Button size="tiny" variant="cta" onClick={() => setDeleting(mb)}>
-            Delete
-          </Button>
-        )}
+        {!mb.default && deleteButton}
       </>
     );
   };

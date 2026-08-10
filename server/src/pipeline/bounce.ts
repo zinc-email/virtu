@@ -156,6 +156,34 @@ export async function sendAlertOnce(db: Db, input: AlertInput): Promise<boolean>
   return true;
 }
 
+/** Message-shape facts for {@link looksLikeDsn}. */
+export interface DsnShapeFacts {
+  /** Envelope MAIL FROM ("" = the null reverse path). */
+  envelopeFrom: string;
+  /** Content-Type header value, if any. */
+  contentType?: string;
+  /** Auto-Submitted header value, if any (RFC 3834). */
+  autoSubmitted?: string;
+}
+
+/**
+ * True when a message addressed to one of our VERP addresses looks like a
+ * real delivery status notification rather than an auto-responder reply.
+ * Real DSNs are multipart/report (RFC 3464) or at least use the null
+ * reverse path; RFC 3834 auto-responses mark themselves `Auto-Submitted:
+ * auto-replied`. A vacation reply to a verification email's Return-Path
+ * must NOT count as a bounce — the email was delivered fine, and treating
+ * the reply as a failure would invalidate a perfectly live code.
+ */
+export function looksLikeDsn(facts: DsnShapeFacts): boolean {
+  if (facts.contentType !== undefined && /multipart\/report/i.test(facts.contentType)) {
+    return true;
+  }
+  if (facts.envelopeFrom !== "") return false;
+  const auto = facts.autoSubmitted?.trim().toLowerCase();
+  return auto === undefined || !auto.startsWith("auto-replied");
+}
+
 /** Result of {@link recordTransactionalBounce}. */
 export interface TransactionalBounceResult {
   /**

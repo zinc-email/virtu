@@ -35,7 +35,7 @@ import { type DnsResolver, signOutbound, verifyInbound } from "./mailauth/index.
 import { getOrCreateContact } from "./pipeline/contacts.ts";
 import { loadDkimKey } from "./pipeline/dkim.ts";
 import { makeVerifyResolver } from "./pipeline/dnsTxt.ts";
-import { recordBounce, recordTransactionalBounce } from "./pipeline/bounce.ts";
+import { looksLikeDsn, recordBounce, recordTransactionalBounce } from "./pipeline/bounce.ts";
 import {
   createBlockedLog,
   createForwardLog,
@@ -97,12 +97,25 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     );
   }
 
+  const parsed = parseMessage(event.raw);
+
   // 1. Bounce handling: VERP recipients route straight to their email_log
   //    (or, for transactional mail, to the verification_codes row).
   for (const rcpt of evaluated) {
     if (rcpt.decision.kind !== "verp") continue;
     const info = rcpt.decision.info;
     if (info.type === "transactional") {
+      // Only a DSN-shaped message counts: a vacation auto-reply to the
+      // verification email's Return-Path must not invalidate a live code.
+      const dsnish = looksLikeDsn({
+        envelopeFrom: envelope.mailFrom,
+        contentType: parsed.headers.get("Content-Type"),
+        autoSubmitted: parsed.headers.get("Auto-Submitted"),
+      });
+      if (!dsnish) {
+        log(`mx: ignored non-DSN mail to transactional VERP (ref ${info.id})`);
+        continue;
+      }
       const result = await recordTransactionalBounce(opts.db, info.id);
       log(
         `mx: transactional bounce (ref ${info.id})` +
@@ -141,7 +154,6 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     return rejectWith(v.code, v.enhanced, v.message);
   }
 
-  const parsed = parseMessage(event.raw);
   const fromValue = parsed.headers.get("From");
   const fromAddr: Address = (fromValue !== undefined
     ? parseAddressList(fromValue)[0]

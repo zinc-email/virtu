@@ -46,6 +46,7 @@ import {
 } from "./db/schema.ts";
 import { buildVerp, parseMessage, rewriteReply, serializeMessage } from "./mail/index.ts";
 import { signOutbound } from "./mailauth/index.ts";
+import { type AuthThrottle, authThrottleKey, createAuthThrottle } from "./pipeline/authThrottle.ts";
 import { findOrCreateContact, resolveReverseAlias } from "./pipeline/contacts.ts";
 import { selectReplyDkimKey } from "./pipeline/dkim.ts";
 import { createReplyLog, resolveOurMessageId, setMessageIdMap } from "./pipeline/emailLog.ts";
@@ -71,6 +72,8 @@ export interface SubmissionOptions {
   verpSecret: string;
   maxMessageSize: number;
   tls?: SmtpTlsConfig;
+  /** Failed-AUTH throttle override for tests; default {@link createAuthThrottle}. */
+  authThrottle?: AuthThrottle;
   log?: (message: string) => void;
 }
 
@@ -428,6 +431,11 @@ async function handleSubmissionData(
 
 /** The shared hook set both listeners run. */
 function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
+  // One throttle shared by both listeners (587 + 465): repeated bad
+  // credentials from one (address, username) get a 454 BEFORE any argon2id
+  // work — the amplification path a wrong password otherwise opens
+  // (account hash + every device credential, verified serially).
+  const throttle = opts.authThrottle ?? createAuthThrottle();
   return {
     hostname: opts.mailHostname,
     banner: "virtu submission",
@@ -436,8 +444,17 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
     // AUTH is refused (and unadvertised) before STARTTLS whenever TLS is
     // configured — the library's requireAuthTls default.
     onAuth: async (event) => {
+      const key = authThrottleKey(event.session.remoteAddress, event.username);
+      if (throttle.isLimited(key)) {
+        return rejectWith(454, "4.7.0", "Too many failed authentication attempts; try again later");
+      }
       const ok = await verifyCredentials(opts, event.username, event.password);
-      return ok ? { accept: true } : BAD_CREDENTIALS;
+      if (!ok) {
+        throttle.recordFailure(key);
+        return BAD_CREDENTIALS;
+      }
+      throttle.clear(key);
+      return { accept: true };
     },
     onMailFrom: async (event) => {
       if (event.session.authUser === undefined) return AUTH_REQUIRED;

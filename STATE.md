@@ -24,7 +24,7 @@ and the entire production/deploy story, which has not been started.
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~402 tests / 27 files | `just test-unit` | green |
+| Unit | ~412 tests / 28 files | `just test-unit` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit | `just check` | green |
 | Integration (API vs real Postgres) | 112 tests / 8 files | `just up && just db push && just test-int` | green |
 | Client DOM (real React vs running stack) | 8 tests / 3 files | `just up && just db push && just test-client` | green |
@@ -88,7 +88,16 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
 (Resolved 2026-08-10: transactional bounce intake — the VERP id now resolves
 to the verification_codes row in BOTH intake paths (mx inbound VERP + deliverd
 permanent failure): code invalidated, mailbox `nb_failed_checks` bumped,
-user notified. Also resolved: the mx now prepends a `Received:` trace header.)
+user notified; duplicate/late bounce copies are no-ops, and the mx path only
+accepts DSN-shaped mail (`looksLikeDsn`: multipart/report, or null reverse
+path without `Auto-Submitted: auto-replied`) so a vacation auto-reply to the
+Return-Path can't kill a live code. Also resolved: the mx prepends a
+`Received:` trace header, and submission AUTH sits behind a per-(IP,username)
+failed-attempt throttle (`pipeline/authThrottle.ts`) so wrong passwords can't
+buy unbounded argon2id work. Known residual: an auto-responder that emits
+multipart/report — nonstandard but possible — still counts as a bounce; and
+the forward/reply VERP intake paths take any mail to the VERP address at face
+value, as before this wave.)
 
 ## Not started
 

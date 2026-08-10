@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { shouldDisable } from "./bounce.ts";
+import { looksLikeDsn, shouldDisable } from "./bounce.ts";
 
 const NOW = new Date("2026-08-08T12:00:00Z");
 
@@ -66,5 +66,40 @@ describe("shouldDisable", () => {
 
   test("no bounces: allowed", () => {
     expect(shouldDisable([], NOW).disable).toBe(false);
+  });
+});
+
+describe("looksLikeDsn", () => {
+  test("multipart/report is a DSN regardless of envelope sender", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "mailer-daemon@qmail.com",
+        contentType: 'multipart/report; report-type=delivery-status; boundary="b"',
+      }),
+    ).toBe(true);
+  });
+
+  test("null reverse path without Auto-Submitted counts as a DSN", () => {
+    expect(looksLikeDsn({ envelopeFrom: "" })).toBe(true);
+  });
+
+  test("null reverse path with Auto-Submitted: auto-generated counts (postfix DSNs)", () => {
+    expect(looksLikeDsn({ envelopeFrom: "", autoSubmitted: "auto-generated" })).toBe(true);
+  });
+
+  test("a vacation auto-reply (auto-replied) is NOT a DSN even with null sender", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: "text/plain; charset=utf-8",
+        autoSubmitted: "auto-replied",
+      }),
+    ).toBe(false);
+  });
+
+  test("ordinary mail with a real sender is NOT a DSN", () => {
+    expect(looksLikeDsn({ envelopeFrom: "milton@initech.com", contentType: "text/plain" })).toBe(
+      false,
+    );
   });
 });

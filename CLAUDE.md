@@ -153,7 +153,9 @@ Registration requires an emailed 6-digit code, and the dev stack runs no
   installs from `bun.lock`; no npm/npx anywhere. The HMR ws path is
   `/app/rsbuild-hmr` (`dev.client.path` in rsbuild.config.ts) so ALL
   client traffic stays under `/app` and the proxy needs no special ws
-  route. Revisit when Bun's `node:http` upgrade works.
+  route. Upstream bug oven-sh/bun#35325, fixed for Bun 1.4.0 (unreleased):
+  when that ships, collapse client-deps + client back to one `oven/bun`
+  container and re-verify HMR.
 - `server/.env` is gitignored (holds Stripe test keys). `server/.env.example`
   documents every var.
 

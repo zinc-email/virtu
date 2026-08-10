@@ -21,11 +21,12 @@ afterAll(async () => {
   await app.close();
 });
 
-// Every SimpleLogin-compatible route we ship, as spec paths (the /api prefix
-// lives in `servers`, not in the path keys).
+// Every route we ship, as spec paths (the /api prefix lives in `servers`,
+// not in the path keys). Auth deviates from SimpleLogin: passwordless
+// login/verify instead of register/login.
 const EXPECTED: [string, string][] = [
-  ["/auth/register", "post"],
   ["/auth/login", "post"],
+  ["/auth/verify", "post"],
   ["/user_info", "get"],
   ["/v2/aliases", "get"],
   ["/v2/aliases", "post"],

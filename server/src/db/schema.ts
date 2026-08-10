@@ -44,41 +44,55 @@ const timestamps = {
 // Accounts
 // ---------------------------------------------------------------------------
 
-export const users = pgTable("users", {
-  id: id(),
-  email: varchar({ length: 256 }).unique().notNull(),
-  name: varchar({ length: 128 }),
-  // Bun.password argon2id encoded string (includes salt + params).
-  passwordHash: text().notNull(),
-  // TODO(MVP): email verification is skipped — register activates immediately.
-  activated: boolean().default(false).notNull(),
-  // An account can be disabled for harmful behavior.
-  disabled: boolean().default(false).notNull(),
-  // Lifetime premium (no subscription needed).
-  lifetime: boolean().default(false).notNull(),
-  // User can use all premium features until this date.
-  trialEnd: timestamp({ withTimezone: true, mode: "date" }),
-  // The mailbox used when creating a new alias. Nullable only because of the
-  // users <-> mailboxes FK cycle; in practice always set after registration.
-  defaultMailboxId: integer().references((): AnyPgColumn => mailboxes.id),
-  // Stricter per-user spam threshold (null = server default).
-  maxSpamScore: integer(),
-  // Whether the user receives notification emails.
-  notification: boolean().default(true).notNull(),
-  // Settings (SimpleLogin GET/PATCH /setting) — values zod-validated at the
-  // route layer: alias_generator word|uuid, sender_format AT|A|NAME_ONLY|
-  // AT_ONLY|NO_NAME, random_alias_suffix word|random_string.
-  aliasGenerator: varchar({ length: 16 }).default("word").notNull(),
-  senderFormat: varchar({ length: 16 }).default("AT").notNull(),
-  randomAliasSuffix: varchar({ length: 16 }).default("random_string").notNull(),
-  defaultAliasDomain: varchar({ length: 128 }),
-  // Bitfield for misc account flags (SimpleLogin User.flags).
-  flags: bigint({ mode: "number" }).default(0).notNull(),
-  ...timestamps,
-});
+export const users = pgTable(
+  "users",
+  {
+    id: id(),
+    email: varchar({ length: 256 }).unique().notNull(),
+    name: varchar({ length: 128 }),
+    // Auth is passwordless (emailed one-time codes) — there is no password
+    // column. SMTP submission auths with per-device smtp_credentials.
+    //
+    // false = provisional: the row was created the moment this email was
+    // first submitted to POST /auth/login and holds the address while the
+    // code round-trips. Graduated to a full account (activated=true, trial
+    // started, self-mailbox created) on the first successful /auth/verify.
+    activated: boolean().default(false).notNull(),
+    // An account can be disabled for harmful behavior.
+    disabled: boolean().default(false).notNull(),
+    // Lifetime premium (no subscription needed).
+    lifetime: boolean().default(false).notNull(),
+    // User can use all premium features until this date.
+    trialEnd: timestamp({ withTimezone: true, mode: "date" }),
+    // The mailbox used when creating a new alias. Nullable only because of the
+    // users <-> mailboxes FK cycle; in practice always set after registration.
+    defaultMailboxId: integer().references((): AnyPgColumn => mailboxes.id),
+    // Stricter per-user spam threshold (null = server default).
+    maxSpamScore: integer(),
+    // Whether the user receives notification emails.
+    notification: boolean().default(true).notNull(),
+    // Settings (SimpleLogin GET/PATCH /setting) — values zod-validated at the
+    // route layer: alias_generator word|uuid, sender_format AT|A|NAME_ONLY|
+    // AT_ONLY|NO_NAME, random_alias_suffix word|random_string.
+    aliasGenerator: varchar({ length: 16 }).default("word").notNull(),
+    senderFormat: varchar({ length: 16 }).default("AT").notNull(),
+    randomAliasSuffix: varchar({ length: 16 }).default("random_string").notNull(),
+    defaultAliasDomain: varchar({ length: 128 }),
+    // Bitfield for misc account flags (SimpleLogin User.flags).
+    flags: bigint({ mode: "number" }).default(0).notNull(),
+    // The "trash inbox": mail for a disabled ("off") alias is forwarded here
+    // instead of being dropped. Null = accept-and-drop (the default).
+    trashMailboxId: integer().references((): AnyPgColumn => mailboxes.id, { onDelete: "set null" }),
+    ...timestamps,
+    // Indexed so mailbox DELETEs (ON DELETE SET NULL back-reference) don't
+    // seq-scan users to enforce the FK.
+  },
+  (t) => [index("users_trash_mailbox_id_idx").on(t.trashMailboxId)],
+);
 
-// One-time codes for account activation and mailbox verification, sent via
-// transactional email (VERP type `transactional`).
+// One-time codes for login (which doubles as signup), sudo re-auth and
+// mailbox verification, sent via transactional email (VERP type
+// `transactional`).
 export const verificationCodes = pgTable(
   "verification_codes",
   {
@@ -86,9 +100,9 @@ export const verificationCodes = pgTable(
     userId: integer()
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
-    // Set for mailbox verification; null for account activation.
+    // Set for mailbox verification; null for login and sudo codes.
     mailboxId: integer().references(() => mailboxes.id, { onDelete: "cascade" }),
-    purpose: varchar({ length: 16 }).notNull(), // "account" | "mailbox"
+    purpose: varchar({ length: 16 }).notNull(), // "login" | "sudo" | "mailbox"
     // sha256 hex of the code (codes are secrets; never store plaintext).
     codeHash: varchar({ length: 64 }).notNull(),
     expiresAt: timestamp({ withTimezone: true, mode: "date" }).notNull(),
@@ -118,6 +132,28 @@ export const apiKeys = pgTable(
     ...timestamps,
   },
   (t) => [index("api_keys_user_id_idx").on(t.userId)],
+);
+
+// Per-device SMTP submission passwords ("app passwords"): one row per device
+// ("my phone", "my laptop"), each revocable/replaceable independently of the
+// others. The account itself has no password, so these are the ONLY
+// credentials SMTP AUTH accepts. The plaintext is generated server-side,
+// shown once at creation, and only its argon2id hash is stored.
+export const smtpCredentials = pgTable(
+  "smtp_credentials",
+  {
+    id: id(),
+    userId: integer()
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    // Device name, humanly readable ("Phone", "Laptop").
+    name: varchar({ length: 128 }).notNull(),
+    // Bun.password argon2id encoded string (includes salt + params).
+    passwordHash: text().notNull(),
+    lastUsedAt: timestamp({ withTimezone: true, mode: "date" }),
+    ...timestamps,
+  },
+  (t) => [index("smtp_credentials_user_id_idx").on(t.userId)],
 );
 
 // ---------------------------------------------------------------------------
@@ -303,10 +339,13 @@ export const emailLogs = pgTable(
       .notNull(),
     aliasId: integer().references(() => aliases.id, { onDelete: "cascade" }),
     // Forward phase: the mailbox that receives the email. Reply phase: the
-    // mailbox that sent it.
-    mailboxId: integer().references(() => mailboxes.id, { onDelete: "cascade" }),
+    // mailbox that SENT it (DSNs route back there). SET NULL on mailbox
+    // deletion: the activity/threading history (message-id maps) must
+    // outlive the mailbox — cascading here would break thread
+    // reconstruction for every reply ever sent from a deleted mailbox.
+    mailboxId: integer().references(() => mailboxes.id, { onDelete: "set null" }),
     // On bounce, which mailbox the email bounced at.
-    bouncedMailboxId: integer().references(() => mailboxes.id, { onDelete: "cascade" }),
+    bouncedMailboxId: integer().references(() => mailboxes.id, { onDelete: "set null" }),
     isReply: boolean().default(false).notNull(),
     // E.g. alias disabled — the forward was blocked.
     blocked: boolean().default(false).notNull(),
@@ -450,6 +489,7 @@ export const dkimKeys = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
+export type SmtpCredential = typeof smtpCredentials.$inferSelect;
 export type Alias = typeof aliases.$inferSelect;
 export type Mailbox = typeof mailboxes.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;

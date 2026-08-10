@@ -126,13 +126,14 @@ everywhere, so review them; everything else is additive.
 
 ## Local login (dev)
 
-Registration requires an emailed 6-digit code, and the dev stack runs no
-`deliverd`, so codes sit in the queue. Shortcuts:
+Login is passwordless (one email field for login AND signup, confirmed by an
+emailed 6-digit code), and the dev stack runs no `deliverd`, so codes sit in
+the queue. Shortcuts:
 
-- `just user-create [email] [password]` — register + activate + login, prints
-  the API key (defaults `wes@qmail.com` / `password1234`). Idempotent.
-- `just login-code <email>` — newest emailed code for an address (also mailbox
-  verification).
+- `just user-create [email]` — request + verify a login code in one shot,
+  prints the API key (defaults `wes@qmail.com`). Idempotent.
+- `just login-code <email>` — newest emailed code for an address (login, sudo
+  and mailbox verification).
 
 ## Don't-break list
 

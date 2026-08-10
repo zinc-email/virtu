@@ -7,25 +7,33 @@
 
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import { generateApiKey, hashApiKey } from "../src/auth/apiKey.ts";
 import { config } from "../src/config.ts";
 import { db } from "../src/db/index.ts";
 import {
   type Alias,
   aliases,
+  apiKeys,
   type CustomDomain,
   customDomains,
   type DkimKey,
   dkimKeys,
   type Mailbox,
   mailboxes,
+  smtpCredentials,
   type User,
   users,
 } from "../src/db/schema.ts";
 import { wes } from "./personas.ts";
 import { publishTxt } from "./nsupdate.ts";
 
-/** Wes's submission password (constant so reruns against dirty state work). */
+/** Wes's submission password (constant so reruns against dirty state work).
+ * Accounts have no password: this is the per-device SMTP credential
+ * ensureUser mints (name {@link STORY_DEVICE}). */
 export const WES_PASSWORD = "correct-horse-battery-staple";
+
+/** Device name of the SMTP credential every ensureUser fixture carries. */
+export const STORY_DEVICE = "story-fixture";
 
 /** Short unique tag for per-test alias/mailbox localparts. */
 export function randomTag(): string {
@@ -101,7 +109,9 @@ export interface UserFixture {
   mailbox: Mailbox;
 }
 
-/** Find-or-create a user with a verified default mailbox at their own address. */
+/** Find-or-create a user with a verified default mailbox at their own
+ * address plus a per-device SMTP credential for `password` (accounts have no
+ * password — device credentials are the only thing SMTP AUTH accepts). */
 export async function ensureUser(email: string, password: string): Promise<UserFixture> {
   const normalized = email.trim().toLowerCase();
 
@@ -109,13 +119,13 @@ export async function ensureUser(email: string, password: string): Promise<UserF
     const existing = (await db.select().from(users).where(eq(users.email, normalized)).limit(1))[0];
     if (existing !== undefined) {
       const mailbox = await ensureMailbox(existing.id, normalized);
+      await ensureSmtpCredential(existing.id, password);
       return { user: existing, mailbox };
     }
 
-    const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
     const inserted = await db
       .insert(users)
-      .values({ email: normalized, name: normalized, passwordHash, activated: true })
+      .values({ email: normalized, name: normalized, activated: true })
       .onConflictDoNothing()
       .returning();
     const user = inserted[0];
@@ -123,9 +133,38 @@ export async function ensureUser(email: string, password: string): Promise<UserF
 
     const mailbox = await ensureMailbox(user.id, normalized);
     await db.update(users).set({ defaultMailboxId: mailbox.id }).where(eq(users.id, user.id));
+    await ensureSmtpCredential(user.id, password);
     return { user: { ...user, defaultMailboxId: mailbox.id }, mailbox };
   }
   throw new Error(`ensureUser lost every race for ${normalized}`);
+}
+
+/** Find-or-create the {@link STORY_DEVICE} SMTP credential for a user.
+ * Reruns and parallel racers hash the same constant password, so a
+ * duplicate row is harmless — both authenticate. */
+async function ensureSmtpCredential(userId: number, password: string): Promise<void> {
+  const existing = (
+    await db
+      .select({ id: smtpCredentials.id })
+      .from(smtpCredentials)
+      .where(and(eq(smtpCredentials.userId, userId), eq(smtpCredentials.name, STORY_DEVICE)))
+      .limit(1)
+  )[0];
+  if (existing !== undefined) return;
+
+  const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
+  await db.insert(smtpCredentials).values({ userId, name: STORY_DEVICE, passwordHash });
+}
+
+/** Mint an API key for a fixture user directly in the DB — story tests
+ * cannot round-trip the emailed login code (deliverd may already have
+ * shipped it to a peer Maildir), so they skip the HTTP login flow. */
+export async function createApiKey(userId: number): Promise<string> {
+  const key = generateApiKey();
+  await db
+    .insert(apiKeys)
+    .values({ userId, keyHash: hashApiKey(key), name: "story", sudoModeAt: new Date() });
+  return key;
 }
 
 /** Find-or-create a (verified) mailbox row for a user. */

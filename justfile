@@ -101,9 +101,9 @@ test-net-ps:
 # Dev users — local login ergonomics (requires the dev stack)
 # ----------------------------------------------------------------------------
 
-# Register + activate + login a dev user; prints the API key.
-user-create email="wes@qmail.com" password="password1234":
-  bin/user-create {{email}} {{password}}
+# Run a dev user through the passwordless login flow; prints the API key.
+user-create email="wes@qmail.com":
+  bin/user-create {{email}}
 
 # Print the newest emailed verification code for an address (from the queue).
 login-code email:

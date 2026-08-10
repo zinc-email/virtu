@@ -14,8 +14,10 @@
  *      NULL reverse path.
  *
  * Never bounce a bounce: null-reverse-path rows (DSNs themselves) trigger
- * no bounce action, and transactional VERP failures are log-only (nothing
- * enqueues transactional mail yet — no row to map the id to). DSNs are
+ * no bounce action. Transactional VERP failures resolve the id back to the
+ * verification_codes row (recordTransactionalBounce): the code dies, a
+ * mailbox-verification failure bumps the mailbox's failed checks, the user
+ * gets a notification — and no DSN (it's our own mail). DSNs are
  * rate-limited per (user, recipient, alias) through sent_alerts so a
  * broken mailbox never becomes a bounce storm at the sender.
  */
@@ -25,7 +27,7 @@ import { db } from "./db/index.ts";
 import { parseMessage, parseVerp, serializeMessage, type VerpInfo } from "./mail/index.ts";
 import { buildDsn } from "./mail/dsn.ts";
 import { signOutbound } from "./mailauth/index.ts";
-import { claimAlertOnce, recordBounce } from "./pipeline/bounce.ts";
+import { claimAlertOnce, recordBounce, recordTransactionalBounce } from "./pipeline/bounce.ts";
 import { loadDkimKey } from "./pipeline/dkim.ts";
 import { eq } from "drizzle-orm";
 import { contacts, type EmailLog, mailboxes, type OutboundMessage } from "./db/schema.ts";
@@ -60,9 +62,19 @@ export async function handlePermanentFailure(row: OutboundMessage, error: string
     return;
   }
   const verp = parseVerp(row.envelopeFrom, config.verpSecret);
-  if (verp === null || verp.type === "transactional") {
+  if (verp === null) {
     console.log(`deliverd: no DSN — no VERP mapping for failed #${row.id} (${error})`);
     return;
+  }
+  if (verp.type === "transactional") {
+    const result = await recordTransactionalBounce(db, verp.id);
+    console.log(
+      `deliverd: transactional failure #${row.id} (ref ${verp.id})` +
+        (result.code !== null ? ` — code ${result.code.id} invalidated` : "") +
+        (result.mailboxFlagged ? ", mailbox flagged" : "") +
+        ` (${error})`,
+    );
+    return; // our own mail: notify in-app, never DSN
   }
   const result = await recordBounce(db, verp.id);
   const log = result.emailLog;

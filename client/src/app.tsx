@@ -24,17 +24,18 @@ import { BillingPage } from "src/pages/Billing";
 import { DomainDetailPage } from "src/pages/DomainDetail";
 import { DomainsPage } from "src/pages/Domains";
 import { LoginPage } from "src/pages/Login";
-import { RegisterPage } from "src/pages/Register";
+import { MailboxesPage } from "src/pages/Mailboxes";
 import { SettingsPage } from "src/pages/Settings";
 import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
 
 // ── Header nav ───────────────────────────────────────────────────────────────
-// Below 900px the inline links can't fit (4 items + logo + padding needs
-// ~670px at the 18px root) — they collapse into a hamburger + drawer.
+// Below 1000px the inline links can't fit (5 items + logo + padding needs
+// ~830px at the 18px root) — they collapse into a hamburger + drawer.
 
 const NAV_ITEMS = [
   { to: "/", label: "Emails" },
+  { to: "/mailboxes", label: "Mailboxes" },
   { to: "/domains", label: "Domains" },
   { to: "/settings", label: "Settings" },
   { to: "/billing", label: "Billing" },
@@ -79,6 +80,7 @@ function NavItem({ to, active, children }: { to: string; active: boolean; childr
 /** Which nav item a path belongs to (details roll up to their section). */
 function activeNavItem(path: string): string {
   if (path === "/" || path.startsWith("/aliases")) return "/";
+  if (path.startsWith("/mailboxes")) return "/mailboxes";
   if (path.startsWith("/domains")) return "/domains";
   if (path.startsWith("/settings")) return "/settings";
   if (path.startsWith("/billing")) return "/billing";
@@ -194,6 +196,7 @@ function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
   // location.pathname includes the /app basepath; compare against app paths.
   const path = location.pathname.replace(/^\/app(?=\/|$)/, "") || "/";
+  // /register only survives as a redirect into /login (legacy links).
   const isAuthPage = path === "/login" || path === "/register";
   const isAliasDetail = path.startsWith("/aliases/");
   const isDomainDetail = path.startsWith("/domains/");
@@ -258,7 +261,7 @@ function Shell() {
           {authed && !isAuthPage && (
             <>
               <ul
-                className={cx(navList, css({ "@media (max-width: 900px)": { display: "none" } }))}
+                className={cx(navList, css({ "@media (max-width: 1000px)": { display: "none" } }))}
               >
                 {NAV_ITEMS.map((item) => (
                   <NavItem key={item.to} to={item.to} active={item.to === active}>
@@ -273,7 +276,7 @@ function Shell() {
                 onClick={() => setMenuOpen(true)}
                 className={css({
                   display: "none",
-                  "@media (max-width: 900px)": { display: "block" },
+                  "@media (max-width: 1000px)": { display: "block" },
                   background: "none",
                   border: "none",
                   cursor: "pointer",
@@ -341,8 +344,10 @@ function Shell() {
 
 const rootRoute = createRootRoute({ component: Shell });
 
-const requireAuth = () => {
-  if (!getApiKey()) throw redirect({ to: "/login" });
+const requireAuth = ({ location }: { location: { href: string } }) => {
+  // Remember where the visitor was headed; the login page returns them there
+  // after the code round-trip (the legacy intendedLocation behavior).
+  if (!getApiKey()) throw redirect({ to: "/login", search: { redirect: location.href } });
 };
 
 const indexRoute = createRoute({
@@ -357,6 +362,13 @@ const aliasDetailRoute = createRoute({
   path: "/aliases/$aliasId",
   beforeLoad: requireAuth,
   component: AliasDetailPage,
+});
+
+const mailboxesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/mailboxes",
+  beforeLoad: requireAuth,
+  component: MailboxesPage,
 });
 
 const domainsRoute = createRoute({
@@ -387,16 +399,39 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+interface LoginSearch {
+  /** Prefill from the www homepage CTA (GET /app/login?email=…). */
+  email?: string;
+  /** Where a guarded page wanted to go (full href incl. the /app basepath). */
+  redirect?: string;
+  /** "expired" when the api client bounced a dead key here. */
+  reason?: string;
+}
+
+const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
+  validateSearch: (search: Record<string, unknown>): LoginSearch => ({
+    email: str(search.email),
+    redirect: str(search.redirect),
+    reason: str(search.reason),
+  }),
   component: LoginPage,
 });
 
+// Legacy entrypoint (old www forms and bookmarks): login and signup are the
+// same flow now, so /register just forwards its ?email= along.
 const registerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/register",
-  component: RegisterPage,
+  validateSearch: (search: Record<string, unknown>): { email?: string } => ({
+    email: str(search.email),
+  }),
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: "/login", search: { email: search.email } });
+  },
 });
 
 export const router = createRouter({
@@ -406,6 +441,7 @@ export const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
     aliasDetailRoute,
+    mailboxesRoute,
     domainsRoute,
     domainDetailRoute,
     billingRoute,

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { shouldDisable } from "./bounce.ts";
+import { looksLikeDsn, shouldDisable } from "./bounce.ts";
 
 const NOW = new Date("2026-08-08T12:00:00Z");
 
@@ -66,5 +66,76 @@ describe("shouldDisable", () => {
 
   test("no bounces: allowed", () => {
     expect(shouldDisable([], NOW).disable).toBe(false);
+  });
+});
+
+describe("looksLikeDsn", () => {
+  test("multipart/report is a DSN regardless of envelope sender", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "mailer-daemon@qmail.com",
+        contentType: 'multipart/report; report-type=delivery-status; boundary="b"',
+      }),
+    ).toBe(true);
+  });
+
+  test("null reverse path without Auto-Submitted counts as a DSN", () => {
+    expect(looksLikeDsn({ envelopeFrom: "" })).toBe(true);
+  });
+
+  test("null reverse path with Auto-Submitted: auto-generated counts (postfix DSNs)", () => {
+    expect(looksLikeDsn({ envelopeFrom: "", autoSubmitted: "auto-generated" })).toBe(true);
+  });
+
+  test("a vacation auto-reply (auto-replied) is NOT a DSN even with null sender", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: "text/plain; charset=utf-8",
+        autoSubmitted: "auto-replied",
+      }),
+    ).toBe(false);
+  });
+
+  test("ordinary mail with a real sender is NOT a DSN", () => {
+    expect(looksLikeDsn({ envelopeFrom: "milton@initech.com", contentType: "text/plain" })).toBe(
+      false,
+    );
+  });
+
+  test("a multipart/report with only Action: delayed is NOT a failure", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: 'multipart/report; report-type=delivery-status; boundary="b"',
+        body:
+          "--b\r\nThis is a delay notification.\r\n--b\r\n" +
+          "Content-Type: message/delivery-status\r\n\r\n" +
+          "Reporting-MTA: dns; edge.example.com\r\n\r\n" +
+          "Final-Recipient: rfc822; someone@example.com\r\n" +
+          "Action: delayed\r\n" +
+          "Status: 4.4.1\r\n--b--\r\n",
+      }),
+    ).toBe(false);
+  });
+
+  test("a multipart/report with Action: failed IS a failure", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: "multipart/report; report-type=delivery-status",
+        body: "Final-Recipient: rfc822; x@y\r\nAction: failed\r\nStatus: 5.1.1\r\n",
+      }),
+    ).toBe(true);
+  });
+
+  test("a multipart/report with no Action field is treated as a failure", () => {
+    expect(
+      looksLikeDsn({
+        envelopeFrom: "",
+        contentType: "multipart/report; report-type=delivery-status",
+        body: "malformed report with no action fields",
+      }),
+    ).toBe(true);
   });
 });

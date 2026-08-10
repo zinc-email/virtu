@@ -16,7 +16,6 @@ function fakeUser(over: Partial<User> = {}): User {
     id: 1,
     email: "wes@qmail.com",
     name: "Wes",
-    passwordHash: "x",
     activated: true,
     disabled: false,
     lifetime: false,
@@ -29,6 +28,7 @@ function fakeUser(over: Partial<User> = {}): User {
     randomAliasSuffix: "random_string",
     defaultAliasDomain: null,
     flags: 0,
+    trashMailboxId: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over,
@@ -99,15 +99,22 @@ function fakeCatchAll(over: Partial<CatchAllFacts> = {}): CatchAllFacts {
 }
 
 function facts(over: Partial<RcptFacts> = {}): RcptFacts {
-  return {
+  const base: RcptFacts = {
     verp: null,
     isLocalDomain: true,
     alias: fakeAlias(),
     user: fakeUser(),
     mailbox: fakeMailbox(),
+    deliveryMailboxes: [],
+    trashMailbox: null,
     catchAll: null,
     ...over,
   };
+  // Delivery set defaults to the healthy primary, like evaluateRcpt gathers.
+  if (over.deliveryMailboxes === undefined) {
+    base.deliveryMailboxes = base.mailbox !== null && !base.mailbox.disabled ? [base.mailbox] : [];
+  }
+  return base;
 }
 
 describe("decideRcpt", () => {
@@ -156,8 +163,48 @@ describe("decideRcpt", () => {
     expect(decision).toEqual({ kind: "drop", reason: "mailbox_unavailable" });
   });
 
+  test("disabled primary with a healthy extra mailbox: still deliver", () => {
+    const extra = fakeMailbox({ id: 12, email: "second@qmail.com" });
+    const decision = decideRcpt(
+      facts({ mailbox: fakeMailbox({ disabled: true }), deliveryMailboxes: [extra] }),
+    );
+    expect(decision).toEqual({ kind: "deliver" });
+  });
+
   test("healthy alias/user/mailbox: deliver", () => {
     expect(decideRcpt(facts())).toEqual({ kind: "deliver" });
+  });
+});
+
+describe("decideRcpt — trash inbox", () => {
+  const off = () => fakeAlias({ enabled: false });
+  const trash = (over: Partial<Mailbox> = {}) =>
+    fakeMailbox({ id: 11, email: "trash@qmail.com", ...over });
+
+  test("disabled alias with a healthy trash mailbox: deliver flagged trash", () => {
+    const decision = decideRcpt(facts({ alias: off(), trashMailbox: trash() }));
+    expect(decision).toEqual({ kind: "deliver", trash: true });
+  });
+
+  test("unverified trash mailbox: fall back to accept-and-drop", () => {
+    const decision = decideRcpt(facts({ alias: off(), trashMailbox: trash({ verified: false }) }));
+    expect(decision).toEqual({ kind: "drop", reason: "alias_disabled" });
+  });
+
+  test("disabled trash mailbox: fall back to accept-and-drop", () => {
+    const decision = decideRcpt(facts({ alias: off(), trashMailbox: trash({ disabled: true }) }));
+    expect(decision).toEqual({ kind: "drop", reason: "alias_disabled" });
+  });
+
+  test("enabled alias ignores the trash mailbox entirely", () => {
+    expect(decideRcpt(facts({ trashMailbox: trash() }))).toEqual({ kind: "deliver" });
+  });
+
+  test("disabled user beats trash routing (account standing first)", () => {
+    const decision = decideRcpt(
+      facts({ alias: off(), user: fakeUser({ disabled: true }), trashMailbox: trash() }),
+    );
+    expect(decision).toMatchObject({ kind: "reject", code: 550 });
   });
 });
 

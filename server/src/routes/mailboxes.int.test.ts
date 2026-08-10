@@ -422,3 +422,97 @@ describe("DELETE /api/mailboxes/:id", () => {
     });
   });
 });
+
+describe("PUT /api/mailboxes/:id trash flag (Virtu extension)", () => {
+  async function listMailboxes(apiKey: string) {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v2/mailboxes",
+      headers: auth(apiKey),
+    });
+    return res.json<{ mailboxes: { id: number; trash: boolean; default: boolean }[] }>().mailboxes;
+  }
+
+  test("set, move, and clear the trash mailbox", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const second = await createVerifiedMailbox(apiKey);
+    const third = await createVerifiedMailbox(apiKey);
+
+    // Nothing is trash to start with.
+    expect((await listMailboxes(apiKey)).every((m) => !m.trash)).toBe(true);
+
+    // Set: only the designated mailbox reads trash=true.
+    const set = await app.inject({
+      method: "PUT",
+      url: `/api/mailboxes/${second.id}`,
+      headers: auth(apiKey),
+      payload: { trash: true },
+    });
+    expect(set.statusCode).toBe(200);
+    let mbs = await listMailboxes(apiKey);
+    expect(mbs.find((m) => m.id === second.id)?.trash).toBe(true);
+    expect(mbs.filter((m) => m.trash)).toHaveLength(1);
+
+    // Moving it re-points the single slot.
+    await app.inject({
+      method: "PUT",
+      url: `/api/mailboxes/${third.id}`,
+      headers: auth(apiKey),
+      payload: { trash: true },
+    });
+    mbs = await listMailboxes(apiKey);
+    expect(mbs.find((m) => m.id === third.id)?.trash).toBe(true);
+    expect(mbs.filter((m) => m.trash)).toHaveLength(1);
+
+    // trash:false on the current holder clears it; on another mailbox it's
+    // a no-op.
+    await app.inject({
+      method: "PUT",
+      url: `/api/mailboxes/${second.id}`,
+      headers: auth(apiKey),
+      payload: { trash: false },
+    });
+    expect((await listMailboxes(apiKey)).find((m) => m.id === third.id)?.trash).toBe(true);
+    await app.inject({
+      method: "PUT",
+      url: `/api/mailboxes/${third.id}`,
+      headers: auth(apiKey),
+      payload: { trash: false },
+    });
+    expect((await listMailboxes(apiKey)).every((m) => !m.trash)).toBe(true);
+  });
+
+  test("an unverified mailbox cannot be the trash mailbox", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mb = await createMailbox(apiKey);
+    const res = await app.inject({
+      method: "PUT",
+      url: `/api/mailboxes/${mb.id}`,
+      headers: auth(apiKey),
+      payload: { trash: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>()).toEqual({
+      error: "Unverified mailbox cannot be used as trash mailbox",
+    });
+  });
+
+  test("deleting the trash mailbox clears the designation", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const doomed = await createVerifiedMailbox(apiKey);
+    await app.inject({
+      method: "PUT",
+      url: `/api/mailboxes/${doomed.id}`,
+      headers: auth(apiKey),
+      payload: { trash: true },
+    });
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/api/mailboxes/${doomed.id}`,
+      headers: auth(apiKey),
+      payload: { transfer_aliases_to: -1 },
+    });
+    expect(del.statusCode).toBe(200);
+    expect((await listMailboxes(apiKey)).every((m) => !m.trash)).toBe(true);
+  });
+});

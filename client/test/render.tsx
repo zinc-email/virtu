@@ -25,7 +25,7 @@ export const LOGIN_MARKER = "stub:login";
 const BASE = "/app";
 
 /**
- * Render `Component` mounted at `path` (default "/register") with the app's
+ * Render `Component` mounted at `path` (default "/login") with the app's
  * providers and a memory router under the /app basepath. `search` (e.g.
  * "?email=x") seeds the initial URL query. `extraRoutes` registers additional
  * real pages the flow navigates to (e.g. a detail page). Returns the RTL
@@ -33,7 +33,7 @@ const BASE = "/app";
  */
 export function renderPage(
   Component: FunctionComponent,
-  path = "/register",
+  path = "/login",
   search = "",
   extraRoutes: { path: string; component: FunctionComponent }[] = [],
 ) {

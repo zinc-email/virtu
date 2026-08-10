@@ -50,12 +50,12 @@ export function latestLoginCode(email: string): Promise<string> {
 }
 
 /**
- * Register + activate + login a user via bin/user-create; returns the API
- * key. Fresh users carry the 7-day trial, so they are premium — enough for
- * the custom-domain tests.
+ * Run a user through the passwordless login flow via bin/user-create;
+ * returns the API key. Fresh users carry the 7-day trial, so they are
+ * premium — enough for the custom-domain tests.
  */
-export async function createUser(email: string, password: string): Promise<string> {
-  const out = await runTool([bin("user-create"), email, password]);
+export async function createUser(email: string): Promise<string> {
+  const out = await runTool([bin("user-create"), email]);
   const match = /api key: (\S+)/.exec(out);
   if (!match?.[1]) throw new Error(`no api key in user-create output:\n${out}`);
   return match[1];

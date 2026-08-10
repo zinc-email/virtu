@@ -23,7 +23,7 @@ import { eq } from "drizzle-orm";
 import { buildApp } from "../src/app/server.ts";
 import { db } from "../src/db/index.ts";
 import { aliases, users } from "../src/db/schema.ts";
-import { ensureDkimKey, ensureWes, randomTag, type UserFixture, WES_PASSWORD } from "./fixtures.ts";
+import { createApiKey, ensureDkimKey, ensureWes, randomTag, type UserFixture } from "./fixtures.ts";
 import { waitForMail } from "./maildir.ts";
 import { buildMessage } from "./message.ts";
 import { nsupdate, publishTxt, quoteTxtValue } from "./nsupdate.ts";
@@ -108,13 +108,9 @@ beforeAll(async () => {
   await db.update(users).set({ lifetime: true }).where(eq(users.id, fixture.user.id));
 
   app = await buildApp({ logger: false });
-  const login = await app.inject({
-    method: "POST",
-    url: "/api/auth/login",
-    payload: { email: fixture.user.email, password: WES_PASSWORD, device: "story" },
-  });
-  if (login.statusCode !== 200) throw new Error(`login failed: ${login.body}`);
-  apiKey = login.json<{ api_key: string }>().api_key;
+  // Minted directly in the DB — the emailed login code is already on its way
+  // to a peer Maildir, so the HTTP flow can't be round-tripped here.
+  apiKey = await createApiKey(fixture.user.id);
 });
 
 afterAll(async () => {

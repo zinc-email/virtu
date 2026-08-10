@@ -81,13 +81,31 @@ export interface ReplyContext {
   generateMessageId?(): string;
   /** Domain used by the default Message-ID generator (default: alias domain). */
   messageIdDomain?: string;
+  /**
+   * Cold-send mode (submission MAIL FROM = the alias): a To/Cc entry that is
+   * not one of this alias's reverse aliases is screened instead of refused
+   * outright. `screen` returns a refusal reason to refuse the WHOLE message
+   * (all-or-nothing, never a partial rewrite), or null to keep the entry
+   * verbatim — it's a real outside address the user typed. The refuse-to-leak
+   * invariant lives in the implementation: it must return "mailbox_address"
+   * for the sending user's own mailbox addresses (outside recipients must
+   * never see them). Bundling the guard with the mode makes enabling
+   * cold-send without a leak guard a compile error.
+   */
+  externalRecipients?: {
+    screen(addr: string): Promise<"mailbox_address" | "non_reverse_alias" | null>;
+  };
   /** Clock override for tests (synthesized Date header). */
   now?: Date;
 }
 
-/** Typed refusal: a To/Cc entry was not a known reverse alias. */
+/**
+ * Typed refusal: a To/Cc entry was not a known reverse alias
+ * ("non_reverse_alias"), or — in cold-send mode — was one of the user's own
+ * mailbox addresses ("mailbox_address", the refuse-to-leak invariant).
+ */
 export interface NonReverseAliasRefusal {
-  reason: "non_reverse_alias";
+  reason: "non_reverse_alias" | "mailbox_address";
   /** Which header carried the offending entry. */
   header: "to" | "cc";
   /** The offending address (a reverse-alias lookup miss). */
@@ -157,13 +175,21 @@ export async function rewriteReply(
       }
       const contact = await ctx.resolveReverseAlias(entry.address);
       if (contact === null) {
+        const header = headerName === "To" ? ("to" as const) : ("cc" as const);
+        if (ctx.externalRecipients !== undefined) {
+          const refuse = await ctx.externalRecipients.screen(entry.address);
+          if (refuse !== null) {
+            return {
+              ok: false,
+              refusal: { reason: refuse, header, address: entry.address },
+            };
+          }
+          mapped.push(entry); // real outside address, kept verbatim (cold send)
+          continue;
+        }
         return {
           ok: false,
-          refusal: {
-            reason: "non_reverse_alias",
-            header: headerName === "To" ? "to" : "cc",
-            address: entry.address,
-          },
+          refusal: { reason: "non_reverse_alias", header, address: entry.address },
         };
       }
       const name = contact.name ?? undefined;

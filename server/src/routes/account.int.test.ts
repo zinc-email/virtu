@@ -3,11 +3,12 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
+import { hashApiKey } from "../auth/apiKey";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { db } from "../db";
-import { customDomains, emailLogs, users } from "../db/schema";
-import { createAlias, PASSWORD, registerAndLogin } from "./intHarness";
+import { apiKeys, customDomains, emailLogs, users } from "../db/schema";
+import { createAlias, latestEmailedCode, registerAndLogin } from "./intHarness";
 
 let app: App;
 
@@ -229,9 +230,18 @@ describe("GET /api/v2/setting/domains", () => {
   });
 });
 
+/** Age out the sudo window a verify-minted key starts with. */
+async function expireSudo(apiKey: string): Promise<void> {
+  await db
+    .update(apiKeys)
+    .set({ sudoModeAt: null })
+    .where(eq(apiKeys.keyHash, hashApiKey(apiKey)));
+}
+
 describe("sudo -> api_key flow", () => {
-  test("api_key without sudo -> 440 Need sudo", async () => {
+  test("api_key without fresh sudo -> 440 Need sudo", async () => {
     const { apiKey } = await registerAndLogin(app);
+    await expireSudo(apiKey);
     const res = await app.inject({
       method: "POST",
       url: "/api/api_key",
@@ -242,23 +252,45 @@ describe("sudo -> api_key flow", () => {
     expect(res.json<{ error: string }>()).toEqual({ error: "Need sudo" });
   });
 
-  test("wrong password -> 403; right password -> sudo -> 201 api_key", async () => {
+  test("a verify-minted key starts in sudo mode", async () => {
     const { apiKey } = await registerAndLogin(app);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/api_key",
+      headers: auth(apiKey),
+      payload: { device: "cli" },
+    });
+    expect(created.statusCode).toBe(201);
+  });
 
+  test("no code -> 202 emails one; wrong code -> 403; right code -> sudo -> 201 api_key", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    await expireSudo(apiKey);
+
+    const sent = await app.inject({
+      method: "PATCH",
+      url: "/api/sudo",
+      headers: auth(apiKey),
+      payload: {},
+    });
+    expect(sent.statusCode).toBe(202);
+    expect(sent.json<{ msg: string }>()).toEqual({ msg: "Confirmation code sent" });
+
+    const code = await latestEmailedCode(email);
     const bad = await app.inject({
       method: "PATCH",
       url: "/api/sudo",
       headers: auth(apiKey),
-      payload: { password: "wrong-password" },
+      payload: { code: code === "000000" ? "000001" : "000000" },
     });
     expect(bad.statusCode).toBe(403);
-    expect(bad.json<{ error: string }>()).toEqual({ error: "Invalid password" });
+    expect(bad.json<{ error: string }>()).toEqual({ error: "Invalid code" });
 
     const good = await app.inject({
       method: "PATCH",
       url: "/api/sudo",
       headers: auth(apiKey),
-      payload: { password: PASSWORD },
+      payload: { code },
     });
     expect(good.statusCode).toBe(200);
     expect(good.json<{ ok: boolean }>()).toEqual({ ok: true });

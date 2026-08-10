@@ -46,22 +46,23 @@ axiosInstance.interceptors.request.use((config) => {
 });
 
 // Generic 401 handler: any authenticated request coming back 401 means the
-// key is gone/revoked — clear it and bounce to /login. Exempt the login and
-// register posts themselves (their 4xx belongs on the form).
+// key is gone/revoked — clear it and bounce to the login page (which lives
+// under the /app basepath). Exempt the auth posts themselves (their 4xx
+// belongs on the form).
 axiosInstance.interceptors.response.use(
   (res) => res,
   (error: AxiosError) => {
     const status = error.response?.status;
     const url = error.config?.url ?? "";
-    const exempt = url === "/auth/login" || url === "/auth/register";
+    const exempt = url.startsWith("/auth/");
     if (
       status === 401 &&
       !exempt &&
       typeof window !== "undefined" &&
-      window.location.pathname !== "/login"
+      window.location.pathname !== "/app/login"
     ) {
       clearApiKey();
-      window.location.assign("/login?reason=expired");
+      window.location.assign("/app/login?reason=expired");
     }
     return Promise.reject(error);
   },

@@ -341,5 +341,56 @@ Settled (2026-08-08):
    containers; the verify → rewrite → sign/seal chain lives in one process. Lane B
    is repurposed as the mailauth integration lane. Fallback if mailauth's SPF
    proves weak in practice: glts spf-milter (`tmp/virtu/server/docker/spf/`).
+9. **SMTP outbound modes are chosen by MAIL FROM** (2026-08-10). Submission
+   supports two sending modes: MAIL FROM = one of the user's **aliases** is
+   "send mode" — recipients that are reverse aliases translate back to their
+   contact (reply), any other recipient is a **cold email** (contact minted for
+   (alias, recipient) so the reply threads back; To/Cc entries that aren't
+   reverse aliases pass through verbatim). MAIL FROM = one of the user's
+   **mailboxes** is strict "reply mode" — what a stock MUA does — every
+   recipient must be a reverse alias and all must belong to one alias; the
+   contact rows are the metadata that picks the outbound alias. The
+   refuse-to-leak invariant holds in both modes: a To/Cc entry naming one of
+   the user's own mailboxes is refused (550), never sent.
+10. **Per-device SMTP passwords** (2026-08-10). `smtp_credentials` rows are
+    app-style passwords (generated server-side, shown once, argon2id-hashed),
+    one per device, revocable independently of each other. Accounts have no
+    password (decision #13), so device credentials are the ONLY thing SMTP
+    AUTH accepts; device use stamps `last_used_at`. API: GET/POST/DELETE
+    `/smtp/credentials` (a Virtu extension — SimpleLogin has no SMTP
+    submission).
+11. **Trash inbox** (2026-08-10). A user may designate one verified mailbox as
+    the account's trash inbox (`users.trash_mailbox_id`, set via
+    PUT /mailboxes/:id `{trash}`). Mail for a disabled ("off") alias is then
+    forwarded there — stamped `X-Virtu-Trash: YES (alias disabled)` — instead
+    of accept-and-dropped; with no trash mailbox the default accept-and-drop
+    stands. Either way the sender sees 250: existence is never probed. Trash
+    copies are enqueued with the NULL reverse path — an off alias must not
+    start emitting DSNs or bounce accounting that accept-and-drop never
+    produced; a broken trash mailbox fails silently in the queue log.
+12. **Multi-mailbox delivery** (2026-08-10). An alias delivers one copy per
+    associated mailbox (primary + `alias_mailboxes` extras, unhealthy ones
+    skipped), each copy with its own email_log and VERP so bounce accounting
+    stays per-mailbox. A broken primary no longer drops mail that a healthy
+    extra mailbox can receive.
+13. **Passwordless single-entrypoint auth** (2026-08-10). Login and signup
+    are ONE flow, re-adopting legacy virtu (and Zinc-from-day-one): a single
+    email field; `POST /auth/login {email}` creates a *provisional* user
+    (`users.activated = false` — the modern form of legacy's accountId-NULL
+    row) when the address is unknown and emails a 6-digit code either way
+    (uniform response — registration status is never revealed);
+    `POST /auth/verify {email, code}` graduates a provisional user
+    (activated, trial started, self-mailbox created) and mints the api key.
+    No `password_hash` column exists. Unlike legacy, codes keep the modern
+    hardening: sha256-stored, 15-min TTL, dead after 3 wrong tries, sends
+    budgeted 3/hour/address behind the per-IP limit. Sudo re-auth
+    (`PATCH /sudo`) is the same code machinery (purpose `sudo`, two-step on
+    one endpoint), and a verify-minted key starts inside the sudo window — a
+    code round-trip is our strongest re-auth. This deliberately breaks
+    SimpleLogin wire-compat on the auth surface only (third-party SL apps
+    can't do an OTP round-trip anyway); everything behind the
+    `Authentication` header stays SL-shaped. The www homepage CTA submits its
+    email field to `/app/login?email=…`, which auto-requests the code — the
+    old "redirects into a create-user flow unconditionally" seam is gone.
 
 Open: none.

@@ -7,13 +7,14 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { parseMessage, serializeMessage } from "../mail/index.ts";
 import {
-  accountActivationEmail,
   buildTransactionalMessage,
   extractCodeFromBody,
   generateVerificationCode,
   hashVerificationCode,
+  loginCodeEmail,
   mailboxVerificationEmail,
   noreplyAddress,
+  sudoCodeEmail,
 } from "./transactional.ts";
 
 describe("generateVerificationCode", () => {
@@ -84,9 +85,15 @@ describe("buildTransactionalMessage", () => {
 });
 
 describe("templates", () => {
-  test("activation email carries the code on its own line", () => {
-    const { subject, textBody } = accountActivationEmail("042137");
-    expect(subject).toBe("Just one more step to join Virtu");
+  test("login email carries the code in the subject and on its own line", () => {
+    const { subject, textBody } = loginCodeEmail("042137");
+    expect(subject).toBe("Your login code: 042137");
+    expect(extractCodeFromBody(textBody)).toBe("042137");
+  });
+
+  test("sudo email carries the code in the subject and on its own line", () => {
+    const { subject, textBody } = sudoCodeEmail("042137");
+    expect(subject).toBe("Your confirmation code: 042137");
     expect(extractCodeFromBody(textBody)).toBe("042137");
   });
 
@@ -98,13 +105,13 @@ describe("templates", () => {
   });
 
   test("extraction survives CRLF normalization (as read back off the wire)", () => {
-    const { textBody } = accountActivationEmail("000123");
+    const { textBody } = loginCodeEmail("000123");
     const wire = textBody.replace(/\r?\n/g, "\r\n");
     expect(extractCodeFromBody(wire)).toBe("000123");
   });
 
   test("expiry note digits never match as a code", () => {
-    const { textBody } = accountActivationEmail("654321");
+    const { textBody } = loginCodeEmail("654321");
     // "15 minutes" appears in the copy; the ^...$ anchors must ignore it.
     expect(textBody).toContain("15 minutes");
     expect(extractCodeFromBody(textBody)).toBe("654321");

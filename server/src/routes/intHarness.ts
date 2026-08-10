@@ -9,11 +9,10 @@ import { outboundMessages } from "../db/schema";
 import { extractCodeFromBody } from "../pipeline/transactional";
 
 export const uniqueEmail = () => `it-${crypto.randomUUID()}@int.test`;
-export const PASSWORD = "correct horse battery staple";
 
 /**
  * The 6-digit verification code from the latest transactional email queued
- * for `email`. Register/mailbox-create enqueue into outbound_messages even
+ * for `email`. Login/sudo/mailbox-create enqueue into outbound_messages even
  * without a mail stack (unsigned when no DKIM key), so the int tier reads
  * the code straight off the queue row — the DB stand-in for an inbox.
  */
@@ -45,33 +44,27 @@ function uniqueIp(): string {
   return `10.${b()}.${b()}.${b()}`;
 }
 
-/** Register + activate + login a fresh user; returns the api key for the
- * Authentication header. */
+/** Run a fresh email through the passwordless flow (request the login code,
+ * verify it off the queue); returns the api key for the Authentication
+ * header. Signup and login are the same flow, so this covers both. */
 export async function registerAndLogin(app: App): Promise<TestUser> {
   const email = uniqueEmail();
   const remoteAddress = uniqueIp();
-  const reg = await app.inject({
-    method: "POST",
-    url: "/api/auth/register",
-    payload: { email, password: PASSWORD },
-    remoteAddress,
-  });
-  if (reg.statusCode !== 200) throw new Error(`register failed: ${reg.body}`);
-  const act = await app.inject({
-    method: "POST",
-    url: "/api/auth/activate",
-    payload: { email, code: await latestEmailedCode(email) },
-    remoteAddress,
-  });
-  if (act.statusCode !== 200) throw new Error(`activate failed: ${act.body}`);
-  const log = await app.inject({
+  const requested = await app.inject({
     method: "POST",
     url: "/api/auth/login",
-    payload: { email, password: PASSWORD, device: "int-test" },
+    payload: { email, device: "int-test" },
     remoteAddress,
   });
-  if (log.statusCode !== 200) throw new Error(`login failed: ${log.body}`);
-  const apiKey = log.json<{ api_key: string }>().api_key;
+  if (requested.statusCode !== 200) throw new Error(`login request failed: ${requested.body}`);
+  const verify = await app.inject({
+    method: "POST",
+    url: "/api/auth/verify",
+    payload: { email, code: await latestEmailedCode(email), device: "int-test" },
+    remoteAddress,
+  });
+  if (verify.statusCode !== 200) throw new Error(`verify failed: ${verify.body}`);
+  const apiKey = verify.json<{ api_key: string }>().api_key;
   return { email, apiKey };
 }
 

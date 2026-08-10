@@ -146,7 +146,7 @@ Registration requires an emailed 6-digit code, and the dev stack runs no
   records and DKIM keys span several strings. Use it for TXT lookups, not
   `node:dns`.
 - **Client dev container runs node, not bun** (`docker-compose.yml`:
-  `client` on `node:24-bookworm-slim`) — rsbuild's HMR WebSocket upgrade
+  `client` on `node:26-bookworm-slim`) — rsbuild's HMR WebSocket upgrade
   never completes under Bun's `node:http` (the socket hangs in
   "connecting"), so the dev server runs on real node. Bun stays the ONLY
   package manager: the one-shot `client-deps` service (`oven/bun:1.3`)

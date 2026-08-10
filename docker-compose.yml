@@ -69,8 +69,8 @@ services:
     # Deps come from client-deps above; the toolchain bins (kubb, panda,
     # rsbuild) are node CLIs run directly from node_modules. Debian-based to
     # match host libc for the shared bind mount.
-    # Active LTS line (odd majors never get LTS; 22 is already maintenance).
-    image: "node:24-bookworm-slim"
+    # Current line — becomes the Active LTS in October; the tag rides along.
+    image: "node:26-bookworm-slim"
     working_dir: /app/client
     command:
       [

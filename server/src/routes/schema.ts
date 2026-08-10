@@ -116,8 +116,32 @@ export const MailboxDto = z
     default: z.boolean(),
     creation_timestamp: z.number().int(),
     nb_alias: z.number().int(),
+    // Virtu extension (not in SimpleLogin): true when this mailbox is the
+    // account's trash inbox — mail for disabled ("off") aliases lands here.
+    trash: z.boolean(),
   })
   .meta({ id: "Mailbox" });
+
+// ---------------------------------------------------------------------------
+// SMTP credentials (per-device submission passwords — Virtu extension)
+// ---------------------------------------------------------------------------
+
+export const SmtpCredentialDto = z
+  .object({
+    id: z.number().int(),
+    name: z.string(),
+    creation_timestamp: z.number().int(),
+    last_used_timestamp: z.number().int().nullable(),
+  })
+  .meta({ id: "SmtpCredential" });
+
+export const SmtpCredentialCreatedDto = z
+  .object({
+    ...SmtpCredentialDto.shape,
+    // Shown exactly once; only a hash is stored.
+    password: z.string(),
+  })
+  .meta({ id: "SmtpCredentialCreated" });
 
 // ---------------------------------------------------------------------------
 // Small envelopes shared across route groups

@@ -1,41 +1,53 @@
 # STATE — progress against PLAN.md
 
-Last updated: 2026-08-09 (custom domains: full UI, API-driven DNS
-verification story, catch-all minting in the mail pipeline). Companion to
-`PLAN.md` (the design doc); this file tracks what is built, how it was
+Last updated: 2026-08-10 (outbound wave: SMTP send/reply modes + cold email,
+per-device SMTP passwords, trash inbox, multi-mailbox delivery, mailboxes
+client page, transactional bounce intake — PLAN decisions #9–#12). Companion
+to `PLAN.md` (the design doc); this file tracks what is built, how it was
 verified, and what remains.
 
 ## TL;DR
 
-All nine PLAN lanes are implemented and merged. The MVP loop is closed and
-verified end to end: mail proxies through the full
+All nine PLAN lanes are implemented and merged, plus the outbound wave
+(decisions #9–#12): submission now supports reply-from-mailbox (the contact
+metadata picks the outbound alias), cold email straight from an alias,
+per-device SMTP passwords, the per-user trash inbox for "off" aliases, and
+one-copy-per-mailbox delivery for multi-mailbox aliases. The MVP loop is
+closed and verified end to end: mail proxies through the full
 verify → rewrite → sign/seal → queue → deliver pipeline inside the simulated
 internet; the SimpleLogin-compatible API drives a working dashboard; billing
 is live-verified against real (test-mode) Stripe. What remains is polish
-(client gaps, deferred endpoints), a handful of explicitly-stubbed behaviors,
+(client gaps, deferred endpoints), a couple of explicitly-stubbed behaviors,
 and the entire production/deploy story, which has not been started.
 
 ## Verification status
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~393 tests / 27 files | `just test-unit` | green |
+| Unit | ~402 tests / 27 files | `just test-unit` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit | `just check` | green |
-| Integration (API vs real Postgres) | 106 tests / 7 files | `just up && just db push && just test-int` | green ×2 consecutive |
-| Client DOM (real React vs running stack) | 5 tests / 2 files | `just up && just db push && just test-client` | green |
-| Stories (simulated internet) | 14 stories / 10 files | `just test-net-up && just test-story` | green ×2 against dirty state |
+| Integration (API vs real Postgres) | 112 tests / 8 files | `just up && just db push && just test-int` | green |
+| Client DOM (real React vs running stack) | 8 tests / 3 files | `just up && just db push && just test-client` | green |
+| Stories (simulated internet) | 23 stories / 13 files | `just test-net-up && just test-story` | green ×2 against dirty state |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
 
 Story coverage: forward with `dkim=pass` at the receiving peer (M1), authed
 reply with threading and zero real-address leakage (M2), bounce → auto-disable
 at threshold (M3), DSN delivery + rate-limit suppression, custom-domain
 forward AND custom-domain DKIM (`dkim=pass header.d=user.com` at initech),
-transactional activation email delivered through our own queue, policy edges
+transactional activation email delivered through our own queue AND a bounced
+verification email invalidating its code (transactional intake), policy edges
 (nonexistent alias 550, disabled alias accept-and-drop, relay denied),
 network smoke (peers verify SPF/DKIM/DMARC independently of our server),
-and the custom-domain API lifecycle (create → publish the exact GET .../dns
+the custom-domain API lifecycle (create → publish the exact GET .../dns
 records via nsupdate → verify all five checks green → catch-all mints an
-alias through the real pipeline → tombstones stay dead).
+alias through the real pipeline → tombstones stay dead), and the outbound
+wave: reply with MAIL FROM = the mailbox (contact metadata picks the alias),
+mixed-alias recipients refused, cold email from an alias (`dkim=pass` at
+initech + contact minted), Cc-of-own-mailbox refused, per-device SMTP
+password lifecycle (API create → real 587 send → revoke → 535), disabled
+alias → trash inbox with `X-Virtu-Trash` (and on-alias mail unmarked), and
+multi-mailbox fan-out (one send → both Maildirs, one email_log per mailbox).
 
 The live Stripe pass caught a real bug the self-signed tests missed
 (out-of-order `subscription.created` regressing status — fixed in `fdf36a2`
@@ -50,8 +62,8 @@ with a regression test encoding the observed sequence).
 | B — Email auth (mailauth) | ✅ done | All verification in-process; table-driven verdicts; glts spf-milter documented as fallback, unused |
 | C — Rewrite core | ✅ done | VERP byte-compatible with SimpleLogin (CPython golden vector) + constant-time compare + real expiry; forward/reply whitelists; refuse-to-leak on replies |
 | D — Queue + deliverd | ✅ done* | SKIP LOCKED worker, backoff, RFC 3464 DSNs (null reverse path, rate-limited). *Gap: bounces OF transactional mail are log-only |
-| E — API (SimpleLogin-compat) | ~85% | 25+ spec paths incl. custom domains + billing extras. Deferred: MFA, forgot_password, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone |
-| F — Client | ~80% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login, register/activation, alias index (hero + one-click random alias), alias detail (new/used states + activities + contacts/delete), settings (native selects), billing (key/value + Stripe actions), domains index + detail (DNS records to publish, verify with per-check errors, catch-all switch, delete). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Missing: mailboxes page, notifications, search |
+| E — API (SimpleLogin-compat) | ~90% | 28+ spec paths incl. custom domains, billing extras, SMTP credentials (Virtu extension) + mailbox `trash` flag. Deferred: MFA, forgot_password, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone |
+| F — Client | ~85% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login, register/activation, alias index (hero + one-click random alias), alias detail (new/used states + activities + contacts/delete), **mailboxes (add/verify-by-code/default/trash/delete-with-transfer)**, settings (native selects + SMTP device passwords: create-with-one-time-reveal, revoke), billing (key/value + Stripe actions), domains index + detail (DNS records to publish, verify with per-check errors, catch-all switch, delete). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Missing: notifications, search, per-alias mailbox picker UI (API supports `mailbox_ids`) |
 | G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Served at `/` behind the Caddy proxy; SPA under `/app`, API under `/api` — one origin, same topology dev and prod (dev proxy built; see below) |
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |
@@ -60,20 +72,23 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
 
 ## Explicitly stubbed / known gaps (roughly priority-ordered)
 
-1. **Transactional bounce intake** — a bounced activation email only logs;
-   the VERP id doesn't resolve to the verification_codes row. (Cross-branch
-   timing artifact; small.)
-2. **Reverse aliases always mint on the service domain** — SimpleLogin's
+1. **Reverse aliases always mint on the service domain** — SimpleLogin's
    `use_as_reverse_alias` per-domain option not implemented.
-3. **Per-user disabled-alias behavior** — accept-and-drop is the only mode;
-   SimpleLogin's `block_behaviour` 550 option not wired.
-4. **No `Received:` header prepended at the mx** — minor RFC nicety.
-5. **Spam-check hook** — pluggable pre-queue slot deliberately unwired
+2. **SimpleLogin's `block_behaviour` 550 option not wired** — disabled-alias
+   handling is accept-and-drop or the trash inbox (decision #11); the
+   per-user "return 550 instead" toggle SL offers is deliberately absent
+   (it probes alias existence).
+3. **Spam-check hook** — pluggable pre-queue slot deliberately unwired
    (PLAN decision #4). Candidates: spamd/SPAMC or rspamd.
-6. **API deferred endpoints** — list in Lane E row above; also GET-with-body
+4. **API deferred endpoints** — list in Lane E row above; also GET-with-body
    alias search, multi-window rate limits collapsed to single-window,
    150-word wordlist, mailbox email-change returns 400.
-7. **PGP** — fields accepted/serialized as unsupported (`support_pgp:false`).
+5. **PGP** — fields accepted/serialized as unsupported (`support_pgp:false`).
+
+(Resolved 2026-08-10: transactional bounce intake — the VERP id now resolves
+to the verification_codes row in BOTH intake paths (mx inbound VERP + deliverd
+permanent failure): code invalidated, mailbox `nb_failed_checks` bumped,
+user notified. Also resolved: the mx now prepends a `Received:` trace header.)
 
 ## Not started
 
@@ -120,10 +135,16 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
    release ≥1.4.0 ships: collapse the two services back to one `oven/bun`
    container and re-verify HMR live (workaround #1 lifts on the same
    release).
-3. **Stripe account API version is 2018-02-28** — webhook payload shapes are
+4. **Stripe account API version is 2018-02-28** — webhook payload shapes are
    version-pinned per account; the handler reads both pre-Basil and current
    `current_period_end` shapes, so upgrading the account's API version later
    is safe but should be followed by a re-run of the live loop.
+5. **Astro dev-server stale lock kills the www container** (diagnosed
+   2026-08-10): `www/.astro/dev.json` records the dev server's pid; after a
+   container recreation the fresh astro process can be assigned that SAME pid
+   and, seeing "another" dev server, SIGTERMs itself instantly (exit 143 in a
+   loop). Fix: delete `www/.astro/dev.json` and `docker compose up -d www`.
+   (`--force` does not help — it's astro itself doing the killing.)
 
 ## Deviations from SimpleLogin (all documented in code at the site)
 

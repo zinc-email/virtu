@@ -16,6 +16,7 @@ import type { Db } from "../db/index.ts";
 import {
   type Alias,
   aliases,
+  aliasMailboxes,
   type CustomDomain,
   customDomains,
   deletedAliases,
@@ -47,8 +48,22 @@ export interface RcptFacts {
   /** True when the address's domain is one we accept mail for. */
   isLocalDomain: boolean;
   alias: Alias | null;
-  user: User | null;
+  /** The alias's primary mailbox (aliases.mailbox_id). */
   mailbox: Mailbox | null;
+  /**
+   * Every healthy mailbox the alias delivers to: the primary plus the
+   * alias_mailboxes extras, disabled ones filtered out, primary first. The
+   * mx enqueues one copy per entry; an unhealthy primary no longer drops
+   * mail that a healthy extra mailbox could receive.
+   */
+  deliveryMailboxes: Mailbox[];
+  user: User | null;
+  /**
+   * The owner's designated trash mailbox, only gathered when the alias is
+   * disabled (the "off"-alias question): mail for a disabled alias forwards
+   * here instead of being dropped. Null when unset or unhealthy.
+   */
+  trashMailbox: Mailbox | null;
   catchAll: CatchAllFacts | null;
 }
 
@@ -56,8 +71,10 @@ export interface RcptFacts {
 export type RcptDecision =
   /** A signed bounce address of ours: accept; DATA runs bounce handling. */
   | { kind: "verp"; info: VerpInfo }
-  /** Deliverable alias: accept; DATA runs the forward pipeline. */
-  | { kind: "deliver" }
+  /** Deliverable alias: accept; DATA runs the forward pipeline. `trash` marks
+   * a disabled alias routed to the owner's trash mailbox (facts.mailbox is
+   * the trash mailbox by the time the mx sees the decision). */
+  | { kind: "deliver"; trash?: boolean }
   /**
    * Catch-all: create the alias on the fly, then deliver. Internal to
    * {@link evaluateRcpt} — it performs the mint and returns "deliver", so mx
@@ -109,9 +126,21 @@ export function decideRcpt(facts: RcptFacts): RcptDecision {
     return { kind: "reject", code: 550, enhanced: "5.7.1", message: "Account is disabled" };
   }
 
-  if (!facts.alias.enabled) return { kind: "drop", reason: "alias_disabled" };
+  if (!facts.alias.enabled) {
+    // The trash-inbox concept: an "off" alias forwards to the owner's
+    // designated trash mailbox when one is set and healthy; otherwise the
+    // default accept-and-drop (existence stays unprobeable either way).
+    if (
+      facts.trashMailbox !== null &&
+      facts.trashMailbox.verified &&
+      !facts.trashMailbox.disabled
+    ) {
+      return { kind: "deliver", trash: true };
+    }
+    return { kind: "drop", reason: "alias_disabled" };
+  }
 
-  if (facts.mailbox === null || facts.mailbox.disabled) {
+  if (facts.deliveryMailboxes.length === 0) {
     return { kind: "drop", reason: "mailbox_unavailable" };
   }
 
@@ -152,6 +181,8 @@ export async function evaluateRcpt(
   let alias: Alias | null = null;
   let user: User | null = null;
   let mailbox: Mailbox | null = null;
+  let deliveryMailboxes: Mailbox[] = [];
+  let trashMailbox: Mailbox | null = null;
   let catchAll: CatchAllFacts | null = null;
 
   if (verp === null) {
@@ -166,6 +197,32 @@ export async function evaluateRcpt(
       alias = rows[0].alias;
       user = rows[0].user;
       mailbox = rows[0].mailbox;
+    }
+
+    // The full delivery set: primary + alias_mailboxes extras, healthy ones
+    // only, primary first, deduped by id.
+    if (alias !== null && alias.enabled) {
+      const extraRows = await db
+        .select({ mailbox: mailboxes })
+        .from(aliasMailboxes)
+        .innerJoin(mailboxes, eq(aliasMailboxes.mailboxId, mailboxes.id))
+        .where(eq(aliasMailboxes.aliasId, alias.id))
+        .orderBy(mailboxes.id);
+      const seen = new Set<number>();
+      for (const mb of [mailbox, ...extraRows.map((r) => r.mailbox)]) {
+        if (mb === null || mb.disabled || seen.has(mb.id)) continue;
+        seen.add(mb.id);
+        deliveryMailboxes.push(mb);
+      }
+    }
+
+    // Disabled alias with a designated trash inbox: gather it so decideRcpt
+    // can route there instead of dropping.
+    if (alias !== null && !alias.enabled && user !== null && user.trashMailboxId !== null) {
+      trashMailbox =
+        (
+          await db.select().from(mailboxes).where(eq(mailboxes.id, user.trashMailboxId)).limit(1)
+        )[0] ?? null;
     }
 
     // No alias: is this a VERIFIED custom domain of ours? (Also what makes
@@ -206,8 +263,24 @@ export async function evaluateRcpt(
   // alias, or a verified custom domain.
   const isLocalDomain = domain === opts.mailDomain || alias !== null || catchAll !== null;
 
-  const facts: RcptFacts = { verp, isLocalDomain, alias, user, mailbox, catchAll };
+  const facts: RcptFacts = {
+    verp,
+    isLocalDomain,
+    alias,
+    mailbox,
+    deliveryMailboxes,
+    user,
+    trashMailbox,
+    catchAll,
+  };
   let decision = decideRcpt(facts);
+
+  // Trash delivery targets ONLY the trash mailbox: swap it in so the mx's
+  // forward pipeline (which reads the delivery set) needs no special case.
+  if (decision.kind === "deliver" && decision.trash === true && trashMailbox !== null) {
+    facts.mailbox = trashMailbox;
+    facts.deliveryMailboxes = [trashMailbox];
+  }
 
   // Perform the catch-all mint here so callers only ever see "deliver": the
   // alias row must exist before DATA runs the forward pipeline anyway.
@@ -221,6 +294,7 @@ export async function evaluateRcpt(
       facts.alias = minted;
       facts.user = catchAll.owner;
       facts.mailbox = catchAll.mailbox;
+      facts.deliveryMailboxes = [catchAll.mailbox];
       decision = { kind: "deliver" };
     } else {
       // Lost every race AND the row vanished (concurrent delete): the

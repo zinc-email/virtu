@@ -17,9 +17,19 @@
  * `shouldDisable` is pure over bounce timestamps + an injected clock.
  */
 
-import { and, eq, gt, isNotNull } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
-import { aliases, type EmailLog, emailLogs, notifications, sentAlerts } from "../db/schema.ts";
+import {
+  aliases,
+  type EmailLog,
+  emailLogs,
+  mailboxes,
+  notifications,
+  sentAlerts,
+  users,
+  type VerificationCode,
+  verificationCodes,
+} from "../db/schema.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
@@ -144,6 +154,87 @@ export async function sendAlertOnce(db: Db, input: AlertInput): Promise<boolean>
     message: input.message,
   });
   return true;
+}
+
+/** Result of {@link recordTransactionalBounce}. */
+export interface TransactionalBounceResult {
+  /** The verification_codes row the VERP id referenced, when it resolved. */
+  code: VerificationCode | null;
+  /** True when a mailbox-verification bounce bumped nb_failed_checks. */
+  mailboxFlagged: boolean;
+}
+
+/**
+ * Intake for a bounced transactional email (VERP type `transactional`): the
+ * VERP id is the verification_codes row the email carried (0 = none — e.g.
+ * plain alert mail). The code is invalidated — the address demonstrably
+ * cannot receive it, so letting it linger only invites confusion — and a
+ * bounced mailbox-verification additionally bumps the mailbox's
+ * nb_failed_checks. Either way the user gets a notification, de-duplicated
+ * through sent_alerts like every other alert.
+ */
+export async function recordTransactionalBounce(
+  db: Db,
+  refId: number,
+  now: Date = new Date(),
+): Promise<TransactionalBounceResult> {
+  if (refId <= 0) return { code: null, mailboxFlagged: false };
+  const rows = await db
+    .select()
+    .from(verificationCodes)
+    .where(eq(verificationCodes.id, refId))
+    .limit(1);
+  const code = rows[0];
+  if (code === undefined) return { code: null, mailboxFlagged: false };
+
+  if (code.usedAt === null) {
+    await db
+      .update(verificationCodes)
+      .set({ usedAt: now })
+      .where(and(eq(verificationCodes.id, code.id), isNull(verificationCodes.usedAt)));
+  }
+
+  if (code.mailboxId !== null) {
+    await db
+      .update(mailboxes)
+      .set({ nbFailedChecks: sql`${mailboxes.nbFailedChecks} + 1` })
+      .where(eq(mailboxes.id, code.mailboxId));
+    const mbRows = await db
+      .select()
+      .from(mailboxes)
+      .where(eq(mailboxes.id, code.mailboxId))
+      .limit(1);
+    const mailbox = mbRows[0];
+    if (mailbox !== undefined) {
+      await sendAlertOnce(db, {
+        userId: code.userId,
+        toEmail: mailbox.email,
+        alertType: `transactional_bounce_mailbox_${mailbox.id}`,
+        title: `Verification email to ${mailbox.email} bounced`,
+        message:
+          `The verification email for your mailbox ${mailbox.email} could not be ` +
+          `delivered. Check the address and request a new code.`,
+        now,
+      });
+    }
+    return { code, mailboxFlagged: true };
+  }
+
+  const userRows = await db.select().from(users).where(eq(users.id, code.userId)).limit(1);
+  const user = userRows[0];
+  if (user !== undefined) {
+    await sendAlertOnce(db, {
+      userId: user.id,
+      toEmail: user.email,
+      alertType: `transactional_bounce_account_${user.id}`,
+      title: "Your activation email bounced",
+      message:
+        `The activation email for your account could not be delivered to ` +
+        `${user.email}. Check the address and request a new code.`,
+      now,
+    });
+  }
+  return { code, mailboxFlagged: false };
 }
 
 /** Result of {@link recordBounce}. */

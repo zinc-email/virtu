@@ -23,7 +23,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { config } from "../src/config.ts";
 import { db } from "../src/db/index.ts";
-import { users, verificationCodes } from "../src/db/schema.ts";
+import { mailboxes, notifications, users, verificationCodes } from "../src/db/schema.ts";
 import { parseVerp } from "../src/mail/index.ts";
 import {
   accountActivationEmail,
@@ -33,7 +33,7 @@ import {
   hashVerificationCode,
   sendTransactional,
 } from "../src/pipeline/transactional.ts";
-import { ensureDkimKey, randomTag } from "./fixtures.ts";
+import { ensureDkimKey, ensureMailbox, pollUntil, randomTag } from "./fixtures.ts";
 import { getHeader, getHeaders, waitForMail } from "./maildir.ts";
 import { wes } from "./personas.ts";
 import { waitForPort } from "./smtpSend.ts";
@@ -127,5 +127,65 @@ describe("transactional", () => {
     expect(codeRow?.usedAt).not.toBeNull();
     const [activated] = await db.select().from(users).where(eq(users.id, user!.id)).limit(1);
     expect(activated?.activated).toBe(true);
+  }, 120_000);
+
+  test("a bounced verification email invalidates its code (transactional intake)", async () => {
+    // Mailbox verification sent to a qmail localpart that does not exist:
+    // qmail answers 550 at RCPT, deliverd classifies it permanent, and the
+    // transactional VERP resolves back to the code row — which dies, with
+    // the mailbox's failed-check counter bumped.
+    const [user] = await db
+      .insert(users)
+      .values({
+        email: `wes.bounce.${randomTag()}@qmail.com`,
+        name: "Wes (bounce story)",
+        passwordHash: "story-test-never-logs-in",
+        activated: true,
+      })
+      .returning();
+    expect(user).toBeDefined();
+
+    const deadAddress = `nobody.${randomTag()}@qmail.com`;
+    const mailbox = await ensureMailbox(user!.id, deadAddress);
+
+    const { code, row } = await createVerificationCode(db, {
+      userId: user!.id,
+      purpose: "mailbox",
+      mailboxId: mailbox.id,
+    });
+    expect(code).toHaveLength(6);
+
+    const sent = await sendTransactional(db, {
+      to: deadAddress,
+      subject: "Please confirm your mailbox",
+      textBody: `code:\n\n${code}\n`,
+      testId: newTestId(),
+      refId: row.id,
+    });
+    expect(sent.queued).toBe(true);
+
+    // The failure propagates: code invalidated, mailbox flagged, user told.
+    const deadCode = await pollUntil(
+      async () => {
+        const [r] = await db
+          .select()
+          .from(verificationCodes)
+          .where(eq(verificationCodes.id, row.id))
+          .limit(1);
+        return r?.usedAt != null ? r : undefined;
+      },
+      { timeoutMs: 90_000, what: `verification code ${row.id} invalidated by bounce` },
+    );
+    expect(deadCode.usedAt).not.toBeNull();
+
+    const [flagged] = await db
+      .select()
+      .from(mailboxes)
+      .where(eq(mailboxes.id, mailbox.id))
+      .limit(1);
+    expect(flagged!.nbFailedChecks).toBeGreaterThanOrEqual(1);
+
+    const alerts = await db.select().from(notifications).where(eq(notifications.userId, user!.id));
+    expect(alerts.some((n) => n.title?.includes(deadAddress))).toBe(true);
   }, 120_000);
 });

@@ -74,6 +74,9 @@ export const users = pgTable("users", {
   defaultAliasDomain: varchar({ length: 128 }),
   // Bitfield for misc account flags (SimpleLogin User.flags).
   flags: bigint({ mode: "number" }).default(0).notNull(),
+  // The "trash inbox": mail for a disabled ("off") alias is forwarded here
+  // instead of being dropped. Null = accept-and-drop (the default).
+  trashMailboxId: integer().references((): AnyPgColumn => mailboxes.id, { onDelete: "set null" }),
   ...timestamps,
 });
 
@@ -118,6 +121,27 @@ export const apiKeys = pgTable(
     ...timestamps,
   },
   (t) => [index("api_keys_user_id_idx").on(t.userId)],
+);
+
+// Per-device SMTP submission passwords ("app passwords"): one row per device
+// ("my phone", "my laptop"), each revocable/replaceable independently of the
+// others and of the account password. The plaintext is generated server-side,
+// shown once at creation, and only its argon2id hash is stored.
+export const smtpCredentials = pgTable(
+  "smtp_credentials",
+  {
+    id: id(),
+    userId: integer()
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    // Device name, humanly readable ("Phone", "Laptop").
+    name: varchar({ length: 128 }).notNull(),
+    // Bun.password argon2id encoded string (includes salt + params).
+    passwordHash: text().notNull(),
+    lastUsedAt: timestamp({ withTimezone: true, mode: "date" }),
+    ...timestamps,
+  },
+  (t) => [index("smtp_credentials_user_id_idx").on(t.userId)],
 );
 
 // ---------------------------------------------------------------------------
@@ -450,6 +474,7 @@ export const dkimKeys = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
+export type SmtpCredential = typeof smtpCredentials.$inferSelect;
 export type Alias = typeof aliases.$inferSelect;
 export type Mailbox = typeof mailboxes.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;

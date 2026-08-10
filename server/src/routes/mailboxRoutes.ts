@@ -6,8 +6,11 @@
 //                               verifies via a web LINK; an API needs a code
 //                               flow, so we mail a code and accept it here —
 //                               error strings from mailbox_utils.py)
-//   PUT    /mailboxes/:id       set default; email change not supported yet
-//   DELETE /mailboxes/:id       with optional transfer_aliases_to
+//   PUT    /mailboxes/:id       set default / set-or-clear trash (Virtu
+//                               extension); email change not supported yet
+//   DELETE /mailboxes/:id       with optional transfer_aliases_to (deleting
+//                               the trash mailbox clears users.trash_mailbox_id
+//                               via its ON DELETE SET NULL)
 
 import { count, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -44,6 +47,9 @@ const UpdateMailboxBody = z
     default: z.boolean().optional(),
     email: z.string().optional(),
     cancel_email_change: z.boolean().optional(),
+    // Virtu extension: designate (true) or clear (false) this mailbox as the
+    // account's trash inbox — mail for disabled aliases lands there.
+    trash: z.boolean().optional(),
   })
   .meta({ id: "UpdateMailboxRequest" });
 
@@ -62,7 +68,11 @@ function looksLikeEmail(email: string): boolean {
 export async function withMailboxRoutes(authed: FastifyInstance) {
   const a = authed.withTypeProvider<FastifyZodOpenApiTypeProvider>();
 
-  async function mailboxToDict(mb: typeof mailboxes.$inferSelect, defaultMailboxId: number | null) {
+  async function mailboxToDict(
+    mb: typeof mailboxes.$inferSelect,
+    defaultMailboxId: number | null,
+    trashMailboxId: number | null,
+  ) {
     const [aliasCount] = await db
       .select({ n: count() })
       .from(aliases)
@@ -74,6 +84,7 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       default: defaultMailboxId === mb.id,
       creation_timestamp: timestampOf(mb.createdAt),
       nb_alias: aliasCount?.n ?? 0,
+      trash: trashMailboxId === mb.id,
     };
   }
 
@@ -89,7 +100,8 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
     handler: async (req) => {
       const rows = await db.select().from(mailboxes).where(eq(mailboxes.userId, req.user.id));
       const out = [];
-      for (const mb of rows) out.push(await mailboxToDict(mb, req.user.defaultMailboxId));
+      for (const mb of rows)
+        out.push(await mailboxToDict(mb, req.user.defaultMailboxId, req.user.trashMailboxId));
       return { mailboxes: out };
     },
   });
@@ -156,7 +168,7 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       });
 
       reply.status(201);
-      return mailboxToDict(mb, req.user.defaultMailboxId);
+      return mailboxToDict(mb, req.user.defaultMailboxId, req.user.trashMailboxId);
     },
   });
 
@@ -193,7 +205,7 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       // Same string for "not yours" and "no such mailbox" (SimpleLogin's
       // verify_mailbox_code) — ownership is not probeable.
       if (!mb || mb.userId !== req.user.id) throw new HttpError(400, "Invalid mailbox");
-      if (mb.verified) return mailboxToDict(mb, req.user.defaultMailboxId);
+      if (mb.verified) return mailboxToDict(mb, req.user.defaultMailboxId, req.user.trashMailboxId);
 
       const result = await consumeVerificationCode(db, {
         userId: req.user.id,
@@ -212,7 +224,11 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       if (result === "wrong") throw new HttpError(400, "Invalid activation code");
 
       await db.update(mailboxes).set({ verified: true }).where(eq(mailboxes.id, mb.id));
-      return mailboxToDict({ ...mb, verified: true }, req.user.defaultMailboxId);
+      return mailboxToDict(
+        { ...mb, verified: true },
+        req.user.defaultMailboxId,
+        req.user.trashMailboxId,
+      );
     },
   });
 
@@ -222,8 +238,10 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
     config: { rateLimit: { max: 100, timeWindow: "1 hour" } },
     schema: {
       description:
-        "Update a mailbox. Only `default` is supported; `email` change returns 400 " +
-        "(not implemented yet) and `cancel_email_change` is a no-op.",
+        "Update a mailbox. `default` sets the default mailbox; `trash` designates " +
+        "(true) or clears (false) it as the account's trash inbox, where mail for " +
+        "disabled aliases is delivered. `email` change returns 400 (not implemented " +
+        "yet) and `cancel_email_change` is a no-op.",
       tags: ["Mailbox"],
       security: [{ apiKeyAuth: [] }],
       params: MailboxIdParams,
@@ -254,6 +272,15 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
           throw new HttpError(400, "Unverified mailbox cannot be used as default mailbox");
         }
         await db.update(users).set({ defaultMailboxId: mb.id }).where(eq(users.id, req.user.id));
+      }
+
+      if (req.body.trash === true) {
+        if (!mb.verified) {
+          throw new HttpError(400, "Unverified mailbox cannot be used as trash mailbox");
+        }
+        await db.update(users).set({ trashMailboxId: mb.id }).where(eq(users.id, req.user.id));
+      } else if (req.body.trash === false && req.user.trashMailboxId === mb.id) {
+        await db.update(users).set({ trashMailboxId: null }).where(eq(users.id, req.user.id));
       }
 
       return { updated: true };

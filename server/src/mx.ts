@@ -24,6 +24,7 @@ import type { Db } from "./db/index.ts";
 import {
   type Address,
   buildVerp,
+  formatDateHeader,
   type HeaderBlock,
   parseAddressList,
   parseMessage,
@@ -34,7 +35,7 @@ import { type DnsResolver, signOutbound, verifyInbound } from "./mailauth/index.
 import { getOrCreateContact } from "./pipeline/contacts.ts";
 import { loadDkimKey } from "./pipeline/dkim.ts";
 import { makeVerifyResolver } from "./pipeline/dnsTxt.ts";
-import { recordBounce } from "./pipeline/bounce.ts";
+import { recordBounce, recordTransactionalBounce } from "./pipeline/bounce.ts";
 import {
   createBlockedLog,
   createForwardLog,
@@ -96,11 +97,20 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     );
   }
 
-  // 1. Bounce handling: VERP recipients route straight to their email_log.
+  // 1. Bounce handling: VERP recipients route straight to their email_log
+  //    (or, for transactional mail, to the verification_codes row).
   for (const rcpt of evaluated) {
     if (rcpt.decision.kind !== "verp") continue;
     const info = rcpt.decision.info;
-    if (info.type === "transactional") continue; // accept and discard (MVP)
+    if (info.type === "transactional") {
+      const result = await recordTransactionalBounce(opts.db, info.id);
+      log(
+        `mx: transactional bounce (ref ${info.id})` +
+          (result.code !== null ? ` — code ${result.code.id} invalidated` : "") +
+          (result.mailboxFlagged ? ", mailbox flagged" : ""),
+      );
+      continue;
+    }
     const result = await recordBounce(opts.db, info.id);
     log(
       `mx: bounce for email_log ${info.id} (${info.type})` +
@@ -165,75 +175,100 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     log(`mx: dropped mail for ${drop.address} (${(drop.decision as { reason: string }).reason})`);
   }
 
-  // 4. Forward pipeline per deliverable recipient.
+  // Trace header for the hop we handled (RFC 5321 §4.4): topmost on every
+  // forwarded copy, above the auth results we prepend.
+  const receivedField = parseMessage(
+    encoder.encode(
+      `Received: from ${envelope.heloName || "unknown"} (${session.remoteAddress})\r\n` +
+        `\tby ${opts.mailHostname} (virtu) with ESMTP;\r\n` +
+        `\t${formatDateHeader(new Date())}\r\n`,
+    ),
+  ).headers.fields[0]!;
+
+  // 4. Forward pipeline per deliverable recipient × delivery mailbox (an
+  //    alias can deliver to several mailboxes; each copy gets its own
+  //    email_log so bounce accounting stays per-mailbox).
   for (const rcpt of deliverable) {
     const alias = rcpt.facts.alias!;
     const user = rcpt.facts.user!;
-    const mailbox = rcpt.facts.mailbox!;
     const scope = { userId: user.id, aliasId: alias.id };
+    const isTrash = rcpt.decision.kind === "deliver" && rcpt.decision.trash === true;
 
     const fromContact = await getOrCreateContact(opts.db, scope, fromAddr, "from", {
       mailDomain: opts.mailDomain,
       envelopeFrom: envelope.mailFrom,
     });
-    const emailLog = await createForwardLog(opts.db, {
-      userId: user.id,
-      contactId: fromContact.id,
-      aliasId: alias.id,
-      mailboxId: mailbox.id,
-      messageId: originalMessageId,
-    });
 
-    const rewritten = await rewriteForwardForAlias(opts, {
-      alias,
-      mailbox,
-      user,
-      emailLogId: emailLog.id,
-      parsedHeaders: parsed.headers,
-      envelopeFrom: envelope.mailFrom,
-    });
-
-    // Prepend the auth results (fields keep their raw bytes → verbatim).
-    rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
-    if (verification.verdict.action === "flag") {
-      rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
-    }
-
-    let message: Uint8Array;
-    if (dkimKey === null) {
-      message = serializeMessage(rewritten, parsed.body);
-    } else {
-      const signed = await signOutbound(rewritten, parsed.body, {
-        dkimKeys: [dkimKey],
-        arc:
-          verification.arcContext === null
-            ? undefined
-            : {
-                signingDomain: opts.mailDomain,
-                selector: dkimKey.selector,
-                privateKey: dkimKey.privateKey,
-                context: verification.arcContext,
-              },
+    for (const mailbox of rcpt.facts.deliveryMailboxes) {
+      const emailLog = await createForwardLog(opts.db, {
+        userId: user.id,
+        contactId: fromContact.id,
+        aliasId: alias.id,
+        mailboxId: mailbox.id,
+        messageId: originalMessageId,
       });
-      for (const err of signed.errors) {
-        log(`mx: DKIM signing error (${err.signingDomain}/${err.selector}): ${err.err.message}`);
-      }
-      message = signed.message;
-    }
 
-    const envelopeFrom = buildVerp({
-      type: "bounce_forward",
-      id: emailLog.id,
-      secret: opts.verpSecret,
-      domain: opts.mailDomain,
-    });
-    const queueId = await enqueue(opts.db, {
-      raw: message,
-      envelopeFrom,
-      envelopeTo: mailbox.email,
-      maxRawBytes: opts.maxMessageSize,
-    });
-    log(`mx: queued #${queueId} for ${rcpt.address} -> ${mailbox.email} (log ${emailLog.id})`);
+      const rewritten = await rewriteForwardForAlias(opts, {
+        alias,
+        mailbox,
+        user,
+        emailLogId: emailLog.id,
+        parsedHeaders: parsed.headers,
+        envelopeFrom: envelope.mailFrom,
+      });
+
+      // Prepend the auth results (fields keep their raw bytes → verbatim),
+      // then our Received on top.
+      rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
+      rewritten.fields.unshift({ ...receivedField });
+      if (verification.verdict.action === "flag") {
+        rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
+      }
+      if (isTrash) {
+        // The alias is off: the copy goes to the trash inbox, marked so
+        // mailbox-side filters can file it.
+        rewritten.append("X-Virtu-Trash", "YES (alias disabled)");
+      }
+
+      let message: Uint8Array;
+      if (dkimKey === null) {
+        message = serializeMessage(rewritten, parsed.body);
+      } else {
+        const signed = await signOutbound(rewritten, parsed.body, {
+          dkimKeys: [dkimKey],
+          arc:
+            verification.arcContext === null
+              ? undefined
+              : {
+                  signingDomain: opts.mailDomain,
+                  selector: dkimKey.selector,
+                  privateKey: dkimKey.privateKey,
+                  context: verification.arcContext,
+                },
+        });
+        for (const err of signed.errors) {
+          log(`mx: DKIM signing error (${err.signingDomain}/${err.selector}): ${err.err.message}`);
+        }
+        message = signed.message;
+      }
+
+      const envelopeFrom = buildVerp({
+        type: "bounce_forward",
+        id: emailLog.id,
+        secret: opts.verpSecret,
+        domain: opts.mailDomain,
+      });
+      const queueId = await enqueue(opts.db, {
+        raw: message,
+        envelopeFrom,
+        envelopeTo: mailbox.email,
+        maxRawBytes: opts.maxMessageSize,
+      });
+      log(
+        `mx: queued #${queueId} for ${rcpt.address} -> ${mailbox.email}` +
+          `${isTrash ? " (trash)" : ""} (log ${emailLog.id})`,
+      );
+    }
   }
 
   return { accept: true, message: "Ok: queued" };

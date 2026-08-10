@@ -37,6 +37,71 @@ const BASIC =
   "\r\n" +
   "Sounds good.\r\n";
 
+describe("rewriteReply cold-send mode (allowExternalRecipients)", () => {
+  const coldCtx = (overrides: Partial<ReplyContext> = {}): ReplyContext =>
+    baseCtx({
+      allowExternalRecipients: true,
+      isUserMailbox: async (addr) => addr.toLowerCase() === "wes@qmail.com",
+      ...overrides,
+    });
+
+  test("unknown To entries pass through verbatim; reverse aliases still translate", async () => {
+    const msg =
+      "From: asdf@user.com\r\n" +
+      "To: samir@initech.com, milton_at_initech_com_r1@proxy.virtu.test\r\n" +
+      "Subject: Hello\r\n" +
+      "Date: Sat, 08 Aug 2026 11:00:00 +0000\r\n" +
+      "\r\n" +
+      "Hi.\r\n";
+    const result = await rewriteReply(
+      { headers: parseMessage(enc.encode(msg)).headers },
+      coldCtx(),
+    );
+    if (!result.ok) throw new Error("expected ok");
+    const to = parseAddressList(result.headers.get("To")!);
+    expect(to).toEqual([
+      { address: "samir@initech.com" },
+      { name: "Milton Waddams", address: "milton@initech.com" },
+    ]);
+    expect(result.headers.get("From")).toBe("asdf@user.com");
+  });
+
+  test("the user's own mailbox address in Cc refuses (mailbox_address)", async () => {
+    const msg =
+      "From: asdf@user.com\r\n" +
+      "To: samir@initech.com\r\n" +
+      "Cc: wes@qmail.com\r\n" +
+      "Subject: Hello\r\n" +
+      "\r\n" +
+      "Hi.\r\n";
+    const result = await rewriteReply(
+      { headers: parseMessage(enc.encode(msg)).headers },
+      coldCtx(),
+    );
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.refusal).toEqual({
+      reason: "mailbox_address",
+      header: "cc",
+      address: "wes@qmail.com",
+    });
+  });
+
+  test("without the flag, unknown To entries still refuse (reply mode unchanged)", async () => {
+    const msg =
+      "From: asdf@user.com\r\n" +
+      "To: samir@initech.com\r\n" +
+      "Subject: Hello\r\n" +
+      "\r\n" +
+      "Hi.\r\n";
+    const result = await rewriteReply(
+      { headers: parseMessage(enc.encode(msg)).headers },
+      baseCtx(),
+    );
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.refusal.reason).toBe("non_reverse_alias");
+  });
+});
+
 describe("rewriteReply", () => {
   test("happy path: From→alias, To→real contact, Message-ID swapped", async () => {
     const ctx = baseCtx();

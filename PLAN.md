@@ -341,5 +341,33 @@ Settled (2026-08-08):
    containers; the verify → rewrite → sign/seal chain lives in one process. Lane B
    is repurposed as the mailauth integration lane. Fallback if mailauth's SPF
    proves weak in practice: glts spf-milter (`tmp/virtu/server/docker/spf/`).
+9. **SMTP outbound modes are chosen by MAIL FROM** (2026-08-10). Submission
+   supports two sending modes: MAIL FROM = one of the user's **aliases** is
+   "send mode" — recipients that are reverse aliases translate back to their
+   contact (reply), any other recipient is a **cold email** (contact minted for
+   (alias, recipient) so the reply threads back; To/Cc entries that aren't
+   reverse aliases pass through verbatim). MAIL FROM = one of the user's
+   **mailboxes** is strict "reply mode" — what a stock MUA does — every
+   recipient must be a reverse alias and all must belong to one alias; the
+   contact rows are the metadata that picks the outbound alias. The
+   refuse-to-leak invariant holds in both modes: a To/Cc entry naming one of
+   the user's own mailboxes is refused (550), never sent.
+10. **Per-device SMTP passwords** (2026-08-10). `smtp_credentials` rows are
+    app-style passwords (generated server-side, shown once, argon2id-hashed),
+    one per device, revocable independently of each other and of the account
+    password. SMTP AUTH accepts the account password or any device credential;
+    device use stamps `last_used_at`. API: GET/POST/DELETE `/smtp/credentials`
+    (a Virtu extension — SimpleLogin has no SMTP submission).
+11. **Trash inbox** (2026-08-10). A user may designate one verified mailbox as
+    the account's trash inbox (`users.trash_mailbox_id`, set via
+    PUT /mailboxes/:id `{trash}`). Mail for a disabled ("off") alias is then
+    forwarded there — stamped `X-Virtu-Trash: YES (alias disabled)` — instead
+    of accept-and-dropped; with no trash mailbox the default accept-and-drop
+    stands. Either way the sender sees 250: existence is never probed.
+12. **Multi-mailbox delivery** (2026-08-10). An alias delivers one copy per
+    associated mailbox (primary + `alias_mailboxes` extras, unhealthy ones
+    skipped), each copy with its own email_log and VERP so bounce accounting
+    stays per-mailbox. A broken primary no longer drops mail that a healthy
+    extra mailbox can receive.
 
 Open: none.

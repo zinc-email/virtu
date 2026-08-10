@@ -24,17 +24,19 @@ import { BillingPage } from "src/pages/Billing";
 import { DomainDetailPage } from "src/pages/DomainDetail";
 import { DomainsPage } from "src/pages/Domains";
 import { LoginPage } from "src/pages/Login";
+import { MailboxesPage } from "src/pages/Mailboxes";
 import { RegisterPage } from "src/pages/Register";
 import { SettingsPage } from "src/pages/Settings";
 import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
 
 // ── Header nav ───────────────────────────────────────────────────────────────
-// Below 900px the inline links can't fit (4 items + logo + padding needs
-// ~670px at the 18px root) — they collapse into a hamburger + drawer.
+// Below 1000px the inline links can't fit (5 items + logo + padding needs
+// ~830px at the 18px root) — they collapse into a hamburger + drawer.
 
 const NAV_ITEMS = [
   { to: "/", label: "Emails" },
+  { to: "/mailboxes", label: "Mailboxes" },
   { to: "/domains", label: "Domains" },
   { to: "/settings", label: "Settings" },
   { to: "/billing", label: "Billing" },
@@ -79,6 +81,7 @@ function NavItem({ to, active, children }: { to: string; active: boolean; childr
 /** Which nav item a path belongs to (details roll up to their section). */
 function activeNavItem(path: string): string {
   if (path === "/" || path.startsWith("/aliases")) return "/";
+  if (path.startsWith("/mailboxes")) return "/mailboxes";
   if (path.startsWith("/domains")) return "/domains";
   if (path.startsWith("/settings")) return "/settings";
   if (path.startsWith("/billing")) return "/billing";
@@ -258,7 +261,7 @@ function Shell() {
           {authed && !isAuthPage && (
             <>
               <ul
-                className={cx(navList, css({ "@media (max-width: 900px)": { display: "none" } }))}
+                className={cx(navList, css({ "@media (max-width: 1000px)": { display: "none" } }))}
               >
                 {NAV_ITEMS.map((item) => (
                   <NavItem key={item.to} to={item.to} active={item.to === active}>
@@ -273,7 +276,7 @@ function Shell() {
                 onClick={() => setMenuOpen(true)}
                 className={css({
                   display: "none",
-                  "@media (max-width: 900px)": { display: "block" },
+                  "@media (max-width: 1000px)": { display: "block" },
                   background: "none",
                   border: "none",
                   cursor: "pointer",
@@ -359,6 +362,13 @@ const aliasDetailRoute = createRoute({
   component: AliasDetailPage,
 });
 
+const mailboxesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/mailboxes",
+  beforeLoad: requireAuth,
+  component: MailboxesPage,
+});
+
 const domainsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/domains",
@@ -406,6 +416,7 @@ export const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
     aliasDetailRoute,
+    mailboxesRoute,
     domainsRoute,
     domainDetailRoute,
     billingRoute,

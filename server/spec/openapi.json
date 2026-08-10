@@ -308,6 +308,9 @@
           },
           "cancel_email_change": {
             "type": "boolean"
+          },
+          "trash": {
+            "type": "boolean"
           }
         }
       },
@@ -319,6 +322,22 @@
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
           }
+        }
+      },
+      "CreateSmtpCredentialRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "example": {
+          "name": "Phone"
         }
       },
       "UpdateSettingRequest": {
@@ -1320,6 +1339,9 @@
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
+          },
+          "trash": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1328,7 +1350,8 @@
           "verified",
           "default",
           "creation_timestamp",
-          "nb_alias"
+          "nb_alias",
+          "trash"
         ],
         "additionalProperties": false
       },
@@ -1341,6 +1364,99 @@
         },
         "required": [
           "updated"
+        ],
+        "additionalProperties": false
+      },
+      "SmtpCredentialsResponse": {
+        "type": "object",
+        "properties": {
+          "credentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmtpCredential"
+            }
+          }
+        },
+        "required": [
+          "credentials"
+        ],
+        "additionalProperties": false
+      },
+      "SmtpCredential": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "creation_timestamp": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "last_used_timestamp": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "creation_timestamp",
+          "last_used_timestamp"
+        ],
+        "additionalProperties": false
+      },
+      "SmtpCredentialCreated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "creation_timestamp": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "last_used_timestamp": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "creation_timestamp",
+          "last_used_timestamp",
+          "password"
         ],
         "additionalProperties": false
       },
@@ -3465,7 +3581,7 @@
         "tags": [
           "Mailbox"
         ],
-        "description": "Update a mailbox. Only `default` is supported; `email` change returns 400 (not implemented yet) and `cancel_email_change` is a no-op.",
+        "description": "Update a mailbox. `default` sets the default mailbox; `trash` designates (true) or clears (false) it as the account's trash inbox, where mail for disabled aliases is delivered. `email` change returns 400 (not implemented yet) and `cancel_email_change` is a no-op.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3603,6 +3719,171 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/smtp/credentials": {
+      "get": {
+        "tags": [
+          "SmtpCredential"
+        ],
+        "description": "List the account's per-device SMTP submission passwords. The secret itself is never returned — it is shown exactly once, on creation.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpCredentialsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "SmtpCredential"
+        ],
+        "description": "Create a per-device SMTP password (use it with your email address as the SMTP username on port 587/465). The plaintext password is in this response and nowhere else — only a hash is stored. Revoke a device any time with DELETE; other devices and the account password are unaffected.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSmtpCredentialRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpCredentialCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/smtp/credentials/{credential_id}": {
+      "delete": {
+        "tags": [
+          "SmtpCredential"
+        ],
+        "description": "Revoke one device's SMTP password. Takes effect on the next AUTH — existing SMTP sessions are not torn down.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "credential_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedResponse"
                 }
               }
             }

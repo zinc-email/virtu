@@ -1,6 +1,7 @@
 # STATE — progress against PLAN.md
 
-Last updated: 2026-08-09 (client register/activation flow). Companion to
+Last updated: 2026-08-09 (client restyled to the legacy design on Panda CSS).
+Companion to
 `PLAN.md` (the design doc); this file tracks what is built, how it was
 verified, and what remains.
 
@@ -21,7 +22,7 @@ and the entire production/deploy story, which has not been started.
 | Unit | ~385 tests / 27 files | `just test-unit` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit | `just check` | green |
 | Integration (API vs real Postgres) | 106 tests / 7 files | `just up && just db push && just test-int` | green ×2 consecutive |
-| Client DOM (real React vs running stack) | 2 tests / 1 file | `just up && just db push && just test-client` | green |
+| Client DOM (real React vs running stack) | 3 tests / 1 file | `just up && just db push && just test-client` | green |
 | Stories (simulated internet) | 13 stories / 9 files | `just test-net-up && just test-story` | green ×2 against dirty state |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
 
@@ -47,7 +48,7 @@ with a regression test encoding the observed sequence).
 | C — Rewrite core | ✅ done | VERP byte-compatible with SimpleLogin (CPython golden vector) + constant-time compare + real expiry; forward/reply whitelists; refuse-to-leak on replies |
 | D — Queue + deliverd | ✅ done* | SKIP LOCKED worker, backoff, RFC 3464 DSNs (null reverse path, rate-limited). *Gap: bounces OF transactional mail are log-only |
 | E — API (SimpleLogin-compat) | ~85% | 25+ spec paths incl. custom domains + billing extras. Deferred: MFA, forgot_password, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone |
-| F — Client | ~75% | Login, register/activation (single route, auto-login on activate + resend), aliases (create/pin/toggle/multi-mailbox), contacts, settings, billing pages. Missing: custom-domain UI, mailboxes page, notifications, activities view |
+| F — Client | ~80% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login, register/activation, alias index (hero + one-click random alias), alias detail (new/used states + activities + contacts/delete), settings (native selects), billing (key/value + Stripe actions). Mantine remains ONLY for overlays (create-alias modal, contacts drawer, delete confirm) + PinInput — replace with a headless lib, then drop Mantine. Missing: custom-domain UI, mailboxes page, notifications, search |
 | G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Served at `/` behind the Caddy proxy; SPA under `/app`, API under `/api` — one origin, same topology dev and prod (dev proxy built; see below) |
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |

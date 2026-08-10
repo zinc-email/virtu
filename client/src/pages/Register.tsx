@@ -4,22 +4,14 @@
 // (POST /auth/activate) and then logs in with the credentials still in state,
 // so a fresh user lands straight on their aliases. Resend goes through
 // /auth/reactivate. All three calls run through the generated SDK.
+//
+// Legacy Panda styling, except the PinInput (Mantine) — the code boxes and
+// their DOM-test selectors stay until a headless replacement lands.
 
-import {
-  Alert,
-  Anchor,
-  Button,
-  Group,
-  Paper,
-  PasswordInput,
-  PinInput,
-  Stack,
-  Text,
-  TextInput,
-  Title,
-} from "@mantine/core";
+import { PinInput } from "@mantine/core";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import { setApiKey } from "src/auth";
 import {
@@ -28,6 +20,7 @@ import {
   usePostAuthReactivate,
   usePostAuthRegister,
 } from "src/gen";
+import { Alert, Button, Field, Section, ui } from "src/ui";
 
 // Mirror the server's cheap guards (auth.ts) so obvious mistakes don't cost a
 // round trip. The real validation still lives on the server.
@@ -105,112 +98,135 @@ export function RegisterPage() {
         : null;
 
   return (
-    <Stack align="center" mt="4rem">
-      <Title order={1}>virtu</Title>
-      <Text c="dimmed">One alias per sign-up. Revoke when leaked.</Text>
-      <Paper w="100%" maw="26rem" p="lg" radius="md" bg="dark.6">
-        {phase === "details" ? (
-          <form onSubmit={submitDetails}>
-            <Stack>
-              <Title order={3}>Create your account</Title>
-              {register.isError && (
-                <Alert color="red" variant="light">
-                  {apiErrorMessage(register.error)}
-                </Alert>
-              )}
-              <TextInput
-                label="Email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.currentTarget.value)}
-                error={email.length > 0 && !emailValid ? "Enter a valid email address" : null}
-                required
-              />
-              <PasswordInput
-                label="Password"
-                description={`At least ${MIN_PASSWORD} characters`}
-                value={password}
-                onChange={(e) => setPassword(e.currentTarget.value)}
-                error={password.length > 0 && !passwordValid ? "Too short" : null}
-                required
-              />
-              <Button
-                type="submit"
-                loading={register.isPending}
-                disabled={!emailValid || !passwordValid}
-                color="brand.5"
-                c="dark.8"
-              >
-                Create account
-              </Button>
-              <Text size="sm" c="dimmed" ta="center">
-                Already have an account?{" "}
-                <Anchor component={Link} to="/login" c="brand.5">
-                  Log in
-                </Anchor>
-              </Text>
-            </Stack>
-          </form>
-        ) : (
-          <Stack>
-            <Title order={3}>Enter your code</Title>
-            <Text size="sm" c="dimmed">
-              We emailed a 6-digit code to <b>{email}</b>. It expires in 15 minutes.
-            </Text>
-            {codeError && (
-              <Alert color="red" variant="light">
-                {codeError}
-              </Alert>
-            )}
-            {reactivate.isSuccess && !reactivate.isError && (
-              <Alert color="green" variant="light">
-                A new code is on its way.
-              </Alert>
-            )}
-            <Group justify="center">
-              <PinInput
-                length={6}
-                type="number"
-                inputMode="numeric"
-                oneTimeCode
-                autoFocus
-                value={code}
-                onChange={(v) => {
-                  setCode(v);
-                  if (activate.isError) activate.reset();
-                }}
-                onComplete={submitCode}
-                aria-label="Activation code"
-                disabled={activate.isPending || login.isPending}
-              />
-            </Group>
+    <Section narrow>
+      {phase === "details" ? (
+        <form onSubmit={submitDetails}>
+          <header className={css({ textAlign: "center", marginBottom: "2.5rem" })}>
+            <h1 className={ui.h1}>Create your account</h1>
+            <p className={cx(ui.lead, ui.dim, css({ marginTop: "1rem" }))}>
+              One alias per sign-up. Revoke when leaked.
+            </p>
+          </header>
+
+          {register.isError && <Alert>{apiErrorMessage(register.error)}</Alert>}
+
+          <Field
+            label="Email"
+            name="email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.currentTarget.value)}
+            hint={email.length > 0 && !emailValid ? "Enter a valid email address" : undefined}
+            required
+          />
+          <Field
+            label="Password"
+            name="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.currentTarget.value)}
+            hint={
+              password.length > 0 && !passwordValid
+                ? "Too short"
+                : `At least ${MIN_PASSWORD} characters`
+            }
+            required
+          />
+
+          <div className={css({ marginTop: "2.42rem" })}>
             <Button
-              onClick={() => submitCode(code)}
-              loading={activate.isPending || login.isPending}
-              disabled={code.length !== 6}
-              color="brand.5"
-              c="dark.8"
+              type="submit"
+              variant="submit"
+              loading={register.isPending}
+              disabled={!emailValid || !passwordValid}
+              className={css({ width: "100%" })}
             >
-              Verify &amp; continue
+              Create account
             </Button>
-            <Group justify="space-between">
-              <Anchor component="button" type="button" size="sm" c="dimmed" onClick={changeEmail}>
-                Use a different email
-              </Anchor>
-              <Anchor
-                component="button"
-                type="button"
-                size="sm"
-                c="brand.5"
-                onClick={() => reactivate.mutate({ data: { email: email.trim() } })}
-                aria-disabled={reactivate.isPending}
-              >
-                {reactivate.isPending ? "Resending…" : "Resend code"}
-              </Anchor>
-            </Group>
-          </Stack>
-        )}
-      </Paper>
-    </Stack>
+          </div>
+
+          <p
+            className={css({
+              marginTop: "1.6rem",
+              textAlign: "center",
+              color: "textDim",
+              fontSize: "0.9rem",
+            })}
+          >
+            Already have an account?{" "}
+            <Link to="/login" className={ui.link}>
+              Log in
+            </Link>
+          </p>
+        </form>
+      ) : (
+        <div className={css({ textAlign: "center" })}>
+          <header className={css({ marginBottom: "2rem" })}>
+            <h1 className={ui.h1}>Enter your code</h1>
+            <p className={cx(ui.lead, ui.dim, css({ marginTop: "1rem" }))}>
+              We emailed a 6-digit code to <strong>{email}</strong>. It expires in 15 minutes.
+            </p>
+          </header>
+
+          {codeError && <Alert>{codeError}</Alert>}
+          {reactivate.isSuccess && !reactivate.isError && (
+            <Alert kind="success">A new code is on its way.</Alert>
+          )}
+
+          <div className={css({ display: "flex", justifyContent: "center", marginBottom: "2rem" })}>
+            <PinInput
+              length={6}
+              type="number"
+              inputMode="numeric"
+              oneTimeCode
+              autoFocus
+              value={code}
+              onChange={(v) => {
+                setCode(v);
+                if (activate.isError) activate.reset();
+              }}
+              onComplete={submitCode}
+              aria-label="Activation code"
+              disabled={activate.isPending || login.isPending}
+            />
+          </div>
+
+          <Button
+            variant="submit"
+            onClick={() => submitCode(code)}
+            loading={activate.isPending || login.isPending}
+            disabled={code.length !== 6}
+            className={css({ width: "100%" })}
+          >
+            Verify &amp; continue
+          </Button>
+
+          <div
+            className={css({
+              display: "flex",
+              justifyContent: "space-between",
+              marginTop: "1.6rem",
+              fontSize: "0.9rem",
+            })}
+          >
+            <button
+              type="button"
+              className={cx(ui.link, css({ color: "textDim", _hover: { color: "navLink" } }))}
+              onClick={changeEmail}
+            >
+              Use a different email
+            </button>
+            <button
+              type="button"
+              className={ui.link}
+              onClick={() => reactivate.mutate({ data: { email: email.trim() } })}
+              aria-disabled={reactivate.isPending}
+            >
+              {reactivate.isPending ? "Resending…" : "Resend code"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }

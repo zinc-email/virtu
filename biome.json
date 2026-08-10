@@ -15,6 +15,7 @@
       "!server/spec/openapi.json",
       "!server/drizzle/**",
       "!client/src/gen/**",
+      "!client/styled-system/**",
       "!tmp/**",
       "!.claude/**"
     ]

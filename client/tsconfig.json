@@ -15,7 +15,8 @@
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "paths": {
-      "src/*": ["./src/*"]
+      "src/*": ["./src/*"],
+      "styled-system/*": ["./styled-system/*"]
     }
   },
   "include": ["src", "kubb.config.ts", "rsbuild.config.ts"]

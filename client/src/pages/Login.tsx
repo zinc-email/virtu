@@ -1,22 +1,14 @@
-// Login page: calls the real POST /api/auth/login through the generated SDK
-// and stores the returned api_key (SimpleLogin flow).
+// Login page — legacy auth styling: narrow centered column, commanding h1,
+// old-style form fields, teal submit. Calls POST /api/auth/login via the
+// generated SDK and stores the returned api_key.
 
-import {
-  Alert,
-  Anchor,
-  Button,
-  Paper,
-  PasswordInput,
-  Stack,
-  Text,
-  TextInput,
-  Title,
-} from "@mantine/core";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import { setApiKey } from "src/auth";
 import { usePostAuthLogin } from "src/gen";
+import { Alert, Button, Field, Section, ui } from "src/ui";
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -35,47 +27,64 @@ export function LoginPage() {
   });
 
   return (
-    <Stack align="center" mt="4rem">
-      <Title order={1}>virtu</Title>
-      <Text c="dimmed">One alias per sign-up. Revoke when leaked.</Text>
-      <Paper w="100%" maw="26rem" p="lg" radius="md" bg="dark.6">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            login.mutate({ data: { email, password, device: "virtu-web" } });
-          }}
+    <Section narrow>
+      <header className={css({ textAlign: "center", marginBottom: "2.5rem" })}>
+        <h1 className={ui.h1}>Welcome back.</h1>
+        <p className={cx(ui.lead, ui.dim, css({ marginTop: "1rem" }))}>
+          One alias per sign-up. Revoke when leaked.
+        </p>
+      </header>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          login.mutate({ data: { email, password, device: "virtu-web" } });
+        }}
+      >
+        {login.isError && <Alert>{apiErrorMessage(login.error)}</Alert>}
+
+        <Field
+          label="Email"
+          name="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.currentTarget.value)}
+          required
+        />
+        <Field
+          label="Password"
+          name="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.currentTarget.value)}
+          required
+        />
+
+        <div className={css({ marginTop: "2.42rem" })}>
+          <Button
+            type="submit"
+            variant="submit"
+            loading={login.isPending}
+            className={css({ width: "100%" })}
+          >
+            Log in
+          </Button>
+        </div>
+
+        <p
+          className={css({
+            marginTop: "1.6rem",
+            textAlign: "center",
+            color: "textDim",
+            fontSize: "0.9rem",
+          })}
         >
-          <Stack>
-            {login.isError && (
-              <Alert color="red" variant="light">
-                {apiErrorMessage(login.error)}
-              </Alert>
-            )}
-            <TextInput
-              label="Email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.currentTarget.value)}
-              required
-            />
-            <PasswordInput
-              label="Password"
-              value={password}
-              onChange={(e) => setPassword(e.currentTarget.value)}
-              required
-            />
-            <Button type="submit" loading={login.isPending} color="brand.5" c="dark.8">
-              Log in
-            </Button>
-            <Text size="sm" c="dimmed" ta="center">
-              No account yet?{" "}
-              <Anchor component={Link} to="/register" c="brand.5">
-                Create one
-              </Anchor>
-            </Text>
-          </Stack>
-        </form>
-      </Paper>
-    </Stack>
+          No account yet?{" "}
+          <Link to="/register" className={ui.link}>
+            Create one
+          </Link>
+        </p>
+      </form>
+    </Section>
   );
 }

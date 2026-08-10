@@ -1,0 +1,685 @@
+// The virtu UI kit: a small set of typed primitives reproducing the legacy
+// site's design language (see tmp/virtu for the original SCSS) on Panda
+// tokens. Components name semantic roles (primary/accent/surface/…), never
+// hues, and size everything in rem/em so the whole app scales with the root
+// font-size. Overlays (modal/drawer) are still Mantine during the migration.
+
+import { Link, type LinkProps } from "@tanstack/react-router";
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+} from "react";
+import { useState } from "react";
+import { css, cx } from "styled-system/css";
+
+// ── Icons (inline FontAwesome-era paths, from the legacy icon component) ─────
+
+const ICON_PATHS = {
+  clipboard:
+    "M768 1664h896v-640h-416q-40 0-68-28t-28-68v-416h-384v1152zm256-1440v-64q0-13-9.5-22.5t-22.5-9.5h-704q-13 0-22.5 9.5t-9.5 22.5v64q0 13 9.5 22.5t22.5 9.5h704q13 0 22.5-9.5t9.5-22.5zm256 672h299l-299-299v299zm512 128v672q0 40-28 68t-68 28h-960q-40 0-68-28t-28-68v-160h-544q-40 0-68-28t-28-68v-1344q0-40 28-68t68-28h1088q40 0 68 28t28 68v328q21 13 36 28l408 408q28 28 48 76t20 88z",
+  check:
+    "M1671 566q0 40-28 68l-724 724-136 136q-28 28-68 28t-68-28l-136-136-362-362q-28-28-28-68t28-68l136-136q28-28 68-28t68 28l294 295 656-657q28-28 68-28t68 28l136 136q28 28 28 68z",
+  "arrow-left":
+    "M1664 896v128q0 53-32.5 90.5t-84.5 37.5h-704l293 294q38 36 38 90t-38 90l-75 76q-37 37-90 37-52 0-91-37l-651-652q-37-37-37-90 0-52 37-91l651-650q38-38 91-38 52 0 90 38l75 74q38 38 38 91t-38 91l-293 293h704q52 0 84.5 37.5t32.5 90.5z",
+  x: "M1490 1322q0 40-28 68l-136 136q-28 28-68 28t-68-28l-294-294-294 294q-28 28-68 28t-68-28l-136-136q-28-28-28-68t28-68l294-294-294-294q-28-28-28-68t28-68l136-136q28-28 68-28t68 28l294 294 294-294q28-28 68-28t68 28l136 136q28 28 28 68t-28 68l-294 294 294 294q28 28 28 68z",
+} as const;
+
+export function Icon({ name, size = "1em" }: { name: keyof typeof ICON_PATHS; size?: string }) {
+  return (
+    <svg
+      viewBox="0 0 1792 1792"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden="true"
+      className={css({ display: "block", flexShrink: 0 })}
+    >
+      <path d={ICON_PATHS[name]} />
+    </svg>
+  );
+}
+
+// The Zinc "Z" mark (from the legacy nav), colored by the primary role.
+export function Logo({ size = "3rem" }: { size?: string }) {
+  return (
+    <svg
+      viewBox="0 0 101.6 101.6"
+      width={size}
+      height={size}
+      aria-hidden="true"
+      className={css({ display: "block", color: "primary" })}
+    >
+      <g transform="translate(0 -195.4)">
+        <path
+          transform="matrix(.26458 0 0 .26458 0 195.4)"
+          d="m0 0v384h384v-384zm19.15 19.15h345.7v345.7h-345.7zm60.916 54.533v229.86h229.86v-229.86zm22.391 23.094h184.62v57.922h-16.969l-68.768 68.768h85.736v57.922h-184.62v-57.922h16.969l68.77-68.768h-85.738z"
+          fill="currentColor"
+        />
+      </g>
+    </svg>
+  );
+}
+
+// ── Button ───────────────────────────────────────────────────────────────────
+// Legacy variants: outline (default), submit (teal fill), cta (amber outline),
+// link (bare amber mono). `tiny` is the uppercase mono list-row size.
+
+type ButtonVariant = "outline" | "submit" | "cta" | "link";
+
+const btnBase = css({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "0.5em",
+  textAlign: "center",
+  fontFamily: "sans",
+  fontSize: "1rem",
+  lineHeight: "1.4rem",
+  border: "0.111rem solid transparent",
+  borderRadius: "0.111rem",
+  cursor: "pointer",
+  transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
+  _disabled: { opacity: 0.5, cursor: "not-allowed" },
+});
+
+const btnSize = {
+  md: css({ padding: "1rem 2rem 0.75rem 2rem" }),
+  tiny: css({
+    fontFamily: "mono",
+    fontSize: "0.6rem",
+    lineHeight: "1em",
+    textTransform: "uppercase",
+    padding: "0.5em 1em",
+  }),
+};
+
+const btnVariant: Record<ButtonVariant, string> = {
+  outline: css({
+    backgroundColor: "transparent",
+    color: "control",
+    borderColor: "border",
+    _hover: { borderColor: "control", backgroundColor: "controlHoverBg" },
+  }),
+  submit: css({
+    backgroundColor: "primary",
+    borderColor: "primary",
+    color: "onPrimary",
+    fontWeight: "bold",
+    _hover: { backgroundColor: "primaryHover", borderColor: "primaryHover" },
+  }),
+  cta: css({
+    backgroundColor: "transparent",
+    borderColor: "accent",
+    color: "accent",
+    _hover: { backgroundColor: "accent", color: "onAccent" },
+  }),
+  link: css({
+    backgroundColor: "transparent",
+    border: "none",
+    color: "accent",
+    fontFamily: "mono",
+    padding: "0.3rem 0.4rem",
+    _hover: { color: "accentHover" },
+  }),
+};
+
+interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant;
+  size?: keyof typeof btnSize;
+  loading?: boolean;
+}
+
+export function Button({
+  variant = "outline",
+  size = "md",
+  loading,
+  disabled,
+  className,
+  ...props
+}: BtnProps) {
+  return (
+    <button
+      className={cx(
+        btnBase,
+        variant === "link" ? undefined : btnSize[size],
+        btnVariant[variant],
+        className,
+      )}
+      disabled={disabled || loading}
+      aria-busy={loading}
+      {...props}
+    />
+  );
+}
+
+// ── Form fields ──────────────────────────────────────────────────────────────
+
+const fieldWrap = css({ display: "block", marginBottom: "1.618rem" });
+const fieldLabel = css({ display: "block", marginBottom: "0.61rem", color: "label" });
+const controlCss = css({
+  display: "block",
+  width: "100%",
+  boxSizing: "border-box",
+  fontFamily: "sans",
+  fontSize: "1rem",
+  padding: "1rem 1.1rem",
+  backgroundColor: "transparent",
+  color: "control",
+  border: "0.111rem solid",
+  borderColor: "border",
+  borderRadius: "0.25rem",
+  _placeholder: { color: "textDim" },
+  _hover: { backgroundColor: "surfaceHover", borderColor: "borderBright" },
+  _focus: {
+    backgroundColor: "surfaceHover",
+    color: "controlFocus",
+    outline: "0.111rem solid",
+    outlineColor: "focusRing",
+  },
+});
+const fieldHint = css({
+  marginTop: "0.5rem",
+  lineHeight: "1.3em",
+  opacity: 0.75,
+  fontSize: "0.9rem",
+  color: "label",
+});
+
+interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
+  label: string;
+  hint?: string;
+}
+
+export function Field({ label, hint, id, className, ...props }: FieldProps) {
+  const inputId = id ?? props.name ?? label.toLowerCase();
+  return (
+    <div className={fieldWrap}>
+      <label className={fieldLabel} htmlFor={inputId}>
+        {label}
+      </label>
+      <input id={inputId} className={cx(controlCss, className)} {...props} />
+      {hint && <div className={fieldHint}>{hint}</div>}
+    </div>
+  );
+}
+
+interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement> {
+  label: string;
+  hint?: string;
+  options: { value: string; label: string }[];
+}
+
+export function SelectField({ label, hint, options, id, className, ...props }: SelectFieldProps) {
+  const selectId = id ?? props.name ?? label.toLowerCase();
+  return (
+    <div className={fieldWrap}>
+      <label className={fieldLabel} htmlFor={selectId}>
+        {label}
+      </label>
+      <select
+        id={selectId}
+        className={cx(
+          controlCss,
+          // The native option popup takes its chrome from color-scheme and its
+          // rows from option{} — without these the browser paints a light
+          // popup against the dark theme.
+          css({
+            cursor: "pointer",
+            colorScheme: "dark",
+            _light: { colorScheme: "light" },
+            "& option": { backgroundColor: "bg", color: "text" },
+          }),
+          className,
+        )}
+        {...props}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {hint && <div className={fieldHint}>{hint}</div>}
+    </div>
+  );
+}
+
+// ── Switch ───────────────────────────────────────────────────────────────────
+// The legacy virtu-checkbox: recessed dark ring, sliding knob with a spring
+// overshoot, ON/OFF labels that cross-fade, and a teal glow when on. Sized in
+// em so `fontSize` scales the whole control.
+
+const switchCss = css({
+  display: "inline-block",
+  fontSize: "0.95rem",
+  padding: "0.5em",
+  backgroundColor: "bgDeep",
+  border: "none",
+  borderRadius: "1.5em",
+  cursor: "pointer",
+  transition: "background-color 0.5s token(easings.spring)",
+  _disabled: { opacity: 0.6, cursor: "not-allowed" },
+
+  "& [data-part=track]": {
+    display: "block",
+    position: "relative",
+    width: "4em",
+    height: "2em",
+    borderRadius: "1em",
+    backgroundColor: "bgDeep",
+    transition:
+      "background-color 0.5s token(easings.spring), box-shadow 0.5s token(easings.spring)",
+  },
+  "& [data-part=label]": {
+    position: "absolute",
+    top: "0.825em",
+    fontSize: "0.8em",
+    lineHeight: "1em",
+    textTransform: "uppercase",
+    fontFamily: "sans",
+    color: "paper.50",
+    transition: "opacity 0.5s token(easings.spring)",
+  },
+  "& [data-part=label][data-on]": {
+    left: "0.75em",
+    textShadow: "0em 0em 0.1em #fff",
+    opacity: 0,
+  },
+  "& [data-part=label][data-off]": { right: "0.5em", opacity: 1 },
+  "& [data-part=knob]": {
+    position: "absolute",
+    top: "0",
+    left: "0",
+    width: "2em",
+    height: "2em",
+    borderRadius: "1em",
+    backgroundColor: "rgba(249, 249, 245, 0.8)",
+    boxShadow: "-0.1em 0em 0.3em 0.1em rgba(46, 74, 119, 0.1)",
+    transition: "left 0.5s token(easings.spring)",
+  },
+
+  "&[aria-checked=true] [data-part=track]": {
+    backgroundColor: "primary",
+    boxShadow: "0px 0px 0.5em 0.1em token(colors.primaryGlow)",
+  },
+  "&[aria-checked=true] [data-part=label][data-on]": { opacity: 1 },
+  "&[aria-checked=true] [data-part=label][data-off]": { opacity: 0 },
+  "&[aria-checked=true] [data-part=knob]": { left: "2em" },
+});
+
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+  size,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  label: string;
+  /** Scales the whole control; the legacy default is 0.95rem. */
+  size?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={switchCss}
+      style={size ? { fontSize: size } : undefined}
+    >
+      <span data-part="track">
+        <span data-part="label" data-on="">
+          On
+        </span>
+        <span data-part="knob" />
+        <span data-part="label" data-off="">
+          Off
+        </span>
+      </span>
+    </button>
+  );
+}
+
+// ── Copy button ──────────────────────────────────────────────────────────────
+
+export function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      size="tiny"
+      className={cx(css({ fontSize: "0.7rem", padding: "0.33rem 0.6rem" }), className)}
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1400);
+      }}
+    >
+      <Icon name={copied ? "check" : "clipboard"} size="0.9em" />
+      {copied ? "Copied" : "Copy"}
+    </Button>
+  );
+}
+
+// ── Key/value table (the legacy ul.keyValue, as a semantic <dl>) ─────────────
+
+export function KeyValue({ children }: { children: ReactNode }) {
+  return <dl className={css({ margin: "2rem 0 3rem 0" })}>{children}</dl>;
+}
+
+const kvRow = css({
+  display: "flex",
+  alignItems: "flex-start",
+  backgroundColor: "surface",
+  // Color inside the shorthand: a separate borderColor utility can be emitted
+  // before the shorthand, whose implied color (currentColor) would then win.
+  borderBottom: "1px solid token(colors.border)",
+  padding: "2rem 0.5rem 2rem 0.1rem",
+  fontSize: "1rem",
+  lineHeight: "1.4rem",
+});
+const kvKey = css({
+  flex: "0 0 20%",
+  minWidth: "10rem",
+  marginRight: "1.5rem",
+  paddingLeft: "1rem",
+  textAlign: "right",
+  color: "primary",
+  fontFamily: "mono",
+  "@media (max-width: 650px)": { minWidth: "6rem" },
+});
+const kvValue = css({
+  flex: "0 1 80%",
+  margin: 0,
+  color: "text",
+  fontFamily: "mono",
+  wordBreak: "break-word",
+});
+
+export function KV({ k, children }: { k: string; children: ReactNode }) {
+  return (
+    <div className={kvRow}>
+      <dt className={kvKey}>{k}</dt>
+      <dd className={kvValue}>{children}</dd>
+    </div>
+  );
+}
+
+// An action row: no key, an amber "»" link as the value (legacy li.action).
+export function KVAction({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className={cx(
+        kvRow,
+        css({
+          backgroundColor: "transparent",
+          border: "none",
+          padding: "0.5rem 0.5rem 0.5rem 0.1rem",
+        }),
+      )}
+    >
+      <dt
+        className={cx(kvKey, css({ flexBasis: "0%", minWidth: "2rem", margin: 0, padding: 0 }))}
+      />
+      <dd className={kvValue}>{children}</dd>
+    </div>
+  );
+}
+
+// ── Entity list (the legacy ol.entities / virtuals rows) ─────────────────────
+
+export function EntityList({ children }: { children: ReactNode }) {
+  return (
+    <ol
+      className={css({
+        listStyle: "none",
+        margin: 0,
+        padding: 0,
+        "@media (max-width: 650px)": { marginLeft: "-1.12rem", marginRight: "-1.12rem" },
+      })}
+    >
+      {children}
+    </ol>
+  );
+}
+
+const entityRow = css({
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "stretch",
+  backgroundColor: "surface",
+  // See kvRow: keep the color inside the shorthand.
+  borderBottom: "1px solid token(colors.border)",
+});
+const entityBody = css({
+  display: "block",
+  flex: "1 1 80%",
+  minWidth: 0,
+  textAlign: "left",
+  textDecoration: "none",
+  padding: "2rem 0.5rem 2rem 2rem",
+  "@media (max-width: 384px)": { paddingLeft: "1rem" },
+});
+const entityTitle = css({
+  display: "block",
+  maxWidth: "100%",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: "primary",
+  fontFamily: "mono",
+  fontSize: "1rem",
+  lineHeight: "1.4rem",
+});
+const entityDetail = css({
+  marginTop: "0.8rem",
+  color: "textDim",
+  fontSize: "0.9rem",
+  lineHeight: "1.3rem",
+  overflowWrap: "anywhere",
+});
+const entityMeta = css({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: "0.9rem",
+  flexShrink: 0,
+  paddingRight: "2rem",
+  "@media (max-width: 384px)": { paddingRight: "1rem" },
+});
+
+export function EntityRow({
+  title,
+  detail,
+  meta,
+  to,
+  params,
+}: {
+  title: ReactNode;
+  detail?: ReactNode;
+  meta?: ReactNode;
+  to?: LinkProps["to"];
+  params?: LinkProps["params"];
+}) {
+  const body = (
+    <>
+      <span className={entityTitle}>{title}</span>
+      {detail != null && <span className={entityDetail}>{detail}</span>}
+    </>
+  );
+  return (
+    <li className={entityRow}>
+      {to ? (
+        <Link to={to} params={params} className={entityBody}>
+          {body}
+        </Link>
+      ) : (
+        <div className={entityBody}>{body}</div>
+      )}
+      {meta != null && <div className={entityMeta}>{meta}</div>}
+    </li>
+  );
+}
+
+// ── Alerts (legacy: amber fill = error, teal fill = success) ─────────────────
+
+const alertBase = css({
+  padding: "1.4rem",
+  margin: "2rem 0",
+  borderRadius: "0.25rem",
+  fontSize: "0.94rem",
+  lineHeight: "1.4rem",
+});
+
+export function Alert({
+  kind = "error",
+  children,
+  className,
+}: {
+  kind?: "error" | "success";
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      role="alert"
+      className={cx(
+        alertBase,
+        kind === "error"
+          ? css({ backgroundColor: "accent", color: "onAccent" })
+          : css({ backgroundColor: "primary", color: "onPrimary" }),
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ── Page scaffolding ─────────────────────────────────────────────────────────
+// Two legacy page shapes: full-width (hero header, centered) and narrow
+// (29.5rem column, left-aligned headings).
+
+export function Section({ narrow, children }: { narrow?: boolean; children: ReactNode }) {
+  return (
+    <section
+      className={cx(
+        css({
+          marginTop: "4.2rem",
+          "@media (max-width: 650px)": {
+            marginTop: 0,
+            padding: "1.12rem 1.12rem 0 1.12rem",
+          },
+        }),
+        narrow &&
+          css({
+            maxWidth: "29.5rem",
+            marginLeft: "auto",
+            marginRight: "auto",
+            "@media (max-width: 650px)": { padding: "2rem" },
+          }),
+      )}
+    >
+      {children}
+    </section>
+  );
+}
+
+// Centered hero header for full-width pages.
+export function Hero({ title, children }: { title: ReactNode; children?: ReactNode }) {
+  return (
+    <header
+      className={css({
+        textAlign: "center",
+        padding: "0 2rem",
+        marginBottom: "4rem",
+        "@media (max-width: 650px)": { marginBottom: "2rem", padding: 0 },
+      })}
+    >
+      <h1 className={cx(ui.h1, css({ marginBottom: "1rem" }))}>{title}</h1>
+      {children}
+    </header>
+  );
+}
+
+// ── Shared class helpers ─────────────────────────────────────────────────────
+
+export const ui = {
+  h1: css({
+    fontFamily: "sans",
+    fontSize: "2rem",
+    fontWeight: "bold",
+    letterSpacing: "0.025em",
+    lineHeight: "1.08em",
+    color: "heading",
+    overflowWrap: "anywhere",
+  }),
+  h2: css({
+    fontFamily: "sans",
+    fontSize: "1.5rem",
+    fontWeight: "bold",
+    lineHeight: "1.2em",
+    color: "heading",
+  }),
+  lead: css({ fontSize: "1rem", lineHeight: "1.4rem", marginBottom: "1rem" }),
+  link: css({
+    color: "accent",
+    textDecoration: "none",
+    cursor: "pointer",
+    background: "none",
+    border: "none",
+    padding: 0,
+    font: "inherit",
+    _hover: { color: "accentHover" },
+  }),
+  mono: css({ fontFamily: "mono" }),
+  dim: css({ color: "textDim" }),
+  finePrint: css({ lineHeight: "1.3em", opacity: 0.75, fontSize: "0.9rem", color: "label" }),
+  actionsCenter: css({
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "1rem",
+    flexWrap: "wrap",
+  }),
+};
+
+// Centered checklist rows with teal check icons (legacy ul.checklist).
+export function Checklist({ items }: { items: ReactNode[] }) {
+  return (
+    <ul
+      className={css({
+        listStyle: "none",
+        margin: "0 auto 2rem auto",
+        padding: 0,
+        maxWidth: "29.5rem",
+        textAlign: "left",
+      })}
+    >
+      {items.map((item, i) => (
+        <li
+          key={i}
+          className={css({
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "0.6rem",
+            marginBottom: "0.6rem",
+            lineHeight: "1.4rem",
+          })}
+        >
+          <span className={css({ color: "primary", marginTop: "0.15rem" })}>
+            <Icon name="check" size="1.1rem" />
+          </span>
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}

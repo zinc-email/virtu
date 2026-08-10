@@ -144,7 +144,7 @@ export function CreateAliasModal({ opened, onClose }: Props) {
           {chosenSuffix && prefix.trim() && (
             <Text size="sm" c="dimmed">
               Will create{" "}
-              <Text span c="brand.5" ff="monospace">
+              <Text span c="primary.4" ff="monospace">
                 {prefix.trim().toLowerCase()}
                 {chosenSuffix.suffix}
               </Text>
@@ -170,13 +170,7 @@ export function CreateAliasModal({ opened, onClose }: Props) {
             <Button variant="subtle" color="gray" onClick={handleClose}>
               Cancel
             </Button>
-            <Button
-              type="submit"
-              color="brand.5"
-              c="dark.8"
-              loading={create.isPending}
-              disabled={!canSubmit}
-            >
+            <Button type="submit" loading={create.isPending} disabled={!canSubmit}>
               Create alias
             </Button>
           </Group>

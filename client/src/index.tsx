@@ -23,7 +23,7 @@ if (!container) throw new Error("missing #root");
 
 createRoot(container).render(
   <StrictMode>
-    <MantineProvider theme={theme} forceColorScheme="dark">
+    <MantineProvider theme={theme} defaultColorScheme="dark">
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>

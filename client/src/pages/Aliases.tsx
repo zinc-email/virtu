@@ -1,270 +1,158 @@
-// The alias-management dashboard ("/"): account header, stats, filterable
-// alias list with enabled toggles / copy / delete-with-confirm, the
-// create-alias modal, and the per-alias contacts drawer. All data flows
-// through the Kubb-generated hooks.
+// Alias index ("/") — the legacy landing: commanding centered hero, one
+// primary action (mint a random alias now), a "customize" escape hatch, and a
+// plain list of aliases with a switch (or a copy button while unused). Stats
+// and filters were deliberate cruft-cuts; each row shows its last activity
+// and total message count instead.
 
-import {
-  Alert,
-  Badge,
-  Button,
-  Group,
-  Loader,
-  Modal,
-  SegmentedControl,
-  Stack,
-  Text,
-  Title,
-} from "@mantine/core";
-import { useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { css } from "styled-system/css";
+import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { apiErrorMessage } from "src/api/errors";
-import { clearApiKey } from "src/auth";
-import { AliasCard } from "src/components/AliasCard";
-import { ContactsDrawer } from "src/components/ContactsDrawer";
 import { CreateAliasModal } from "src/components/CreateAliasModal";
 import {
   type Alias,
-  getLogout,
-  getStatsQueryKey,
   getV2AliasesQueryKey,
-  useDeleteAliasesAliasId,
-  useGetStats,
-  useGetUserInfo,
   useGetV2Aliases,
-  usePatchAliasesAliasId,
+  usePostAliasRandomNew,
   usePostAliasesAliasIdToggle,
 } from "src/gen";
-
-type Filter = "all" | "pinned" | "enabled" | "disabled";
+import { timeAgo } from "src/lib/time";
+import {
+  Alert,
+  Button,
+  CopyButton,
+  EntityList,
+  EntityRow,
+  Hero,
+  Section,
+  Switch,
+  ui,
+} from "src/ui";
 
 const PAGE_SIZE = 20;
+
+const ACTION_LABEL: Record<string, string> = {
+  forward: "forwarded",
+  reply: "replied",
+  block: "blocked",
+  bounced: "bounced",
+};
+
+function activityLine(alias: Alias): string {
+  const messages = alias.nb_forward + alias.nb_reply;
+  const count = `${messages} message${messages === 1 ? "" : "s"}`;
+  if (!alias.latest_activity) return "No emails yet";
+  const { action, timestamp, contact } = alias.latest_activity;
+  const verb = ACTION_LABEL[action] ?? action;
+  const who = contact.email ? ` · ${contact.email}` : "";
+  return `${timeAgo(timestamp)} — ${verb}${who} · ${count}`;
+}
 
 export function AliasesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [creating, setCreating] = useState(false);
-  const [contactsFor, setContactsFor] = useState<Alias | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Alias | null>(null);
+  const [customizing, setCustomizing] = useState(false);
 
-  const userInfo = useGetUserInfo();
-  const stats = useGetStats();
-
-  const params = {
-    page_id: String(page),
-    // Presence-based filters: the empty string makes axios send `enabled=`.
-    ...(filter === "pinned" ? { pinned: "" } : {}),
-    ...(filter === "enabled" ? { enabled: "" } : {}),
-    ...(filter === "disabled" ? { disabled: "" } : {}),
-  };
-  const aliases = useGetV2Aliases(params);
-
-  const invalidateAliases = () => {
+  const aliases = useGetV2Aliases({ page_id: String(page) });
+  const invalidateAliases = () =>
     void queryClient.invalidateQueries({ queryKey: getV2AliasesQueryKey() });
-    void queryClient.invalidateQueries({ queryKey: getStatsQueryKey() });
-  };
 
-  const toggle = usePostAliasesAliasIdToggle({
-    mutation: { onSuccess: invalidateAliases },
-  });
-  const pin = usePatchAliasesAliasId({
-    mutation: { onSuccess: invalidateAliases },
-  });
-  const remove = useDeleteAliasesAliasId({
+  const createRandom = usePostAliasRandomNew({
     mutation: {
-      onSuccess: () => {
-        setDeleteTarget(null);
+      onSuccess: (alias) => {
         invalidateAliases();
+        void navigate({ to: "/aliases/$aliasId", params: { aliasId: String(alias.id) } });
       },
     },
   });
-
-  const logout = async () => {
-    try {
-      await getLogout(); // revokes the api key server-side
-    } catch {
-      // Key may already be dead — local logout proceeds either way.
-    }
-    clearApiKey();
-    void navigate({ to: "/login" });
-  };
+  const toggle = usePostAliasesAliasIdToggle({ mutation: { onSuccess: invalidateAliases } });
 
   const rows = aliases.data?.aliases ?? [];
   const hasNextPage = rows.length === PAGE_SIZE;
 
   return (
-    <Stack mt="3rem" mb="4rem" gap="lg">
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={4}>
-          <Title order={2}>Aliases</Title>
-          {userInfo.data && (
-            <Group gap="xs">
-              <Text size="sm" c="dimmed">
-                {userInfo.data.email}
-              </Text>
-              {userInfo.data.is_premium ? (
-                <Badge size="sm" color="brand.5" c="dark.8">
-                  {userInfo.data.in_trial ? "Trial" : "Premium"}
-                </Badge>
-              ) : (
-                <Badge size="sm" color="gray">
-                  Free
-                </Badge>
-              )}
-            </Group>
-          )}
-        </Stack>
-        <Group gap="xs">
-          <Button color="brand.5" c="dark.8" onClick={() => setCreating(true)}>
-            New alias
+    <Section>
+      <Hero title="Protect your real email address.">
+        <p className={ui.lead}>Share a unique, secure email alias instead.</p>
+        <div
+          className={css({
+            display: "flex",
+            alignItems: "center",
+            flexFlow: "column",
+            marginTop: "2rem",
+          })}
+        >
+          <Button
+            variant="submit"
+            loading={createRandom.isPending}
+            onClick={() => createRandom.mutate({})}
+            className={css({ marginBottom: "2rem" })}
+          >
+            ➜&nbsp;&nbsp;Share an email alias
           </Button>
-          <Button variant="subtle" color="gray" onClick={() => void navigate({ to: "/billing" })}>
-            Billing
-          </Button>
-          <Button component={Link} to="/settings" variant="subtle" color="gray">
-            Settings
-          </Button>
-          <Button variant="subtle" color="gray" onClick={() => void logout()}>
-            Log out
-          </Button>
-        </Group>
-      </Group>
+          <p className={ui.lead}>
+            <button type="button" className={ui.link} onClick={() => setCustomizing(true)}>
+              Customize an email alias
+            </button>
+          </p>
+        </div>
+        {createRandom.isError && <Alert>{apiErrorMessage(createRandom.error)}</Alert>}
+      </Hero>
 
-      {stats.data && (
-        <Group gap="xs">
-          <Badge variant="light" color="brand.5">
-            {stats.data.nb_alias} aliases
-          </Badge>
-          <Badge variant="light" color="gray">
-            {stats.data.nb_forward} forwarded
-          </Badge>
-          <Badge variant="light" color="gray">
-            {stats.data.nb_reply} replied
-          </Badge>
-          <Badge variant="light" color="gray">
-            {stats.data.nb_block} blocked
-          </Badge>
-        </Group>
-      )}
-
-      <SegmentedControl
-        value={filter}
-        onChange={(v) => {
-          setFilter(v as Filter);
-          setPage(0);
-        }}
-        data={[
-          { value: "all", label: "All" },
-          { value: "pinned", label: "Pinned" },
-          { value: "enabled", label: "Enabled" },
-          { value: "disabled", label: "Disabled" },
-        ]}
-        w="fit-content"
-      />
-
-      {aliases.isPending ? (
-        <Stack align="center" p="xl">
-          <Loader color="brand.5" />
-        </Stack>
-      ) : aliases.isError ? (
-        <Alert color="red" variant="light">
-          {apiErrorMessage(aliases.error)}
-        </Alert>
-      ) : rows.length === 0 ? (
-        <Stack align="center" p="xl" gap="xs">
-          <Text c="dimmed">
-            {filter === "all" && page === 0
-              ? "No aliases yet. Create one alias per sign-up; revoke it when it leaks."
-              : "Nothing here."}
-          </Text>
-          {filter === "all" && page === 0 && (
-            <Button color="brand.5" c="dark.8" onClick={() => setCreating(true)}>
-              Create your first alias
-            </Button>
-          )}
-        </Stack>
+      {aliases.isError ? (
+        <Alert>{apiErrorMessage(aliases.error)}</Alert>
       ) : (
-        <Stack gap="sm">
+        <EntityList>
           {rows.map((alias) => (
-            <AliasCard
+            <EntityRow
               key={alias.id}
-              alias={alias}
-              toggling={toggle.isPending && toggle.variables?.alias_id === alias.id}
-              pinning={pin.isPending && pin.variables?.alias_id === alias.id}
-              onToggle={(a) => toggle.mutate({ alias_id: a.id })}
-              onPin={(a) => pin.mutate({ alias_id: a.id, data: { pinned: !a.pinned } })}
-              onContacts={setContactsFor}
-              onDelete={setDeleteTarget}
+              to="/aliases/$aliasId"
+              params={{ aliasId: String(alias.id) }}
+              title={alias.name || alias.email}
+              detail={activityLine(alias)}
+              meta={
+                <>
+                  <CopyButton text={alias.email} />
+                  <Switch
+                    checked={alias.enabled}
+                    disabled={toggle.isPending && toggle.variables?.alias_id === alias.id}
+                    onChange={() => toggle.mutate({ alias_id: alias.id })}
+                    label={alias.enabled ? "Disable alias" : "Enable alias"}
+                  />
+                </>
+              }
             />
           ))}
-        </Stack>
+        </EntityList>
+      )}
+
+      {rows.length === 0 && !aliases.isPending && page > 0 && (
+        <p className={css({ textAlign: "center", padding: "2rem", color: "textDim" })}>
+          Nothing here.
+        </p>
       )}
 
       {(page > 0 || hasNextPage) && (
-        <Group justify="center" gap="xs">
-          <Button
-            variant="subtle"
-            color="gray"
-            disabled={page === 0}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-          >
-            Previous
-          </Button>
-          <Text size="sm" c="dimmed">
-            Page {page + 1}
-          </Text>
-          <Button
-            variant="subtle"
-            color="gray"
-            disabled={!hasNextPage}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Next
-          </Button>
-        </Group>
+        <div className={css({ marginTop: "2rem" })}>
+          <div className={ui.actionsCenter}>
+            <Button
+              size="tiny"
+              disabled={page === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+            >
+              Previous
+            </Button>
+            <span className={css({ color: "textDim", fontSize: "0.9rem" })}>Page {page + 1}</span>
+            <Button size="tiny" disabled={!hasNextPage} onClick={() => setPage((p) => p + 1)}>
+              Next
+            </Button>
+          </div>
+        </div>
       )}
 
-      <CreateAliasModal opened={creating} onClose={() => setCreating(false)} />
-      <ContactsDrawer alias={contactsFor} onClose={() => setContactsFor(null)} />
-
-      <Modal
-        opened={deleteTarget !== null}
-        onClose={() => {
-          remove.reset();
-          setDeleteTarget(null);
-        }}
-        title="Delete alias"
-        centered
-      >
-        <Stack>
-          <Text size="sm">
-            Delete{" "}
-            <Text span ff="monospace" c="brand.5">
-              {deleteTarget?.email}
-            </Text>
-            ? Emails sent to it will bounce, and the address can never be used again.
-          </Text>
-          {remove.isError && (
-            <Alert color="red" variant="light">
-              {apiErrorMessage(remove.error)}
-            </Alert>
-          )}
-          <Group justify="flex-end">
-            <Button variant="subtle" color="gray" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="red"
-              loading={remove.isPending}
-              onClick={() => deleteTarget && remove.mutate({ alias_id: deleteTarget.id })}
-            >
-              Delete forever
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-    </Stack>
+      <CreateAliasModal opened={customizing} onClose={() => setCustomizing(false)} />
+    </Section>
   );
 }

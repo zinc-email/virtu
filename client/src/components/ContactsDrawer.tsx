@@ -100,7 +100,7 @@ export function ContactsDrawer({ alias, onClose }: Props) {
                 onChange={(e) => setNewContact(e.currentTarget.value)}
                 style={{ flex: 1 }}
               />
-              <Button type="submit" color="brand.5" c="dark.8" loading={create.isPending}>
+              <Button type="submit" loading={create.isPending}>
                 Add
               </Button>
             </Group>
@@ -120,7 +120,7 @@ export function ContactsDrawer({ alias, onClose }: Props) {
 
         {contacts.isPending && opened ? (
           <Group justify="center" p="md">
-            <Loader color="brand.5" size="sm" />
+            <Loader color="accent" size="sm" />
           </Group>
         ) : contacts.isError ? (
           <Alert color="red" variant="light">
@@ -134,7 +134,7 @@ export function ContactsDrawer({ alias, onClose }: Props) {
               </Text>
             )}
             {contacts.data?.contacts.map((contact) => (
-              <Paper key={contact.id} p="sm" radius="md" bg="dark.6">
+              <Paper key={contact.id} p="sm" radius="md" withBorder>
                 <Stack gap={6}>
                   <Group justify="space-between" wrap="nowrap">
                     <Text size="sm" fw={500} truncate>
@@ -155,7 +155,7 @@ export function ContactsDrawer({ alias, onClose }: Props) {
                         <Button
                           size="compact-xs"
                           variant={copied ? "filled" : "light"}
-                          color={copied ? "teal" : "brand.5"}
+                          color={copied ? "primary" : "accent"}
                           onClick={copy}
                         >
                           {copied ? "Copied" : "Copy reverse alias"}
@@ -165,7 +165,7 @@ export function ContactsDrawer({ alias, onClose }: Props) {
                     <Button
                       size="compact-xs"
                       variant="subtle"
-                      color={contact.block_forward ? "teal" : "yellow"}
+                      color={contact.block_forward ? "primary" : "yellow"}
                       loading={toggle.isPending && toggle.variables?.contact_id === contact.id}
                       onClick={() => toggle.mutate({ contact_id: contact.id })}
                     >

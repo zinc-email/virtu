@@ -1,22 +1,10 @@
-// Settings ("/settings"): alias generator, random-alias suffix + default
-// domain, sender address format, notification emails — wired to
-// GET/PATCH /setting and GET /v2/setting/domains through the Kubb hooks.
-// Every control saves on change.
+// Settings ("/settings") — legacy narrow page: left-aligned h1, old-style
+// native selects (the legacy site styled native controls; no combobox
+// widgetry), every control saves on change. Wired to GET/PATCH /setting and
+// GET /v2/setting/domains through the Kubb hooks.
 
-import {
-  Alert,
-  Button,
-  Group,
-  Loader,
-  Paper,
-  Select,
-  Stack,
-  Switch,
-  Text,
-  Title,
-} from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import {
   getSettingQueryKey,
@@ -25,6 +13,7 @@ import {
   useGetV2SettingDomains,
   usePatchSetting,
 } from "src/gen";
+import { Alert, Section, SelectField, Switch, ui } from "src/ui";
 
 const GENERATOR_OPTIONS = [
   { value: "word", label: "Random words (breeze_cedar123)" },
@@ -59,110 +48,86 @@ export function SettingsPage() {
   });
   const save = (patch: UpdateSettingRequest) => update.mutate({ data: patch });
 
-  const domainData =
+  const domainOptions =
     domains.data?.map((d) => ({
       value: d.domain,
       label: d.is_custom ? `${d.domain} (custom domain)` : d.domain,
     })) ?? [];
 
   return (
-    <Stack mt="3rem" mb="4rem" gap="lg">
-      <Group justify="space-between" align="flex-start">
-        <Title order={2}>Settings</Title>
-        <Button component={Link} to="/" variant="subtle" color="gray">
-          Back to aliases
-        </Button>
-      </Group>
+    <Section narrow>
+      <header className={css({ marginBottom: "2.11rem" })}>
+        <h1 className={ui.h1}>Your settings.</h1>
+      </header>
 
       {setting.isPending ? (
-        <Stack align="center" p="xl">
-          <Loader color="brand.5" />
-        </Stack>
+        <p className={css({ padding: "2rem 0", color: "textDim" })}>Loading…</p>
       ) : setting.isError ? (
-        <Alert color="red" variant="light">
-          {apiErrorMessage(setting.error)}
-        </Alert>
+        <Alert>{apiErrorMessage(setting.error)}</Alert>
       ) : (
-        <Stack gap="md">
-          {update.isError && (
-            <Alert color="red" variant="light">
-              {apiErrorMessage(update.error)}
-            </Alert>
-          )}
+        <div className={css({ width: "100%" })}>
+          {update.isError && <Alert>{apiErrorMessage(update.error)}</Alert>}
 
-          <Paper p="md" radius="md" bg="dark.6">
-            <Stack gap="sm">
-              <Title order={4}>Random aliases</Title>
-              <Select
-                label="Alias generator"
-                description="How addresses for one-click random aliases are built"
-                data={GENERATOR_OPTIONS}
-                value={setting.data.alias_generator}
-                onChange={(v) => v && save({ alias_generator: v })}
-                allowDeselect={false}
-                disabled={update.isPending}
-                comboboxProps={{ withinPortal: false }}
-              />
-              <Select
-                label="Default domain"
-                description="The domain random aliases are created on"
-                data={domainData}
-                value={setting.data.random_alias_default_domain}
-                onChange={(v) => v && save({ random_alias_default_domain: v })}
-                allowDeselect={false}
-                disabled={update.isPending || domains.isPending}
-                comboboxProps={{ withinPortal: false }}
-              />
-              <Select
-                label="Custom-alias suffix"
-                description="The random suffix offered when creating a custom alias"
-                data={SUFFIX_OPTIONS}
-                value={setting.data.random_alias_suffix}
-                onChange={(v) => v && save({ random_alias_suffix: v })}
-                allowDeselect={false}
-                disabled={update.isPending}
-                comboboxProps={{ withinPortal: false }}
-              />
-            </Stack>
-          </Paper>
+          <SelectField
+            label="Alias generator"
+            hint="How addresses for one-click random aliases are built"
+            options={GENERATOR_OPTIONS}
+            value={setting.data.alias_generator}
+            onChange={(e) => save({ alias_generator: e.currentTarget.value })}
+            disabled={update.isPending}
+          />
+          <SelectField
+            label="Default domain"
+            hint="The domain random aliases are created on"
+            options={domainOptions}
+            value={setting.data.random_alias_default_domain}
+            onChange={(e) => save({ random_alias_default_domain: e.currentTarget.value })}
+            disabled={update.isPending || domains.isPending}
+          />
+          <SelectField
+            label="Custom-alias suffix"
+            hint="The random suffix offered when creating a custom alias"
+            options={SUFFIX_OPTIONS}
+            value={setting.data.random_alias_suffix}
+            onChange={(e) => save({ random_alias_suffix: e.currentTarget.value })}
+            disabled={update.isPending}
+          />
+          <SelectField
+            label="Sender address format"
+            hint="How the original sender appears on emails forwarded to you"
+            options={SENDER_FORMAT_OPTIONS}
+            value={setting.data.sender_format}
+            onChange={(e) => save({ sender_format: e.currentTarget.value })}
+            disabled={update.isPending}
+          />
 
-          <Paper p="md" radius="md" bg="dark.6">
-            <Stack gap="sm">
-              <Title order={4}>Forwarded mail</Title>
-              <Select
-                label="Sender address format"
-                description="How the original sender appears on emails forwarded to you"
-                data={SENDER_FORMAT_OPTIONS}
-                value={setting.data.sender_format}
-                onChange={(v) => v && save({ sender_format: v })}
-                allowDeselect={false}
-                disabled={update.isPending}
-                comboboxProps={{ withinPortal: false }}
-              />
-            </Stack>
-          </Paper>
-
-          <Paper p="md" radius="md" bg="dark.6">
-            <Stack gap="sm">
-              <Title order={4}>Notifications</Title>
-              <Switch
-                label="Email notifications"
-                description="Receive account notification emails (bounce alerts etc.)"
-                checked={setting.data.notification}
-                onChange={(e) => save({ notification: e.currentTarget.checked })}
-                color="brand.5"
-                disabled={update.isPending}
-              />
-            </Stack>
-          </Paper>
+          <div
+            className={css({
+              display: "flex",
+              alignItems: "center",
+              gap: "1rem",
+              marginTop: "2rem",
+            })}
+          >
+            <Switch
+              checked={setting.data.notification}
+              disabled={update.isPending}
+              onChange={(v) => save({ notification: v })}
+              label="Email notifications"
+            />
+            <div>
+              <div>Email notifications</div>
+              <div className={ui.finePrint}>Bounce alerts and account notices</div>
+            </div>
+          </div>
 
           {update.isSuccess && !update.isPending && (
-            <Text size="sm" c="dimmed">
+            <p className={css({ marginTop: "1.5rem", color: "primary", fontSize: "0.9rem" })}>
               Saved.
-            </Text>
+            </p>
           )}
-        </Stack>
+        </div>
       )}
-    </Stack>
+    </Section>
   );
 }

@@ -1,13 +1,17 @@
-// Billing page ("/billing"): current plan, Upgrade via Stripe Checkout,
-// Manage via the Stripe Customer Portal. Billing is fully offloaded to
-// Stripe (PLAN Lane I) — this page only redirects to Stripe-hosted pages and
-// renders what the webhook wrote. Servers without STRIPE_* configured get a
-// clear "billing not configured" state instead of broken buttons.
+// Billing ("/billing") — legacy "Your account." page: narrow column, key/value
+// table, "»" action links. Billing is fully offloaded to Stripe (PLAN Lane I):
+// actions only redirect to Stripe-hosted pages and the table renders what the
+// webhook wrote. Servers without STRIPE_* get a clear "not configured" state.
 
-import { Alert, Badge, Button, Group, Loader, Paper, Stack, Text, Title } from "@mantine/core";
-import { useNavigate } from "@tanstack/react-router";
+import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
-import { useGetBillingStatus, usePostBillingCheckout, usePostBillingPortal } from "src/gen";
+import {
+  useGetBillingStatus,
+  useGetUserInfo,
+  usePostBillingCheckout,
+  usePostBillingPortal,
+} from "src/gen";
+import { Alert, KV, KVAction, KeyValue, Section, ui } from "src/ui";
 
 function isNotConfigured(err: unknown): boolean {
   return (
@@ -25,11 +29,11 @@ const fmtDate = (epochSeconds: number) =>
     day: "numeric",
   });
 
-const PLAN_LABEL = { premium: "Premium", trial: "Trial", free: "Free" } as const;
+const PLAN_LABEL = { premium: "Premium", trial: "Free trial", free: "Free" } as const;
 
 export function BillingPage() {
-  const navigate = useNavigate();
   const status = useGetBillingStatus();
+  const userInfo = useGetUserInfo();
 
   const checkout = usePostBillingCheckout({
     mutation: { onSuccess: (data) => window.location.assign(data.url) },
@@ -46,107 +50,86 @@ export function BillingPage() {
   const sessionError = checkout.error ?? portal.error;
 
   return (
-    <Stack mt="3rem" mb="4rem" gap="lg">
-      <Group justify="space-between" align="flex-start">
-        <Title order={2}>Billing</Title>
-        <Button variant="subtle" color="gray" onClick={() => void navigate({ to: "/" })}>
-          Back to aliases
-        </Button>
-      </Group>
+    <Section narrow>
+      <header className={css({ marginBottom: "2.11rem" })}>
+        <h1 className={ui.h1}>Your account.</h1>
+      </header>
 
       {checkoutResult === "success" && (
-        <Alert color="brand.5" variant="light">
+        <Alert kind="success">
           Payment received — your subscription activates as soon as Stripe confirms it (usually
           seconds).
         </Alert>
       )}
       {checkoutResult === "canceled" && (
-        <Alert color="gray" variant="light">
-          Checkout canceled. Your plan is unchanged.
-        </Alert>
+        <p className={ui.finePrint}>Checkout canceled. Your plan is unchanged.</p>
       )}
 
       {status.isPending ? (
-        <Stack align="center" p="xl">
-          <Loader color="brand.5" />
-        </Stack>
+        <p className={css({ padding: "2rem 0", color: "textDim" })}>Loading…</p>
       ) : status.isError ? (
-        <Alert color="red" variant="light">
-          {apiErrorMessage(status.error)}
-        </Alert>
+        <Alert>{apiErrorMessage(status.error)}</Alert>
       ) : data ? (
-        <Paper p="lg" radius="md" bg="dark.6">
-          <Stack gap="md">
-            <Group gap="xs">
-              <Text fw={500}>Current plan</Text>
-              <Badge
-                size="lg"
-                color={plan === "free" ? "gray" : "brand.5"}
-                c={plan === "free" ? undefined : "dark.8"}
-              >
-                {PLAN_LABEL[plan]}
-              </Badge>
-            </Group>
-
-            {plan === "trial" && data.trial_end !== null && (
-              <Text size="sm" c="dimmed">
-                Trial ends {fmtDate(data.trial_end)}. Upgrade to keep premium features.
-              </Text>
-            )}
+        <>
+          <KeyValue>
+            {userInfo.data && <KV k="Email">{userInfo.data.email}</KV>}
+            <KV k="Plan">
+              {PLAN_LABEL[plan]}
+              {plan === "trial" && data.trial_end !== null && (
+                <div className={ui.finePrint}>ends {fmtDate(data.trial_end)}</div>
+              )}
+            </KV>
             {data.subscription_status !== null && (
-              <Text size="sm" c="dimmed">
-                Subscription status:{" "}
-                <Text span ff="monospace">
-                  {data.subscription_status}
-                </Text>
-                {data.current_period_end !== null &&
-                  ` — current period ends ${fmtDate(data.current_period_end)}`}
-              </Text>
+              <KV k="Status">
+                {data.subscription_status}
+                {data.current_period_end !== null && (
+                  <div className={ui.finePrint}>
+                    current period ends {fmtDate(data.current_period_end)}
+                  </div>
+                )}
+              </KV>
             )}
-            {plan === "free" && (
-              <Text size="sm" c="dimmed">
-                The free plan is limited. Premium unlocks unlimited aliases.
-              </Text>
-            )}
+          </KeyValue>
 
-            {!data.configured ? (
-              <Alert color="gray" variant="light">
-                Billing is not configured on this server.
-              </Alert>
-            ) : (
-              <Group gap="xs">
-                {plan !== "premium" && (
-                  <Button
-                    color="brand.5"
-                    c="dark.8"
-                    loading={checkout.isPending}
+          {!data.configured ? (
+            <p className={ui.finePrint}>Billing is not configured on this server.</p>
+          ) : (
+            <KeyValue>
+              {plan !== "premium" && (
+                <KVAction>
+                  <button
+                    type="button"
+                    className={ui.link}
+                    disabled={checkout.isPending}
                     onClick={() => checkout.mutate()}
                   >
-                    Upgrade to Premium
-                  </Button>
-                )}
-                {data.has_customer && (
-                  <Button
-                    variant="default"
-                    loading={portal.isPending}
+                    » Upgrade to Premium
+                  </button>
+                </KVAction>
+              )}
+              {data.has_customer && (
+                <KVAction>
+                  <button
+                    type="button"
+                    className={ui.link}
+                    disabled={portal.isPending}
                     onClick={() => portal.mutate()}
                   >
-                    Manage subscription
-                  </Button>
-                )}
-              </Group>
-            )}
+                    » Manage subscription
+                  </button>
+                </KVAction>
+              )}
+            </KeyValue>
+          )}
 
-            {sessionError != null && (
-              <Alert color={isNotConfigured(sessionError) ? "gray" : "red"} variant="light">
-                {isNotConfigured(sessionError)
-                  ? "Billing is not configured on this server."
-                  : apiErrorMessage(sessionError)}
-              </Alert>
-            )}
-          </Stack>
-        </Paper>
+          {sessionError != null &&
+            (isNotConfigured(sessionError) ? (
+              <p className={ui.finePrint}>Billing is not configured on this server.</p>
+            ) : (
+              <Alert>{apiErrorMessage(sessionError)}</Alert>
+            ))}
+        </>
       ) : null}
-    </Stack>
+    </Section>
   );
 }

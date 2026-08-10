@@ -1,8 +1,29 @@
-body {
-  background-color: #19191c;
-  color: #f9f9f5;
-}
+/* Panda CSS layer cascade (the postcss plugin fills these layers). */
+@layer reset, base, tokens, recipes, utilities;
 
-a {
-  color: #fcbc17;
+/* Legacy virtu fonts, vendored from www/public/fonts (Fira Sans: SIL OFL 1.1;
+   DejaVu Sans Mono: DejaVu/Bitstream Vera). Bundler-relative URLs so rsbuild
+   fingerprints them and prefixes the /app base.
+
+   Note: the page background/text are intentionally NOT set here — the app
+   shell (app.tsx) paints them from Panda's bg/text semantic tokens, which
+   follow the light/dark color scheme; the root font-size lives in
+   panda.config.ts globalCss. */
+@font-face {
+  font-family: "Fira Sans";
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/FiraSans-Regular.woff") format("woff");
+}
+@font-face {
+  font-family: "Fira Sans";
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/FiraSans-Bold.woff") format("woff");
+}
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/DejaVuSansMono-Regular.woff") format("woff");
 }

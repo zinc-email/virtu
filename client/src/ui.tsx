@@ -526,15 +526,30 @@ export function Switch({
 
 // ── Copy button ──────────────────────────────────────────────────────────────
 
-export function CopyButton({ text, className }: { text: string; className?: string }) {
+export function CopyButton({
+  text,
+  iconOnly,
+  className,
+}: {
+  text: string;
+  /** Just the clipboard glyph — for corners of code blocks. */
+  iconOnly?: boolean;
+  className?: string;
+}) {
   const [copied, setCopied] = useState(false);
   return (
     <Button
       type="button"
       size="tiny"
+      aria-label={copied ? "Copied" : "Copy"}
+      title="Copy"
       className={cx(
         // Never collapses or wraps, wherever a flex row squeezes it.
-        css({ fontSize: "0.7rem", padding: "0.33rem 0.6rem", flexShrink: 0, whiteSpace: "nowrap" }),
+        css({ flexShrink: 0, whiteSpace: "nowrap" }),
+        iconOnly
+          ? css({ padding: "0.4rem" })
+          : css({ fontSize: "0.7rem", padding: "0.33rem 0.6rem" }),
+        copied ? css({ color: "primary", borderColor: "primary" }) : undefined,
         className,
       )}
       onClick={() => {
@@ -543,9 +558,52 @@ export function CopyButton({ text, className }: { text: string; className?: stri
         setTimeout(() => setCopied(false), 1400);
       }}
     >
-      <Icon name={copied ? "check" : "clipboard"} size="0.9em" />
-      {copied ? "Copied" : "Copy"}
+      <Icon name={copied ? "check" : "clipboard"} size={iconOnly ? "0.95rem" : "0.9em"} />
+      {!iconOnly && (copied ? "Copied" : "Copy")}
     </Button>
+  );
+}
+
+// A code block for machine-readable values (DNS records, keys): recessed
+// near-black ground, wrapped mono text, icon-only copy floating top-right —
+// unmistakably "this is the exact string to paste".
+export function CodeBlock({ children }: { children: string }) {
+  return (
+    <div className={css({ position: "relative" })}>
+      <pre
+        className={css({
+          margin: 0,
+          backgroundColor: "bgDeep",
+          border: "1px solid token(colors.border)",
+          borderRadius: "0.25rem",
+          // Right padding keeps the first lines clear of the copy button.
+          padding: "1rem 3rem 1rem 1.2rem",
+        })}
+      >
+        <code
+          className={css({
+            fontFamily: "mono",
+            fontSize: "0.85rem",
+            lineHeight: "1.55",
+            color: "text",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          })}
+        >
+          {children}
+        </code>
+      </pre>
+      <CopyButton
+        text={children}
+        iconOnly
+        className={css({
+          position: "absolute",
+          top: "0.5rem",
+          right: "0.5rem",
+          backgroundColor: "bgDeep",
+        })}
+      />
+    </div>
   );
 }
 

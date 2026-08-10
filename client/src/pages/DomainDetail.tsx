@@ -20,7 +20,7 @@ import {
   type VerifyCustomDomainResponse,
 } from "src/gen";
 import { Dialog } from "src/overlays";
-import { Alert, Button, CopyButton, KV, KeyValue, Section, Switch, ui } from "src/ui";
+import { Alert, Button, CodeBlock, KV, KeyValue, Section, Switch, ui } from "src/ui";
 
 // One published-record section: explainer, success state or the rows to
 // enter at the DNS provider, and what the last verify found when it failed.
@@ -64,35 +64,9 @@ function RecordSection({
               </KV>
               {r.priority !== undefined && <KV k="Priority">{r.priority}</KV>}
             </KeyValue>
-            {/* Long values (DKIM keys) never wrap: the legacy code-block
-                treatment — one line, scroll horizontally, copy beside it. */}
-            <div
-              className={css({
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                marginTop: "-2rem",
-                marginBottom: "3rem",
-              })}
-            >
-              <code
-                className={css({
-                  flex: "1 1 auto",
-                  minWidth: 0,
-                  fontFamily: "mono",
-                  fontSize: "0.9rem",
-                  lineHeight: "1.4rem",
-                  color: "text",
-                  backgroundColor: "surfaceHover",
-                  borderRadius: "0.25rem",
-                  padding: "1rem 1.2rem",
-                  whiteSpace: "nowrap",
-                  overflowX: "auto",
-                })}
-              >
-                {r.value}
-              </code>
-              <CopyButton text={r.value} />
+            {/* The exact value to paste at the DNS provider. */}
+            <div className={css({ marginTop: "-2rem", marginBottom: "3rem" })}>
+              <CodeBlock>{r.value}</CodeBlock>
             </div>
           </div>
         ))

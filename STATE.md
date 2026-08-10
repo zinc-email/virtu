@@ -107,6 +107,15 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
    (`server/src/pipeline/dnsTxt.ts`): wire-format TCP client used for all
    TXT lookups (DKIM keys span multiple character-strings). Upstream-reportable;
    remove if Bun fixes grouping.
+3. **Bun `node:http` WebSocket upgrades hang** — rsbuild's HMR socket never
+   completes its handshake under bun (stuck "connecting"; diagnosed
+   2026-08-10 by running the identical server under node, which connects
+   instantly). The client dev container is therefore `node:22-bookworm-slim`
+   with a one-shot `client-deps` service (`oven/bun:1.3`) doing the
+   `bun install` — bun remains the only package manager, node is only the
+   dev-server runtime. HMR ws moved under the base (`/app/rsbuild-hmr`) so
+   the dev proxy needs no extra route. Upstream-reportable; collapse the two
+   services back to `oven/bun` when fixed.
 3. **Stripe account API version is 2018-02-28** — webhook payload shapes are
    version-pinned per account; the handler reads both pre-Basil and current
    `current_period_end` shapes, so upgrading the account's API version later

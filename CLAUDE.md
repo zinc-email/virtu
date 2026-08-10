@@ -145,6 +145,15 @@ Registration requires an emailed 6-digit code, and the dev stack runs no
   wire-format TXT client, because Bun's `node:dns` merges multi-string TXT
   records and DKIM keys span several strings. Use it for TXT lookups, not
   `node:dns`.
+- **Client dev container runs node, not bun** (`docker-compose.yml`:
+  `client` on `node:22-bookworm-slim`) — rsbuild's HMR WebSocket upgrade
+  never completes under Bun's `node:http` (the socket hangs in
+  "connecting"), so the dev server runs on real node. Bun stays the ONLY
+  package manager: the one-shot `client-deps` service (`oven/bun:1.3`)
+  installs from `bun.lock`; no npm/npx anywhere. The HMR ws path is
+  `/app/rsbuild-hmr` (`dev.client.path` in rsbuild.config.ts) so ALL
+  client traffic stays under `/app` and the proxy needs no special ws
+  route. Revisit when Bun's `node:http` upgrade works.
 - `server/.env` is gitignored (holds Stripe test keys). `server/.env.example`
   documents every var.
 

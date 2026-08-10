@@ -22,7 +22,9 @@ export default defineConfig({
   output: { distPath: { root: "dist" }, assetPrefix: `${BASE}/` },
   // Prefix dev asset URLs too, so <script>/<link> in the shell resolve under
   // /app at the unified origin (not / , which the proxy routes to the homepage).
-  dev: { assetPrefix: `${BASE}/` },
+  // The HMR WebSocket also lives under the base: every client request stays
+  // inside /app/*, so the reverse proxy needs exactly one route for the SPA.
+  dev: { assetPrefix: `${BASE}/`, client: { path: `${BASE}/rsbuild-hmr` } },
   server: {
     base: BASE,
     port: 9000,

@@ -27,8 +27,15 @@ Fastify + `fastify-zod-openapi` · Drizzle over Bun's native postgres
 (`drizzle-orm/bun-sql`, push-based migrations) · `mailauth` for all
 DKIM/ARC/SPF/DMARC (verify and sign, in-process — no milters) · a plain
 `outbound_messages` Postgres table as the delivery queue · React SPA (rsbuild
-+ TanStack Router/Query + Mantine) with a Kubb-generated SDK · Astro static
++ TanStack Router/Query + Panda CSS) with a Kubb-generated SDK · Astro static
 homepage (`www/`).
+
+**No UI component frameworks in the client.** Mantine was removed and is
+banned — everything is semantic HTML styled with Panda CSS: tokens in
+`client/panda.config.ts`, primitives in `client/src/ui.tsx`, overlays on
+native `<dialog>` in `client/src/overlays.tsx`. Extend the kit, don't add a
+component library. Root font-size scales (18px → 24px @1200px); size in
+rem/em, never px.
 
 **Dev/prod topology.** A Caddy reverse proxy fronts everything at one origin
 with a fixed path split — `/` homepage, `/app/*` SPA, `/api/*` API — identical

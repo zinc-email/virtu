@@ -236,13 +236,14 @@ has a real spec early.
 
 ### Lane F — Client (`client/`)
 
-rsbuild + React 19 + TanStack Router/Query + Mantine + Kubb
+rsbuild + React 19 + TanStack Router/Query + Panda CSS + Kubb
 (`pluginOas/pluginTs/pluginReactQuery/pluginMsw`) — copy madi's `kubb.config.ts` and
 `src/api/client.ts` axios adapter. **MSW handlers are the unblock:** as soon as
 Lane E commits a spec, the client builds against generated mocks without a running
 server. Port virtu's look: dark theme tokens
 (`tmp/virtu/server/src/styles/variables.scss` — `#19191c` bg, `#fcbc17` CTA,
-Fira Sans, single centered column, 58rem max), Mantine-themed to match.
+Fira Sans, single centered column, 58rem max) as Panda CSS tokens + a small
+in-repo component kit (`client/src/ui.tsx`); no UI component framework.
 
 **Contract:** consumes `spec/openapi.json`; no one depends on F.
 

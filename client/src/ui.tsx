@@ -2,7 +2,7 @@
 // site's design language (see tmp/virtu for the original SCSS) on Panda
 // tokens. Components name semantic roles (primary/accent/surface/…), never
 // hues, and size everything in rem/em so the whole app scales with the root
-// font-size. Overlays (modal/drawer) are still Mantine during the migration.
+// font-size. Overlays live in src/overlays.tsx (native <dialog>).
 
 import { Link, type LinkProps } from "@tanstack/react-router";
 import type {
@@ -10,8 +10,9 @@ import type {
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
+  TextareaHTMLAttributes,
 } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { css, cx } from "styled-system/css";
 
 // ── Icons (inline FontAwesome-era paths, from the legacy icon component) ─────
@@ -242,6 +243,182 @@ export function SelectField({ label, hint, options, id, className, ...props }: S
         ))}
       </select>
       {hint && <div className={fieldHint}>{hint}</div>}
+    </div>
+  );
+}
+
+interface TextAreaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
+  label: string;
+  hint?: string;
+}
+
+export function TextArea({ label, hint, id, className, ...props }: TextAreaProps) {
+  const areaId = id ?? props.name ?? label.toLowerCase();
+  return (
+    <div className={fieldWrap}>
+      <label className={fieldLabel} htmlFor={areaId}>
+        {label}
+      </label>
+      <textarea
+        id={areaId}
+        className={cx(controlCss, css({ resize: "vertical", minHeight: "4.5rem" }), className)}
+        {...props}
+      />
+      {hint && <div className={fieldHint}>{hint}</div>}
+    </div>
+  );
+}
+
+// A labeled group of native checkboxes (e.g. mailbox pickers).
+export function CheckboxGroup({
+  label,
+  hint,
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  hint?: string;
+  options: { value: string; label: string }[];
+  value: string[];
+  onChange: (v: string[]) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <fieldset className={cx(fieldWrap, css({ border: "none", margin: 0, padding: 0 }))}>
+      <legend className={fieldLabel}>{label}</legend>
+      {options.map((o) => (
+        <label
+          key={o.value}
+          className={css({
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            cursor: "pointer",
+            padding: "0.25rem 0",
+          })}
+        >
+          <input
+            type="checkbox"
+            checked={value.includes(o.value)}
+            disabled={disabled}
+            onChange={(e) =>
+              onChange(
+                e.currentTarget.checked ? [...value, o.value] : value.filter((v) => v !== o.value),
+              )
+            }
+            className={css({ accentColor: "primary", width: "1rem", height: "1rem" })}
+          />
+          <span>{o.label}</span>
+        </label>
+      ))}
+      {hint && <div className={fieldHint}>{hint}</div>}
+    </fieldset>
+  );
+}
+
+// ── Pin input (activation codes) ─────────────────────────────────────────────
+// Six single-digit boxes with auto-advance, backspace-to-previous, and paste
+// distribution. `value` is the contiguous string of entered digits.
+
+const pinBox = css({
+  width: "2.4rem",
+  height: "3rem",
+  textAlign: "center",
+  fontFamily: "mono",
+  fontSize: "1.2rem",
+  backgroundColor: "transparent",
+  color: "control",
+  border: "0.111rem solid",
+  borderColor: "border",
+  borderRadius: "0.25rem",
+  _focus: {
+    backgroundColor: "surfaceHover",
+    color: "controlFocus",
+    outline: "0.111rem solid",
+    outlineColor: "focusRing",
+  },
+  _disabled: { opacity: 0.5 },
+});
+
+export function PinInput({
+  length = 6,
+  value,
+  onChange,
+  onComplete,
+  disabled,
+  autoFocus,
+  label,
+}: {
+  length?: number;
+  value: string;
+  onChange: (v: string) => void;
+  onComplete?: (v: string) => void;
+  disabled?: boolean;
+  autoFocus?: boolean;
+  label: string;
+}) {
+  const refs = useRef<(HTMLInputElement | null)[]>([]);
+  const chars = Array.from({ length }, (_, i) => value[i] ?? "");
+
+  const commit = (next: string[]) => {
+    const joined = next.join("");
+    onChange(joined);
+    if (joined.length === length) onComplete?.(joined);
+  };
+
+  const handleChange = (i: number, raw: string) => {
+    const digit = raw.replace(/\D/g, "").slice(-1);
+    const next = chars.slice();
+    next[i] = digit;
+    commit(next);
+    if (digit && i < length - 1) refs.current[i + 1]?.focus();
+  };
+
+  const handleKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !chars[i] && i > 0) refs.current[i - 1]?.focus();
+    if (e.key === "ArrowLeft" && i > 0) refs.current[i - 1]?.focus();
+    if (e.key === "ArrowRight" && i < length - 1) refs.current[i + 1]?.focus();
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const digits = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, length);
+    if (!digits) return;
+    e.preventDefault();
+    commit(digits.split(""));
+    refs.current[Math.min(digits.length, length - 1)]?.focus();
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      onPaste={handlePaste}
+      className={css({ display: "inline-flex", gap: "0.4rem" })}
+    >
+      {chars.map((ch, i) => (
+        <input
+          // Position is the identity of each box.
+          // biome-ignore lint: index keys are correct here
+          key={i}
+          ref={(el) => {
+            refs.current[i] = el;
+          }}
+          data-pin=""
+          type="text"
+          inputMode="numeric"
+          autoComplete={i === 0 ? "one-time-code" : "off"}
+          maxLength={1}
+          value={ch}
+          disabled={disabled}
+          autoFocus={autoFocus && i === 0}
+          aria-label={`${label} digit ${i + 1}`}
+          onChange={(e) => handleChange(i, e.currentTarget.value)}
+          onKeyDown={(e) => handleKeyDown(i, e)}
+          className={pinBox}
+        />
+      ))}
     </div>
   );
 }

@@ -5,10 +5,6 @@
 // so a fresh user lands straight on their aliases. Resend goes through
 // /auth/reactivate. All three calls run through the generated SDK.
 //
-// Legacy Panda styling, except the PinInput (Mantine) — the code boxes and
-// their DOM-test selectors stay until a headless replacement lands.
-
-import { PinInput } from "@mantine/core";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { css, cx } from "styled-system/css";
@@ -20,7 +16,7 @@ import {
   usePostAuthReactivate,
   usePostAuthRegister,
 } from "src/gen";
-import { Alert, Button, Field, Section, ui } from "src/ui";
+import { Alert, Button, Field, PinInput, Section, ui } from "src/ui";
 
 // Mirror the server's cheap guards (auth.ts) so obvious mistakes don't cost a
 // round trip. The real validation still lives on the server.
@@ -176,9 +172,6 @@ export function RegisterPage() {
           <div className={css({ display: "flex", justifyContent: "center", marginBottom: "2rem" })}>
             <PinInput
               length={6}
-              type="number"
-              inputMode="numeric"
-              oneTimeCode
               autoFocus
               value={code}
               onChange={(v) => {
@@ -186,7 +179,7 @@ export function RegisterPage() {
                 if (activate.isError) activate.reset();
               }}
               onComplete={submitCode}
-              aria-label="Activation code"
+              label="Activation code"
               disabled={activate.isPending || login.isPending}
             />
           </div>

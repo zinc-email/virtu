@@ -4,13 +4,13 @@
 // Contacts and delete live here (moved off the index rows). The shell shows
 // the big back arrow instead of the logo on this page.
 
-import { Modal } from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import { ContactsDrawer } from "src/components/ContactsDrawer";
+import { Dialog } from "src/overlays";
 import {
   getAliasesAliasIdQueryKey,
   getV2AliasesQueryKey,
@@ -213,14 +213,13 @@ export function AliasDetailPage() {
 
       <ContactsDrawer alias={contactsOpen ? a : null} onClose={() => setContactsOpen(false)} />
 
-      <Modal
+      <Dialog
         opened={confirmingDelete}
         onClose={() => {
           remove.reset();
           setConfirmingDelete(false);
         }}
         title="Delete alias"
-        centered
       >
         <div className={css({ display: "flex", flexDirection: "column", gap: "1rem" })}>
           <p>
@@ -241,7 +240,7 @@ export function AliasDetailPage() {
             </Button>
           </div>
         </div>
-      </Modal>
+      </Dialog>
     </Section>
   );
 }

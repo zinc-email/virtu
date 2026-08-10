@@ -1,21 +1,10 @@
 // Create-alias modal: GET /v5/alias/options -> prefix input + suffix picker
-// (+ mailbox + note), POST /v3/alias/custom/new. A 412 (signed suffix
+// (+ mailboxes + note), POST /v3/alias/custom/new. A 412 (signed suffix
 // expired) refetches options so the user can retry immediately.
 
-import {
-  Alert,
-  Button,
-  Group,
-  Modal,
-  MultiSelect,
-  Select,
-  Stack,
-  Text,
-  TextInput,
-  Textarea,
-} from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import {
   getStatsQueryKey,
@@ -24,6 +13,8 @@ import {
   useGetV5AliasOptions,
   usePostV3AliasCustomNew,
 } from "src/gen";
+import { Dialog } from "src/overlays";
+import { Alert, Button, CheckboxGroup, Field, SelectField, TextArea } from "src/ui";
 
 interface Props {
   opened: boolean;
@@ -83,9 +74,9 @@ export function CreateAliasModal({ opened, onClose }: Props) {
     onClose();
   };
 
-  const suffixData =
+  const suffixOptions =
     options.data?.suffixes.map((s) => ({ value: s.signed_suffix, label: s.suffix })) ?? [];
-  const mailboxData =
+  const mailboxOptions =
     mailboxes.data?.mailboxes.map((m) => ({ value: String(m.id), label: m.email })) ?? [];
   const chosenSuffix = options.data?.suffixes.find((s) => s.signed_suffix === signedSuffix);
   const canSubmit =
@@ -95,7 +86,7 @@ export function CreateAliasModal({ opened, onClose }: Props) {
     options.data?.can_create !== false;
 
   return (
-    <Modal opened={opened} onClose={handleClose} title="New alias" centered>
+    <Dialog opened={opened} onClose={handleClose} title="New alias">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -111,71 +102,75 @@ export function CreateAliasModal({ opened, onClose }: Props) {
           });
         }}
       >
-        <Stack>
-          {options.data?.can_create === false && (
-            <Alert color="yellow" variant="light">
-              You have reached your alias limit. Upgrade to create more aliases.
-            </Alert>
-          )}
-          {create.isError && (
-            <Alert color="red" variant="light">
-              {apiErrorMessage(create.error)}
-            </Alert>
-          )}
-          <Group align="flex-end" gap="xs" wrap="nowrap">
-            <TextInput
+        {options.data?.can_create === false && (
+          <Alert>You have reached your alias limit. Upgrade to create more aliases.</Alert>
+        )}
+        {create.isError && <Alert>{apiErrorMessage(create.error)}</Alert>}
+
+        <div className={css({ display: "flex", gap: "0.75rem", alignItems: "flex-start" })}>
+          <div className={css({ flex: "1 1 55%", minWidth: 0 })}>
+            <Field
               label="Alias"
+              name="alias-prefix"
               placeholder="prefix"
               value={prefix}
               onChange={(e) => setPrefix(e.currentTarget.value)}
-              style={{ flex: 1 }}
-              data-autofocus
+              autoFocus
             />
-            <Select
+          </div>
+          <div className={css({ flex: "1 1 45%", minWidth: 0 })}>
+            <SelectField
               label="Suffix"
-              data={suffixData}
-              value={signedSuffix}
-              onChange={setSignedSuffix}
-              allowDeselect={false}
-              w="14rem"
-              comboboxProps={{ withinPortal: false }}
+              name="alias-suffix"
+              options={suffixOptions}
+              value={signedSuffix ?? ""}
+              onChange={(e) => setSignedSuffix(e.currentTarget.value)}
             />
-          </Group>
-          {chosenSuffix && prefix.trim() && (
-            <Text size="sm" c="dimmed">
-              Will create{" "}
-              <Text span c="primary.4" ff="monospace">
-                {prefix.trim().toLowerCase()}
-                {chosenSuffix.suffix}
-              </Text>
-            </Text>
-          )}
-          <MultiSelect
-            label="Mailboxes"
-            description="Where forwarded emails arrive (the first is the primary)"
-            data={mailboxData}
-            value={mailboxIds}
-            onChange={setMailboxIds}
-            comboboxProps={{ withinPortal: false }}
-          />
-          <Textarea
-            label="Note"
-            placeholder="Where is this alias used?"
-            value={note}
-            onChange={(e) => setNote(e.currentTarget.value)}
-            autosize
-            minRows={2}
-          />
-          <Group justify="flex-end">
-            <Button variant="subtle" color="gray" onClick={handleClose}>
-              Cancel
-            </Button>
-            <Button type="submit" loading={create.isPending} disabled={!canSubmit}>
-              Create alias
-            </Button>
-          </Group>
-        </Stack>
+          </div>
+        </div>
+
+        {chosenSuffix && prefix.trim() && (
+          <p className={css({ margin: "0 0 1.2rem 0", fontSize: "0.9rem", color: "textDim" })}>
+            Will create{" "}
+            <span className={css({ fontFamily: "mono", color: "primary" })}>
+              {prefix.trim().toLowerCase()}
+              {chosenSuffix.suffix}
+            </span>
+          </p>
+        )}
+
+        <CheckboxGroup
+          label="Mailboxes"
+          hint="Where forwarded emails arrive (the first is the primary)"
+          options={mailboxOptions}
+          value={mailboxIds}
+          onChange={setMailboxIds}
+        />
+
+        <TextArea
+          label="Note"
+          name="alias-note"
+          placeholder="Where is this alias used?"
+          value={note}
+          onChange={(e) => setNote(e.currentTarget.value)}
+        />
+
+        <div className={css({ display: "flex", justifyContent: "flex-end", gap: "0.75rem" })}>
+          <Button type="button" size="tiny" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="submit"
+            size="tiny"
+            className={css({ fontSize: "0.7rem" })}
+            loading={create.isPending}
+            disabled={!canSubmit}
+          >
+            Create alias
+          </Button>
+        </div>
       </form>
-    </Modal>
+    </Dialog>
   );
 }

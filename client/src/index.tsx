@@ -1,13 +1,14 @@
-import "@mantine/core/styles.css";
 import "src/styles.css";
 
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { router } from "src/app";
-import { theme } from "src/theme";
+import { initColorScheme } from "src/colorScheme";
+
+// Stamp the persisted light/dark scheme on <html> before the first paint.
+initColorScheme();
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -23,10 +24,8 @@ if (!container) throw new Error("missing #root");
 
 createRoot(container).render(
   <StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="dark">
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>
-    </MantineProvider>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
   </StrictMode>,
 );

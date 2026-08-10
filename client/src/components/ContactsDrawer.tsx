@@ -1,22 +1,9 @@
 // Per-alias contacts drawer: list contacts (reverse aliases), create one,
 // copy the reverse alias, block/unblock, delete.
 
-import {
-  Alert,
-  Badge,
-  Button,
-  CopyButton,
-  Divider,
-  Drawer,
-  Group,
-  Loader,
-  Paper,
-  Stack,
-  Text,
-  TextInput,
-} from "@mantine/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import {
   type Alias,
@@ -26,11 +13,22 @@ import {
   usePostAliasesAliasIdContacts,
   usePostContactsContactIdToggle,
 } from "src/gen";
+import { Drawer } from "src/overlays";
+import { Alert, Button, CopyButton, Field, ui } from "src/ui";
 
 interface Props {
   alias: Alias | null;
   onClose: () => void;
 }
+
+const contactRow = css({
+  backgroundColor: "surface",
+  borderBottom: "1px solid token(colors.border)",
+  padding: "1rem 1.2rem",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.5rem",
+});
 
 export function ContactsDrawer({ alias, onClose }: Props) {
   const queryClient = useQueryClient();
@@ -72,121 +70,135 @@ export function ContactsDrawer({ alias, onClose }: Props) {
         setNewContact("");
         onClose();
       }}
-      position="right"
-      size="md"
       title={
-        <Stack gap={0}>
-          <Text fw={600}>Contacts</Text>
-          <Text size="sm" c="dimmed" ff="monospace">
+        <div>
+          <h2 className={ui.h2}>Contacts</h2>
+          <div className={cx(ui.mono, ui.dim, css({ fontSize: "0.85rem", marginTop: "0.3rem" }))}>
             {alias?.email}
-          </Text>
-        </Stack>
+          </div>
+        </div>
       }
     >
-      <Stack gap="md">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!newContact.trim() || !alias) return;
-            create.mutate({ alias_id: alias.id, data: { contact: newContact.trim() } });
-          }}
-        >
-          <Stack gap="xs">
-            <Group gap="xs" align="flex-end" wrap="nowrap">
-              <TextInput
-                label="New contact"
-                placeholder="someone@example.com"
-                value={newContact}
-                onChange={(e) => setNewContact(e.currentTarget.value)}
-                style={{ flex: 1 }}
-              />
-              <Button type="submit" loading={create.isPending}>
-                Add
-              </Button>
-            </Group>
-            {create.isError && (
-              <Alert color="red" variant="light">
-                {apiErrorMessage(create.error)}
-              </Alert>
-            )}
-            <Text size="xs" c="dimmed">
-              Sending to a contact's reverse alias delivers from your alias — the contact never sees
-              your real address.
-            </Text>
-          </Stack>
-        </form>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!newContact.trim() || !alias) return;
+          create.mutate({ alias_id: alias.id, data: { contact: newContact.trim() } });
+        }}
+      >
+        <div className={css({ display: "flex", gap: "0.75rem", alignItems: "flex-end" })}>
+          <div className={css({ flex: 1, minWidth: 0, "& > div": { marginBottom: 0 } })}>
+            <Field
+              label="New contact"
+              name="new-contact"
+              placeholder="someone@example.com"
+              value={newContact}
+              onChange={(e) => setNewContact(e.currentTarget.value)}
+            />
+          </div>
+          <Button
+            type="submit"
+            variant="submit"
+            loading={create.isPending}
+            className={css({ padding: "1rem 1.5rem 0.75rem 1.5rem" })}
+          >
+            Add
+          </Button>
+        </div>
+        {create.isError && <Alert>{apiErrorMessage(create.error)}</Alert>}
+        <p className={cx(ui.finePrint, css({ margin: "0.8rem 0 0 0" }))}>
+          Sending to a contact's reverse alias delivers from your alias — the contact never sees
+          your real address.
+        </p>
+      </form>
 
-        <Divider />
-
+      <div className={css({ marginTop: "2rem" })}>
         {contacts.isPending && opened ? (
-          <Group justify="center" p="md">
-            <Loader color="accent" size="sm" />
-          </Group>
+          <p className={css({ textAlign: "center", padding: "1.5rem", color: "textDim" })}>
+            Loading…
+          </p>
         ) : contacts.isError ? (
-          <Alert color="red" variant="light">
-            {apiErrorMessage(contacts.error)}
-          </Alert>
+          <Alert>{apiErrorMessage(contacts.error)}</Alert>
         ) : (
-          <Stack gap="sm">
+          <ul className={css({ listStyle: "none", margin: 0, padding: 0 })}>
             {contacts.data?.contacts.length === 0 && (
-              <Text c="dimmed" size="sm" ta="center" p="md">
+              <li className={css({ textAlign: "center", padding: "1.5rem", color: "textDim" })}>
                 No contacts yet. Add one to get its reverse alias.
-              </Text>
+              </li>
             )}
             {contacts.data?.contacts.map((contact) => (
-              <Paper key={contact.id} p="sm" radius="md" withBorder>
-                <Stack gap={6}>
-                  <Group justify="space-between" wrap="nowrap">
-                    <Text size="sm" fw={500} truncate>
-                      {contact.contact}
-                    </Text>
-                    {contact.block_forward && (
-                      <Badge color="red" variant="light" size="sm">
-                        Blocked
-                      </Badge>
-                    )}
-                  </Group>
-                  <Text size="xs" c="dimmed" ff="monospace" truncate>
-                    {contact.reverse_alias_address}
-                  </Text>
-                  <Group gap="xs">
-                    <CopyButton value={contact.reverse_alias_address}>
-                      {({ copied, copy }) => (
-                        <Button
-                          size="compact-xs"
-                          variant={copied ? "filled" : "light"}
-                          color={copied ? "primary" : "accent"}
-                          onClick={copy}
-                        >
-                          {copied ? "Copied" : "Copy reverse alias"}
-                        </Button>
-                      )}
-                    </CopyButton>
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      color={contact.block_forward ? "primary" : "yellow"}
-                      loading={toggle.isPending && toggle.variables?.contact_id === contact.id}
-                      onClick={() => toggle.mutate({ contact_id: contact.id })}
+              <li key={contact.id} className={contactRow}>
+                <div
+                  className={css({
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                  })}
+                >
+                  <span
+                    className={css({
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      color: "heading",
+                    })}
+                  >
+                    {contact.contact}
+                  </span>
+                  {contact.block_forward && (
+                    <span
+                      className={css({
+                        flexShrink: 0,
+                        fontFamily: "mono",
+                        fontSize: "0.6rem",
+                        textTransform: "uppercase",
+                        color: "accent",
+                        border: "1px solid token(colors.accent)",
+                        borderRadius: "0.111rem",
+                        padding: "0.2em 0.6em",
+                      })}
                     >
-                      {contact.block_forward ? "Unblock" : "Block"}
-                    </Button>
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      color="red"
-                      loading={remove.isPending && remove.variables?.contact_id === contact.id}
-                      onClick={() => remove.mutate({ contact_id: contact.id })}
-                    >
-                      Delete
-                    </Button>
-                  </Group>
-                </Stack>
-              </Paper>
+                      Blocked
+                    </span>
+                  )}
+                </div>
+                <div
+                  className={cx(
+                    ui.mono,
+                    css({
+                      fontSize: "0.75rem",
+                      color: "textDim",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }),
+                  )}
+                >
+                  {contact.reverse_alias_address}
+                </div>
+                <div className={css({ display: "flex", gap: "0.5rem", alignItems: "center" })}>
+                  <CopyButton text={contact.reverse_alias_address} />
+                  <Button
+                    size="tiny"
+                    loading={toggle.isPending && toggle.variables?.contact_id === contact.id}
+                    onClick={() => toggle.mutate({ contact_id: contact.id })}
+                  >
+                    {contact.block_forward ? "Unblock" : "Block"}
+                  </Button>
+                  <Button
+                    size="tiny"
+                    loading={remove.isPending && remove.variables?.contact_id === contact.id}
+                    onClick={() => remove.mutate({ contact_id: contact.id })}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </li>
             ))}
-          </Stack>
+          </ul>
         )}
-      </Stack>
+      </div>
     </Drawer>
   );
 }

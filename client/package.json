@@ -13,8 +13,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@mantine/core": "^8.3.5",
-    "@mantine/hooks": "^8.3.5",
     "@tanstack/react-query": "^5.90.5",
     "@tanstack/react-router": "^1.132.41",
     "axios": "^1.12.2",

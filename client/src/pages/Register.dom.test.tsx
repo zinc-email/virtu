@@ -20,8 +20,8 @@ type User = ReturnType<typeof userEvent.setup>;
 
 /** Fill the six PinInput boxes; the last keystroke fires onComplete → submit. */
 async function fillCode(user: User, code: string): Promise<void> {
-  // PinInput renders 6 visible boxes (+ a hidden aggregate input we skip).
-  const boxes = document.querySelectorAll<HTMLInputElement>(".mantine-PinInput-input");
+  // Our PinInput (src/ui.tsx) renders 6 boxes tagged data-pin.
+  const boxes = document.querySelectorAll<HTMLInputElement>("input[data-pin]");
   expect(boxes.length).toBe(6);
   for (let i = 0; i < 6; i++) {
     const box = boxes[i];

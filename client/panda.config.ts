@@ -3,9 +3,8 @@ import { defineConfig } from "@pandacss/dev";
 // The virtu design system, distilled from the legacy site's SCSS into a
 // type-safe token set. Colors are exposed as SEMANTIC roles (bg/surface/
 // text/primary/accent/…) so components never name a hue; light/dark is a
-// token concern, not a component concern. The `_light` overrides are keyed to
-// Mantine's color-scheme attribute so the app's ☀/☾ toggle drives Panda too
-// (Mantine still owns the scheme attribute while both systems coexist).
+// token concern, not a component concern. The `_light` overrides key off the
+// data-color-scheme attribute that src/colorScheme.ts stamps on <html>.
 //
 // The legacy palette was five hues + sass lighten() steps; the raw scales
 // below reproduce the exact steps in use (navy #2e4a77 = hsl(217,44%,32%),
@@ -16,8 +15,7 @@ import { defineConfig } from "@pandacss/dev";
 // proportionally across screen sizes. Never use px in components.
 
 export default defineConfig({
-  // Mantine already ships a global reset (coexistence during the migration).
-  preflight: false,
+  preflight: true,
   include: ["./src/**/*.{ts,tsx}"],
   exclude: [],
   // We style exclusively through css()/cx classes — no styled() JSX factory —
@@ -28,7 +26,7 @@ export default defineConfig({
   conditions: {
     extend: {
       // Base tokens are the legacy DARK look (the app defaults to dark).
-      light: "[data-mantine-color-scheme=light] &",
+      light: "[data-color-scheme=light] &",
     },
   },
 

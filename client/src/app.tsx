@@ -3,7 +3,6 @@
 // links with the teal active underline, a centered 58rem main column, and a
 // footer holding logout + the color-scheme toggle.
 
-import { useComputedColorScheme, useMantineColorScheme } from "@mantine/core";
 import {
   Link,
   Outlet,
@@ -14,8 +13,10 @@ import {
   useNavigate,
   useRouterState,
 } from "@tanstack/react-router";
+import { useState } from "react";
 import { css, cx } from "styled-system/css";
 import { clearApiKey, getApiKey } from "src/auth";
+import { getColorScheme, setColorScheme } from "src/colorScheme";
 import { getLogout } from "src/gen";
 import { AliasDetailPage } from "src/pages/AliasDetail";
 import { AliasesPage } from "src/pages/Aliases";
@@ -63,13 +64,18 @@ function NavItem({ to, active, children }: { to: string; active: boolean; childr
 }
 
 function ThemeToggle() {
-  const { setColorScheme } = useMantineColorScheme();
-  const isDark = useComputedColorScheme("dark") === "dark";
+  const [scheme, setScheme] = useState(getColorScheme);
+  const isDark = scheme === "dark";
+  const flip = () => {
+    const next = isDark ? "light" : "dark";
+    setColorScheme(next);
+    setScheme(next);
+  };
   return (
     <button
       type="button"
       className={footerLink}
-      onClick={() => setColorScheme(isDark ? "light" : "dark")}
+      onClick={flip}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
     >
       {isDark ? "☀ Light" : "☾ Dark"}

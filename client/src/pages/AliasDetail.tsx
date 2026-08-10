@@ -103,7 +103,14 @@ export function AliasDetailPage() {
       <header className={css({ textAlign: "center", padding: "0 2rem" })}>
         {isNew ? (
           <>
-            <h1 className={cx(ui.h1, css({ marginBottom: "2rem" }))}>
+            <h1
+              className={cx(
+                ui.h1,
+                // Long mono addresses scale with the viewport so they break
+                // at the <wbr> before @, not mid-word.
+                css({ marginBottom: "2rem", fontSize: "clamp(1.25rem, 5.8vw, 2rem)" }),
+              )}
+            >
               <span className={ui.mono}>
                 <EmailBreak email={a.email} />
               </span>
@@ -126,7 +133,12 @@ export function AliasDetailPage() {
           </>
         ) : (
           <>
-            <h1 className={cx(ui.h1, css({ marginBottom: "1rem" }))}>
+            <h1
+              className={cx(
+                ui.h1,
+                css({ marginBottom: "1rem", fontSize: "clamp(1.25rem, 5.8vw, 2rem)" }),
+              )}
+            >
               {a.name || <EmailBreak email={a.email} />}
             </h1>
             <div

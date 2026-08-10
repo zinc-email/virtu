@@ -568,18 +568,21 @@ export function CopyButton({
 // A code block for machine-readable values (DNS records, keys): recessed
 // near-black ground, wrapped mono text, icon-only copy floating top-right —
 // unmistakably "this is the exact string to paste".
-export function CodeBlock({ children }: { children: string }) {
+export function CodeBlock({ children, compact }: { children: string; compact?: boolean }) {
   return (
     <div className={css({ position: "relative" })}>
       <pre
-        className={css({
-          margin: 0,
-          backgroundColor: "bgDeep",
-          border: "1px solid token(colors.border)",
-          borderRadius: "0.25rem",
-          // Right padding keeps the first lines clear of the copy button.
-          padding: "1rem 3rem 1rem 1.2rem",
-        })}
+        className={cx(
+          css({
+            margin: 0,
+            backgroundColor: "bgDeep",
+            border: "1px solid token(colors.border)",
+            borderRadius: "0.25rem",
+            // Right padding keeps the first lines clear of the copy button.
+            padding: "1rem 3rem 1rem 1.2rem",
+          }),
+          compact ? css({ padding: "0.55rem 2.6rem 0.55rem 0.9rem" }) : undefined,
+        )}
       >
         <code
           className={css({
@@ -597,12 +600,10 @@ export function CodeBlock({ children }: { children: string }) {
       <CopyButton
         text={children}
         iconOnly
-        className={css({
-          position: "absolute",
-          top: "0.5rem",
-          right: "0.5rem",
-          backgroundColor: "bgDeep",
-        })}
+        className={cx(
+          css({ position: "absolute", right: "0.5rem", backgroundColor: "bgDeep" }),
+          compact ? css({ top: "0.25rem", padding: "0.3rem" }) : css({ top: "0.5rem" }),
+        )}
       />
     </div>
   );
@@ -624,6 +625,8 @@ const kvRow = css({
   padding: "2rem 0.5rem 2rem 0.1rem",
   fontSize: "1rem",
   lineHeight: "1.4rem",
+  // Phones: keys stack above values instead of squeezing them into 60%.
+  "@media (max-width: 480px)": { flexDirection: "column", gap: "0.4rem", padding: "1.2rem 1rem" },
 });
 const kvKey = css({
   flex: "0 0 20%",
@@ -634,6 +637,14 @@ const kvKey = css({
   color: "primary",
   fontFamily: "mono",
   "@media (max-width: 650px)": { minWidth: "6rem" },
+  "@media (max-width: 480px)": {
+    flexBasis: "auto",
+    minWidth: 0,
+    marginRight: 0,
+    paddingLeft: 0,
+    textAlign: "left",
+    fontSize: "0.85rem",
+  },
 });
 const kvValue = css({
   flex: "0 1 80%",
@@ -641,6 +652,7 @@ const kvValue = css({
   color: "text",
   fontFamily: "mono",
   wordBreak: "break-word",
+  "@media (max-width: 480px)": { flexBasis: "auto" },
 });
 
 export function KV({ k, children }: { k: string; children: ReactNode }) {

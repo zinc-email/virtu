@@ -5,7 +5,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import {
@@ -56,22 +56,75 @@ function RecordSection({
         <p className={css({ color: "primary", marginTop: "1rem" })}>✓ {successText}</p>
       ) : (
         records.map((r) => (
-          <div key={`${r.type}-${r.hostname}-${r.value}`}>
-            <KeyValue>
-              <KV k="Type">{r.type}</KV>
-              <KV k="Name">
-                <span className={css({ overflowWrap: "anywhere" })}>{r.hostname}</span>
-              </KV>
-              {r.priority !== undefined && <KV k="Priority">{r.priority}</KV>}
-            </KeyValue>
-            {/* The exact value to paste at the DNS provider. */}
-            <div className={css({ marginTop: "-2rem", marginBottom: "3rem" })}>
-              <CodeBlock>{r.value}</CodeBlock>
-            </div>
+          <div
+            key={`${r.type}-${r.hostname}-${r.value}`}
+            className={css({
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.5rem",
+              marginTop: "1.2rem",
+            })}
+          >
+            <RecordRow label="Type">
+              <span
+                className={css({
+                  display: "inline-block",
+                  fontFamily: "mono",
+                  fontSize: "0.85rem",
+                  paddingTop: "0.65rem",
+                  "@media (max-width: 480px)": { paddingTop: 0 },
+                })}
+              >
+                {r.type}
+                {r.priority !== undefined && (
+                  <span className={ui.dim}> · priority {r.priority}</span>
+                )}
+              </span>
+            </RecordRow>
+            <RecordRow label="Name">
+              <CodeBlock compact>{r.hostname}</CodeBlock>
+            </RecordRow>
+            <RecordRow label={r.type === "MX" ? "Target" : "Value"}>
+              <CodeBlock compact>{r.value}</CodeBlock>
+            </RecordRow>
           </div>
         ))
       )}
     </section>
+  );
+}
+
+// A slim labeled line: teal mono label column, content (usually a code strip)
+// taking the rest. Labels stack above on phones.
+function RecordRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div
+      className={css({
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "0.9rem",
+        "@media (max-width: 480px)": { flexDirection: "column", gap: "0.25rem" },
+      })}
+    >
+      <span
+        className={css({
+          flex: "0 0 4.5rem",
+          textAlign: "right",
+          color: "primary",
+          fontFamily: "mono",
+          fontSize: "0.8rem",
+          paddingTop: "0.65rem",
+          "@media (max-width: 480px)": {
+            flexBasis: "auto",
+            textAlign: "left",
+            paddingTop: 0,
+          },
+        })}
+      >
+        {label}
+      </span>
+      <div className={css({ flex: "1 1 auto", minWidth: 0, width: "100%" })}>{children}</div>
+    </div>
   );
 }
 
@@ -302,6 +355,7 @@ const kvSwitchRow = css({
   backgroundColor: "surface",
   borderBottom: "1px solid token(colors.border)",
   padding: "1.4rem 0.5rem 1.4rem 0.1rem",
+  "@media (max-width: 480px)": { flexDirection: "column", gap: "0.4rem", padding: "1.2rem 1rem" },
 });
 const kvSwitchKey = css({
   flex: "0 0 20%",
@@ -313,6 +367,15 @@ const kvSwitchKey = css({
   fontFamily: "mono",
   paddingTop: "0.6rem",
   "@media (max-width: 650px)": { minWidth: "6rem" },
+  "@media (max-width: 480px)": {
+    flexBasis: "auto",
+    minWidth: 0,
+    marginRight: 0,
+    paddingLeft: 0,
+    paddingTop: 0,
+    textAlign: "left",
+    fontSize: "0.85rem",
+  },
 });
 const kvSwitchValue = css({
   flex: "0 1 80%",
@@ -321,4 +384,5 @@ const kvSwitchValue = css({
   alignItems: "center",
   gap: "1rem",
   flexWrap: "wrap",
+  "@media (max-width: 480px)": { flexBasis: "auto" },
 });

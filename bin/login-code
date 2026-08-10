@@ -2,10 +2,10 @@
 #
 # login-code — print the newest emailed verification code for an address.
 #
-# Verification emails (account activation, mailbox verification) are enqueued
-# in outbound_messages; the dev stack runs no deliverd, so the freshest code
-# for an address is sitting in the queue. Reads the dev database directly
-# (DATABASE_URL, default localhost:5432).
+# Verification emails (login codes, sudo codes, mailbox verification) are
+# enqueued in outbound_messages; the dev stack runs no deliverd, so the
+# freshest code for an address is sitting in the queue. Reads the dev
+# database directly (DATABASE_URL, default localhost:5432).
 #
 # Usage: bin/login-code <email>
 

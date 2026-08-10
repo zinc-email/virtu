@@ -57,7 +57,8 @@ const SENDER_FORMAT_OPTIONS = [
 
 // SMTP device passwords: list, create (password revealed once in a dialog),
 // revoke. Sends via port 587/465 authenticate with the account email + one
-// of these, so the account password never has to live on a device.
+// of these — the account itself has no password, so device credentials are
+// the only thing SMTP AUTH accepts.
 function SmtpCredentialsSection() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");

@@ -16,7 +16,6 @@ function fakeUser(over: Partial<User> = {}): User {
     id: 1,
     email: "wes@qmail.com",
     name: "Wes",
-    passwordHash: "x",
     activated: true,
     disabled: false,
     lifetime: false,

@@ -15,13 +15,12 @@ import { SettingsPage } from "src/pages/Settings";
 import { renderPage } from "../../test/render";
 import { createUser, latestLoginCode } from "../../test/tooling";
 
-const PASSWORD = "password1234";
 const uniqueEmail = () => `dom-${crypto.randomUUID()}@qmail.com`;
 
 type User = ReturnType<typeof userEvent.setup>;
 
 async function loginFreshUser(): Promise<void> {
-  const apiKey = await createUser(uniqueEmail(), PASSWORD);
+  const apiKey = await createUser(uniqueEmail());
   localStorage.setItem("virtu.apiKey", apiKey);
 }
 

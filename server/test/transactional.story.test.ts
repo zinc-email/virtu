@@ -1,16 +1,16 @@
 /**
  * Story: real transactional mail through our own pipeline. A brand-new
- * (unactivated) user signed up with Wes's qmail address; the activation
- * email is built, DKIM-signed and queued by `sendTransactional`, drained by
- * deliverd on the mail box, and lands in Wes's qmail Maildir with:
+ * (provisional) user submitted Wes's qmail address to the login flow; the
+ * login-code email is built, DKIM-signed and queued by `sendTransactional`,
+ * drained by deliverd on the mail box, and lands in Wes's qmail Maildir with:
  *
  *   - a `transactional`-type VERP envelope sender (vt.*@virtu.email) that
  *     parses back to the verification-code row id,
  *   - our DKIM signature, verified by qmail (dkim=pass, header.d=virtu.email),
  *   - SPF pass for the VERP envelope sender @virtu.email,
  *   - X-Virtu-Type: Transactional provenance,
- *   - the 6-digit code in the body — which then activates the account,
- *     exactly as a user reading their inbox would.
+ *   - the 6-digit code in the body — which then verifies the login, exactly
+ *     as a user reading their inbox would.
  *
  * The trigger is a direct `sendTransactional` from the test-runner against
  * the shared DB (no api service runs in the test net); the HTTP routes over
@@ -26,11 +26,11 @@ import { db } from "../src/db/index.ts";
 import { mailboxes, notifications, users, verificationCodes } from "../src/db/schema.ts";
 import { parseVerp } from "../src/mail/index.ts";
 import {
-  accountActivationEmail,
   consumeVerificationCode,
   createVerificationCode,
   extractCodeFromBody,
   hashVerificationCode,
+  loginCodeEmail,
   sendTransactional,
 } from "../src/pipeline/transactional.ts";
 import { ensureDkimKey, ensureMailbox, pollUntil, randomTag } from "./fixtures.ts";
@@ -46,14 +46,13 @@ beforeAll(async () => {
 });
 
 describe("transactional", () => {
-  test("activation email: queued here, delivered by deliverd, code activates", async () => {
-    // A fresh unactivated user whose mailbox is Wes's real qmail address.
+  test("login-code email: queued here, delivered by deliverd, code verifies", async () => {
+    // A fresh provisional user whose mailbox is Wes's real qmail address.
     const [user] = await db
       .insert(users)
       .values({
         email: `wes.activation.${randomTag()}@qmail.com`,
         name: "Wes (activation story)",
-        passwordHash: "story-test-never-logs-in",
         activated: false,
       })
       .returning();
@@ -61,9 +60,9 @@ describe("transactional", () => {
 
     const { code, row } = await createVerificationCode(db, {
       userId: user!.id,
-      purpose: "account",
+      purpose: "login",
     });
-    const { subject, textBody } = accountActivationEmail(code);
+    const { subject, textBody } = loginCodeEmail(code);
     const testId = newTestId();
 
     const sent = await sendTransactional(db, {
@@ -97,7 +96,7 @@ describe("transactional", () => {
 
     // Message shape: noreply sender, provenance, plain text.
     expect(getHeader(raw, "From")).toContain("noreply@virtu.email");
-    expect(getHeader(raw, "Subject")).toBe("Just one more step to join Virtu");
+    expect(getHeader(raw, "Subject")).toBe(`Your login code: ${code}`);
     expect(getHeader(raw, "X-Virtu-Type")).toBe("Transactional");
     expect(getHeader(raw, "X-Virtu-Test-Id")).toBe(testId);
     expect(getHeader(raw, "Content-Type")).toContain("text/plain");
@@ -109,10 +108,10 @@ describe("transactional", () => {
     expect(received).toBe(code);
     expect(hashVerificationCode(received!)).toBe(row.codeHash);
 
-    // ...and it activates the account (single-use).
+    // ...and it verifies the login (single-use).
     const consumed = await consumeVerificationCode(db, {
       userId: user!.id,
-      purpose: "account",
+      purpose: "login",
       code: received!,
       toEmail: wes.email,
     });
@@ -139,7 +138,6 @@ describe("transactional", () => {
       .values({
         email: `wes.bounce.${randomTag()}@qmail.com`,
         name: "Wes (bounce story)",
-        passwordHash: "story-test-never-logs-in",
         activated: true,
       })
       .returning();

@@ -50,9 +50,13 @@ export const users = pgTable(
     id: id(),
     email: varchar({ length: 256 }).unique().notNull(),
     name: varchar({ length: 128 }),
-    // Bun.password argon2id encoded string (includes salt + params).
-    passwordHash: text().notNull(),
-    // TODO(MVP): email verification is skipped — register activates immediately.
+    // Auth is passwordless (emailed one-time codes) — there is no password
+    // column. SMTP submission auths with per-device smtp_credentials.
+    //
+    // false = provisional: the row was created the moment this email was
+    // first submitted to POST /auth/login and holds the address while the
+    // code round-trips. Graduated to a full account (activated=true, trial
+    // started, self-mailbox created) on the first successful /auth/verify.
     activated: boolean().default(false).notNull(),
     // An account can be disabled for harmful behavior.
     disabled: boolean().default(false).notNull(),
@@ -86,8 +90,9 @@ export const users = pgTable(
   (t) => [index("users_trash_mailbox_id_idx").on(t.trashMailboxId)],
 );
 
-// One-time codes for account activation and mailbox verification, sent via
-// transactional email (VERP type `transactional`).
+// One-time codes for login (which doubles as signup), sudo re-auth and
+// mailbox verification, sent via transactional email (VERP type
+// `transactional`).
 export const verificationCodes = pgTable(
   "verification_codes",
   {
@@ -95,9 +100,9 @@ export const verificationCodes = pgTable(
     userId: integer()
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
-    // Set for mailbox verification; null for account activation.
+    // Set for mailbox verification; null for login and sudo codes.
     mailboxId: integer().references(() => mailboxes.id, { onDelete: "cascade" }),
-    purpose: varchar({ length: 16 }).notNull(), // "account" | "mailbox"
+    purpose: varchar({ length: 16 }).notNull(), // "login" | "sudo" | "mailbox"
     // sha256 hex of the code (codes are secrets; never store plaintext).
     codeHash: varchar({ length: 64 }).notNull(),
     expiresAt: timestamp({ withTimezone: true, mode: "date" }).notNull(),
@@ -131,7 +136,8 @@ export const apiKeys = pgTable(
 
 // Per-device SMTP submission passwords ("app passwords"): one row per device
 // ("my phone", "my laptop"), each revocable/replaceable independently of the
-// others and of the account password. The plaintext is generated server-side,
+// others. The account itself has no password, so these are the ONLY
+// credentials SMTP AUTH accepts. The plaintext is generated server-side,
 // shown once at creation, and only its argon2id hash is stored.
 export const smtpCredentials = pgTable(
   "smtp_credentials",

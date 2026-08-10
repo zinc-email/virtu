@@ -80,9 +80,10 @@ export interface SubmissionOptions {
 }
 
 /**
- * Verify (once) that credentials are usable for message submission: the
- * account password, or any of the user's per-device SMTP credentials. A
- * device-credential match stamps its last_used_at (the dashboard shows it).
+ * Verify (once) that credentials are usable for message submission: any of
+ * the user's per-device SMTP credentials — accounts have no password, so
+ * device credentials are the only thing SMTP AUTH accepts. A match stamps
+ * the credential's last_used_at (the dashboard shows it).
  */
 export async function verifyCredentials(
   opts: Pick<SubmissionOptions, "db">,
@@ -93,8 +94,6 @@ export async function verifyCredentials(
   const rows = await opts.db.select().from(users).where(eq(users.email, email)).limit(1);
   const user = rows[0];
   if (user === undefined || user.disabled) return false;
-
-  if (await Bun.password.verify(password, user.passwordHash)) return true;
 
   const credentials = await opts.db
     .select()

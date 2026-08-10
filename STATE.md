@@ -35,7 +35,7 @@ Story coverage: forward with `dkim=pass` at the receiving peer (M1), authed
 reply with threading and zero real-address leakage (M2), bounce → auto-disable
 at threshold (M3), DSN delivery + rate-limit suppression, custom-domain
 forward AND custom-domain DKIM (`dkim=pass header.d=user.com` at initech),
-transactional activation email delivered through our own queue AND a bounced
+transactional login-code email delivered through our own queue AND a bounced
 verification email invalidating its code (transactional intake), policy edges
 (nonexistent alias 550, disabled alias accept-and-drop, relay denied),
 network smoke (peers verify SPF/DKIM/DMARC independently of our server),
@@ -65,8 +65,8 @@ with a regression test encoding the observed sequence).
 | B — Email auth (mailauth) | ✅ done | All verification in-process; table-driven verdicts; glts spf-milter documented as fallback, unused |
 | C — Rewrite core | ✅ done | VERP byte-compatible with SimpleLogin (CPython golden vector) + constant-time compare + real expiry; forward/reply whitelists; refuse-to-leak on replies |
 | D — Queue + deliverd | ✅ done* | SKIP LOCKED worker, backoff, RFC 3464 DSNs (null reverse path, rate-limited). *Gap: bounces OF transactional mail are log-only |
-| E — API (SimpleLogin-compat) | ~90% | 28+ spec paths incl. custom domains, billing extras, SMTP credentials (Virtu extension) + mailbox `trash` flag. Deferred: MFA, forgot_password, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone |
-| F — Client | ~85% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login, register/activation, alias index (hero + one-click random alias), alias detail (new/used states + activities + contacts/delete), **mailboxes (add/verify-by-code/default/trash/delete-with-transfer)**, settings (native selects + SMTP device passwords: create-with-one-time-reveal, revoke), billing (key/value + Stripe actions), domains index + detail (DNS records to publish, verify with per-check errors, catch-all switch, delete). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Missing: notifications, search, per-alias mailbox picker UI (API supports `mailbox_ids`) |
+| E — API (SimpleLogin-compat) | ~90% | 28+ spec paths incl. custom domains, billing extras, SMTP credentials (Virtu extension) + mailbox `trash` flag. Auth is passwordless (PLAN decision #13): `/auth/login` + `/auth/verify` replace SL's register/activate/reactivate/login, sudo is an emailed code. Deferred: MFA, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone (forgot_password is moot — no passwords) |
+| F — Client | ~85% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login (the passwordless single entrypoint — one email field for login AND signup, styled after the legacy 401 page, code step with PinInput; /register redirects here), alias detail (new/used states + activities + contacts/delete), **mailboxes (add/verify-by-code/default/trash/delete-with-transfer)**, settings (native selects + SMTP device passwords: create-with-one-time-reveal, revoke), billing (key/value + Stripe actions), domains index + detail (DNS records to publish, verify with per-check errors, catch-all switch, delete). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Missing: notifications, search, per-alias mailbox picker UI (API supports `mailbox_ids`) |
 | G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Served at `/` behind the Caddy proxy; SPA under `/app`, API under `/api` — one origin, same topology dev and prod (dev proxy built; see below) |
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |
@@ -172,8 +172,11 @@ reverse path by design (PLAN #11), so nothing bumps its nb_failed_checks.)
 
 ## Deviations from SimpleLogin (all documented in code at the site)
 
-API keys stored sha256 (login mints a new key; SL returns the stored one) ·
-register activates via 6-digit code but SL parity strings/codes kept ·
+API keys stored sha256 (every verify mints a new key; SL returns the stored
+one) · **auth is passwordless** (PLAN decision #13): one login/verify code
+flow replaces SL's register/activate/reactivate/login, `users` has no
+password column, sudo re-auth is an emailed code (`PATCH /sudo` two-step) and
+SMTP AUTH takes device credentials only ·
 mailbox verification is a code endpoint (SL: web link) · logout revokes the
 API key · ownership token prefix `vt-verification=` · per-domain DKIM TXT
 instead of SL's CNAME (we sign with the domain's own key — better alignment) ·

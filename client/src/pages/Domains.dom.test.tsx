@@ -17,14 +17,13 @@ import { DomainsPage } from "src/pages/Domains";
 import { renderPage } from "../../test/render";
 import { createUser } from "../../test/tooling";
 
-const PASSWORD = "password1234";
 const uniqueEmail = () => `dom-${crypto.randomUUID()}@qmail.com`;
 const uniqueDomain = () => `d${crypto.randomUUID().slice(0, 12).replace(/-/g, "")}.example.com`;
 
 const DETAIL_ROUTE = { path: "/domains/$domainId", component: DomainDetailPage };
 
 async function loginFreshUser(): Promise<void> {
-  const apiKey = await createUser(uniqueEmail(), PASSWORD);
+  const apiKey = await createUser(uniqueEmail());
   localStorage.setItem("virtu.apiKey", apiKey);
 }
 

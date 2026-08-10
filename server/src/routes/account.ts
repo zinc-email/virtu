@@ -4,7 +4,9 @@
 //   PATCH /setting             validates (SimpleLogin error strings) + persists
 //   GET   /v2/setting/domains  domains usable for random aliases (built-in +
 //                              the user's verified custom domains)
-//   PATCH /sudo                password -> sudo mode on the current api key
+//   PATCH /sudo                emailed code -> sudo mode on the current api
+//                              key (two-step: no code = send one, code =
+//                              verify it — accounts have no password)
 //   POST  /api_key             sudo-gated key creation (440 without sudo)
 //   GET   /logout              revokes the presented api key
 //
@@ -22,6 +24,14 @@ import { z } from "zod";
 import { generateApiKey, hashApiKey } from "../auth/apiKey";
 import { db } from "../db";
 import { aliases, apiKeys, customDomains, emailLogs, type User, users } from "../db/schema";
+import {
+  consumeVerificationCode,
+  createVerificationCode,
+  isRateLimited,
+  SUDO_CODE_ALERT_TYPE,
+  sendWithRateLimit,
+  sudoCodeEmail,
+} from "../pipeline/transactional";
 import { ALIAS_DOMAINS, FIRST_ALIAS_DOMAIN, SUDO_MODE_MINUTES_VALID } from "./aliasConfig";
 import { HttpError } from "./httpError";
 import { ErrorResponse, OkResponse } from "./schema";
@@ -63,8 +73,10 @@ const DomainDto = z
   .meta({ id: "SettingDomain" });
 
 const SudoBody = z
-  .object({ password: z.string().optional() })
-  .meta({ id: "SudoRequest", example: { password: "yourpassword" } });
+  .object({ code: z.string().optional() })
+  .meta({ id: "SudoRequest", example: { code: "662302" } });
+
+const SudoCodeSentResponse = z.object({ msg: z.string() }).meta({ id: "SudoCodeSentResponse" });
 
 const CreateApiKeyBody = z
   .object({ device: z.string().optional() })
@@ -260,18 +272,62 @@ export async function withAccountRoutes(authed: FastifyInstance) {
     config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
     schema: {
       description:
-        "Enter sudo mode by re-entering the account password. Sudo lasts 5 minutes on " +
-        "the presented api key and gates POST /api_key.",
+        "Enter sudo mode by confirming an emailed one-time code (accounts have no " +
+        "password). Two-step on this one endpoint: call without a code to have one " +
+        "emailed (202; budgeted 3/hour → 429), then call again with {code} — 403 on " +
+        "a wrong code, 410 once it has been tried wrongly too many times. Sudo lasts " +
+        "5 minutes on the presented api key and gates POST /api_key.",
       tags: ["Account"],
       security: [{ apiKeyAuth: [] }],
       body: SudoBody,
-      response: { 200: OkResponse, 401: ErrorResponse, 403: ErrorResponse, 429: ErrorResponse },
+      response: {
+        200: OkResponse,
+        202: SudoCodeSentResponse,
+        401: ErrorResponse,
+        403: ErrorResponse,
+        410: ErrorResponse,
+        429: ErrorResponse,
+      },
     },
-    handler: async (req) => {
-      const password = req.body.password;
-      if (password === undefined) throw new HttpError(403, "Invalid password");
-      const ok = await Bun.password.verify(password, req.user.passwordHash);
-      if (!ok) throw new HttpError(403, "Invalid password");
+    handler: async (req, reply) => {
+      const submitted = req.body.code;
+      if (submitted === undefined) {
+        // Budget check BEFORE minting, so hammering this endpoint cannot
+        // invalidate a code that is still in flight.
+        if (
+          await isRateLimited(db, {
+            userId: req.user.id,
+            toEmail: req.user.email,
+            alertType: SUDO_CODE_ALERT_TYPE,
+          })
+        ) {
+          throw new HttpError(429, "Too many confirmation emails requested, try again later");
+        }
+        const { code, row } = await createVerificationCode(db, {
+          userId: req.user.id,
+          purpose: "sudo",
+        });
+        const { subject, textBody } = sudoCodeEmail(code);
+        await sendWithRateLimit(db, {
+          userId: req.user.id,
+          alertType: SUDO_CODE_ALERT_TYPE,
+          to: req.user.email,
+          subject,
+          textBody,
+          refId: row.id,
+        });
+        reply.status(202);
+        return { msg: "Confirmation code sent" };
+      }
+
+      const result = await consumeVerificationCode(db, {
+        userId: req.user.id,
+        purpose: "sudo",
+        code: submitted,
+        toEmail: req.user.email,
+      });
+      if (result === "too_many") throw new HttpError(410, "Too many wrong tries");
+      if (result !== "ok") throw new HttpError(403, "Invalid code");
 
       await db.update(apiKeys).set({ sudoModeAt: new Date() }).where(eq(apiKeys.id, req.apiKey.id));
       return { ok: true };

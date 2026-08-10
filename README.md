@@ -48,16 +48,18 @@ every variable and which ones production must override.
 
 ### Logging in
 
-Registration requires an emailed 6-digit code, and the dev stack runs no
-`deliverd`, so codes sit in the outbound queue. Two shortcuts:
+Login is passwordless: one email field for login and signup, confirmed by an
+emailed 6-digit code — and the dev stack runs no `deliverd`, so codes sit in
+the outbound queue. Two shortcuts:
 
 ```sh
-just user-create                 # register + activate + login wes@qmail.com / password1234
-                                 #   (prints the API key; idempotent; takes [email] [password])
+just user-create                 # log in wes@qmail.com through the code flow
+                                 #   (prints the API key; idempotent; takes [email])
 just login-code <email>          # print the newest emailed code for an address
 ```
 
-Then sign in at http://localhost:8080/app/login with the email + password.
+Then sign in at http://localhost:8080/app/login with the email + the code
+from `just login-code`.
 
 ## Billing (optional, Stripe)
 

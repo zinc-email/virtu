@@ -6,7 +6,7 @@ import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { verifyCredentials } from "../submission";
 import { db } from "../db";
-import { PASSWORD, registerAndLogin } from "./intHarness";
+import { registerAndLogin } from "./intHarness";
 
 let app: App;
 
@@ -68,8 +68,8 @@ describe("SMTP AUTH against credentials (verifyCredentials)", () => {
     const phone = await createCredential(apiKey, "Phone");
     const laptop = await createCredential(apiKey, "Laptop");
 
-    // Account password and both device passwords all authenticate.
-    expect(await verifyCredentials({ db }, email, PASSWORD)).toBe(true);
+    // Both device passwords authenticate; nothing else does — the account
+    // itself has no password.
     expect(await verifyCredentials({ db }, email, phone.password)).toBe(true);
     expect(await verifyCredentials({ db }, email, laptop.password)).toBe(true);
     expect(await verifyCredentials({ db }, email, "wrong-password")).toBe(false);
@@ -84,8 +84,8 @@ describe("SMTP AUTH against credentials (verifyCredentials)", () => {
       .credentials;
     expect(rows.find((c) => c.id === phone.id)?.last_used_timestamp).not.toBeNull();
 
-    // Revoke the phone: it stops authenticating, the laptop and the account
-    // password keep working (independent revocation is the point).
+    // Revoke the phone: it stops authenticating, the laptop keeps working
+    // (independent revocation is the point).
     const del = await app.inject({
       method: "DELETE",
       url: `/api/smtp/credentials/${phone.id}`,
@@ -94,7 +94,6 @@ describe("SMTP AUTH against credentials (verifyCredentials)", () => {
     expect(del.statusCode).toBe(200);
     expect(await verifyCredentials({ db }, email, phone.password)).toBe(false);
     expect(await verifyCredentials({ db }, email, laptop.password)).toBe(true);
-    expect(await verifyCredentials({ db }, email, PASSWORD)).toBe(true);
   });
 
   test("credentials never cross accounts", async () => {

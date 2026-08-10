@@ -9,7 +9,7 @@
  *      address: delivered with From = the alias, DKIM passing, and a contact
  *      minted so the outside party's reply routes back.
  *   3. A per-device SMTP password created over the API authenticates a real
- *      submission; revoking it kills AUTH while the account password lives.
+ *      submission; revoking it kills AUTH while the other device's lives.
  *   4. Leak guards: a Cc of the user's own mailbox refuses; recipients
  *      spanning two aliases refuse (ambiguous outbound identity).
  */
@@ -22,6 +22,7 @@ import { contacts } from "../src/db/schema.ts";
 import { connectSmtp } from "../src/smtp/index.ts";
 import {
   createAlias,
+  createApiKey,
   ensureDkimKey,
   ensureWes,
   type UserFixture,
@@ -224,13 +225,9 @@ describe("outbound: per-device SMTP passwords", () => {
   test("create over the API, authenticate a real send, revoke, AUTH dies", async () => {
     const app = await buildApp({ logger: false });
     try {
-      const login = await app.inject({
-        method: "POST",
-        url: "/api/auth/login",
-        payload: { email: wes.email, password: WES_PASSWORD, device: "story" },
-      });
-      expect(login.statusCode).toBe(200);
-      const apiKey = login.json<{ api_key: string }>().api_key;
+      // Minted directly in the DB — the emailed login code is already on its
+      // way to a peer Maildir, so the HTTP flow can't be round-tripped here.
+      const apiKey = await createApiKey(fixture.user.id);
 
       const created = await app.inject({
         method: "POST",
@@ -271,7 +268,7 @@ describe("outbound: per-device SMTP passwords", () => {
       expect(del.statusCode).toBe(200);
       await expect(submissionClient(credential.password)).rejects.toThrow(/535/);
 
-      // …while the account password is untouched.
+      // …while the fixture's own device credential is untouched.
       const stillWorks = await submissionClient();
       await stillWorks.quit();
     } finally {

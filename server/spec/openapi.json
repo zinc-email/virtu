@@ -15,32 +15,34 @@
       }
     },
     "schemas": {
-      "AuthRegisterRequest": {
+      "AuthLoginRequest": {
         "type": "object",
         "properties": {
           "email": {
             "type": "string"
           },
-          "password": {
+          "device": {
             "type": "string"
           }
         },
         "required": [
-          "email",
-          "password"
+          "email"
         ],
         "example": {
           "email": "user@example.com",
-          "password": "correct horse battery staple"
+          "device": "Chrome extension"
         }
       },
-      "AuthActivateRequest": {
+      "AuthVerifyRequest": {
         "type": "object",
         "properties": {
           "email": {
             "type": "string"
           },
           "code": {
+            "type": "string"
+          },
+          "device": {
             "type": "string"
           }
         },
@@ -50,43 +52,7 @@
         ],
         "example": {
           "email": "user@example.com",
-          "code": "662302"
-        }
-      },
-      "AuthReactivateRequest": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "email"
-        ],
-        "example": {
-          "email": "user@example.com"
-        }
-      },
-      "AuthLoginRequest": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          },
-          "device": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "email",
-          "password"
-        ],
-        "example": {
-          "email": "user@example.com",
-          "password": "hunter2!!",
+          "code": "662302",
           "device": "Chrome extension"
         }
       },
@@ -363,12 +329,12 @@
       "SudoRequest": {
         "type": "object",
         "properties": {
-          "password": {
+          "code": {
             "type": "string"
           }
         },
         "example": {
-          "password": "yourpassword"
+          "code": "662302"
         }
       },
       "MsgResponse": {
@@ -1551,6 +1517,18 @@
         ],
         "additionalProperties": false
       },
+      "SudoCodeSentResponse": {
+        "type": "object",
+        "properties": {
+          "msg": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "msg"
+        ],
+        "additionalProperties": false
+      },
       "LogoutResponse": {
         "type": "object",
         "properties": {
@@ -1641,178 +1619,68 @@
     }
   },
   "paths": {
-    "/auth/register": {
-      "post": {
-        "tags": [
-          "Account"
-        ],
-        "description": "Register a new account. The account starts unactivated: a 6-digit activation code (15-minute expiry) is emailed to the address; confirm it via POST /auth/activate before logging in.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AuthRegisterRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MsgResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/activate": {
-      "post": {
-        "tags": [
-          "Account"
-        ],
-        "description": "Enter the emailed activation code to confirm the account. 400 on a wrong email/code, 410 once the code has been tried wrongly too many times (request a new one via /auth/reactivate).",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AuthActivateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MsgResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "410": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/reactivate": {
-      "post": {
-        "tags": [
-          "Account"
-        ],
-        "description": "Resend the activation code. Budgeted per account (3 emails/hour, the register email included): 429 when over budget — a deviation from SimpleLogin, which relies on its per-IP limit alone.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AuthReactivateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MsgResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/auth/login": {
       "post": {
         "tags": [
           "Account"
         ],
-        "description": "Authenticate and obtain an api_key for the Authentication header. MFA is not implemented: mfa_enabled is always false and mfa_key null. An unactivated account gets 422 (activate first).",
+        "description": "Request a login code — the single entrypoint for login AND signup. An unknown email gets a provisional account created on the spot; either way a 6-digit code (15-minute expiry) is emailed and the response is identical, so whether an address is registered is never revealed. Confirm the code via POST /auth/verify. Resending is the same call again (budgeted: 3 emails per address per hour → 429).",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AuthLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MsgResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/verify": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Enter the emailed login code to finish authenticating: a first-time email is graduated to a full account (trial started, self-mailbox created), and an api_key for the Authentication header is minted either way, with sudo mode already fresh. 400 on a wrong email/code, 410 once the code has been tried wrongly too many times (request a new one via /auth/login). MFA is not implemented: mfa_enabled is always false and mfa_key null.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthVerifyRequest"
               }
             }
           }
@@ -1838,7 +1706,7 @@
               }
             }
           },
-          "422": {
+          "410": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -4087,7 +3955,7 @@
         "tags": [
           "Account"
         ],
-        "description": "Enter sudo mode by re-entering the account password. Sudo lasts 5 minutes on the presented api key and gates POST /api_key.",
+        "description": "Enter sudo mode by confirming an emailed one-time code (accounts have no password). Two-step on this one endpoint: call without a code to have one emailed (202; budgeted 3/hour → 429), then call again with {code} — 403 on a wrong code, 410 once it has been tried wrongly too many times. Sudo lasts 5 minutes on the presented api key and gates POST /api_key.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4114,6 +3982,16 @@
               }
             }
           },
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SudoCodeSentResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Default Response",
             "content": {
@@ -4125,6 +4003,16 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
             "description": "Default Response",
             "content": {
               "application/json": {

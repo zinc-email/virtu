@@ -25,7 +25,6 @@ import { DomainDetailPage } from "src/pages/DomainDetail";
 import { DomainsPage } from "src/pages/Domains";
 import { LoginPage } from "src/pages/Login";
 import { MailboxesPage } from "src/pages/Mailboxes";
-import { RegisterPage } from "src/pages/Register";
 import { SettingsPage } from "src/pages/Settings";
 import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
@@ -197,6 +196,7 @@ function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
   // location.pathname includes the /app basepath; compare against app paths.
   const path = location.pathname.replace(/^\/app(?=\/|$)/, "") || "/";
+  // /register only survives as a redirect into /login (legacy links).
   const isAuthPage = path === "/login" || path === "/register";
   const isAliasDetail = path.startsWith("/aliases/");
   const isDomainDetail = path.startsWith("/domains/");
@@ -344,8 +344,10 @@ function Shell() {
 
 const rootRoute = createRootRoute({ component: Shell });
 
-const requireAuth = () => {
-  if (!getApiKey()) throw redirect({ to: "/login" });
+const requireAuth = ({ location }: { location: { href: string } }) => {
+  // Remember where the visitor was headed; the login page returns them there
+  // after the code round-trip (the legacy intendedLocation behavior).
+  if (!getApiKey()) throw redirect({ to: "/login", search: { redirect: location.href } });
 };
 
 const indexRoute = createRoute({
@@ -397,16 +399,39 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+interface LoginSearch {
+  /** Prefill from the www homepage CTA (GET /app/login?email=…). */
+  email?: string;
+  /** Where a guarded page wanted to go (full href incl. the /app basepath). */
+  redirect?: string;
+  /** "expired" when the api client bounced a dead key here. */
+  reason?: string;
+}
+
+const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
+  validateSearch: (search: Record<string, unknown>): LoginSearch => ({
+    email: str(search.email),
+    redirect: str(search.redirect),
+    reason: str(search.reason),
+  }),
   component: LoginPage,
 });
 
+// Legacy entrypoint (old www forms and bookmarks): login and signup are the
+// same flow now, so /register just forwards its ?email= along.
 const registerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/register",
-  component: RegisterPage,
+  validateSearch: (search: Record<string, unknown>): { email?: string } => ({
+    email: str(search.email),
+  }),
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: "/login", search: { email: search.email } });
+  },
 });
 
 export const router = createRouter({

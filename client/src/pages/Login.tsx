@@ -1,90 +1,223 @@
-// Login page — legacy auth styling: narrow centered column, commanding h1,
-// old-style form fields, teal submit. Calls POST /api/auth/login via the
-// generated SDK and stores the returned api_key.
+// Login page ("/login") — the app's ONLY auth surface, and essentially the
+// legacy 401 error page (tmp/virtu views/errors/401.php): one email field
+// serves login AND signup, since the passwordless flow makes them the same
+// thing. Phase "email" requests a code (POST /auth/login — creates a
+// provisional account server-side when the address is new); phase "code"
+// verifies it (POST /auth/verify) and stores the minted api_key. The router
+// guard bounces unauthenticated visits here with ?redirect=, and the www
+// homepage CTA arrives with ?email= (auto-submitted, so the visitor lands
+// straight on the code step, exactly like the legacy flow).
 
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import { setApiKey } from "src/auth";
-import { usePostAuthLogin } from "src/gen";
-import { Alert, Button, Field, Section, ui } from "src/ui";
+import { usePostAuthLogin, usePostAuthVerify } from "src/gen";
+import { Alert, Button, Field, PinInput, Section, ui } from "src/ui";
+
+// Mirror the server's cheap guard (auth.ts) so obvious mistakes don't cost a
+// round trip. The real validation still lives on the server.
+function looksLikeEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const search = useSearch({ from: "/login" });
+  const [phase, setPhase] = useState<"email" | "code">("email");
+  // The homepage CTA (www CtaForm) submits GET /app/login?email=…; prefill it.
+  const [email, setEmail] = useState(search.email ?? "");
+  const [code, setCode] = useState("");
 
-  const login = usePostAuthLogin({
+  const request = usePostAuthLogin({
+    mutation: { onSuccess: () => setPhase("code") },
+  });
+
+  const verify = usePostAuthVerify({
     mutation: {
       onSuccess: (data) => {
         if (data.api_key) {
           setApiKey(data.api_key);
-          void navigate({ to: "/" });
+          // A guarded page sent us here; go back to it. The href includes the
+          // /app basepath, so a hard navigation avoids double-prefixing.
+          if (search.redirect) window.location.assign(search.redirect);
+          else void navigate({ to: "/" });
         }
       },
     },
   });
 
+  const emailValid = looksLikeEmail(email.trim());
+
+  const submitEmail = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!emailValid || request.isPending) return;
+    setCode("");
+    verify.reset();
+    request.mutate({ data: { email: email.trim(), device: "virtu-web" } });
+  };
+
+  // Arriving from the homepage form with a valid email: request the code
+  // immediately, like the legacy flow (the www submit WAS the first step).
+  const autoSubmitted = useRef(false);
+  useEffect(() => {
+    if (autoSubmitted.current) return;
+    autoSubmitted.current = true;
+    if (search.email && looksLikeEmail(search.email.trim())) submitEmail();
+  });
+
+  const submitCode = (value: string) => {
+    if (value.length !== 6 || verify.isPending) return;
+    verify.mutate({ data: { email: email.trim(), code: value, device: "virtu-web" } });
+  };
+
+  const changeEmail = () => {
+    setPhase("email");
+    setCode("");
+    request.reset();
+    verify.reset();
+  };
+
+  // The bounce reasons: a guarded page redirected here, or the stored key
+  // died mid-session (api/client.ts appends ?reason=expired).
+  const bounced = Boolean(search.redirect) || search.reason === "expired";
+
   return (
     <Section narrow>
-      <header className={css({ textAlign: "center", marginBottom: "2.5rem" })}>
-        <h1 className={ui.h1}>Welcome back.</h1>
-        <p className={cx(ui.lead, ui.dim, css({ marginTop: "1rem" }))}>
-          One alias per sign-up. Revoke when leaked.
-        </p>
-      </header>
+      {phase === "email" ? (
+        <form onSubmit={submitEmail}>
+          <header className={css({ textAlign: "center", marginBottom: "2.5rem" })}>
+            <h1 className={ui.h1}>{bounced ? "Please log-in first." : "Log-in or sign-up."}</h1>
+            {bounced && (
+              <p className={cx(ui.lead, ui.dim, css({ marginTop: "1rem" }))}>
+                We want to take you to that page, but you must log-in first. Use the form below to
+                log-in.
+              </p>
+            )}
+          </header>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          login.mutate({ data: { email, password, device: "virtu-web" } });
-        }}
-      >
-        {login.isError && <Alert>{apiErrorMessage(login.error)}</Alert>}
+          {search.reason === "expired" && !request.isError && (
+            <Alert>Your session expired. Please log-in again.</Alert>
+          )}
+          {request.isError && <Alert>{apiErrorMessage(request.error)}</Alert>}
 
-        <Field
-          label="Email"
-          name="email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.currentTarget.value)}
-          required
-        />
-        <Field
-          label="Password"
-          name="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.currentTarget.value)}
-          required
-        />
+          <Field
+            label="Email"
+            name="email"
+            type="email"
+            placeholder="yourname@gmail.com"
+            value={email}
+            onChange={(e) => setEmail(e.currentTarget.value)}
+            hint={
+              bounced
+                ? "Enter your e-mail address to receive a log-in confirmation email."
+                : "Enter your e-mail address to login or signup."
+            }
+            autoFocus
+            required
+          />
 
-        <div className={css({ marginTop: "2.42rem" })}>
+          <div className={css({ marginTop: "2.42rem" })}>
+            <Button
+              type="submit"
+              variant="submit"
+              loading={request.isPending}
+              disabled={!emailValid}
+              className={css({ width: "100%" })}
+            >
+              Continue
+            </Button>
+          </div>
+
+          <div
+            className={css({
+              marginTop: "3rem",
+              paddingTop: "1.6rem",
+              borderTop: "1px solid token(colors.border)",
+              color: "textDim",
+              fontSize: "0.9rem",
+            })}
+          >
+            <h3 className={css({ fontSize: "1rem", marginBottom: "0.6rem" })}>Want more info?</h3>
+            <p>
+              Zinc protects your inbox by empowering you to send and receive email without ever
+              sharing your real email address.
+            </p>
+            <p className={css({ marginTop: "0.6rem" })}>
+              <a href="/how" className={ui.link}>
+                Learn how it works
+              </a>
+              .
+            </p>
+          </div>
+        </form>
+      ) : (
+        <div className={css({ textAlign: "center" })}>
+          <header className={css({ marginBottom: "2rem" })}>
+            <h1 className={ui.h1}>Check your e-mail</h1>
+            <p className={cx(ui.lead, ui.dim, css({ marginTop: "1rem" }))}>
+              We sent a confirmation email to <strong>{email.trim()}</strong>. Please enter the code
+              in that email to prove it's you. It expires in 15 minutes.
+            </p>
+          </header>
+
+          {verify.isError && <Alert>{apiErrorMessage(verify.error)}</Alert>}
+          {request.isSuccess && !verify.isError && !verify.isSuccess && code === "" && (
+            <Alert kind="success">A log-in code is on its way.</Alert>
+          )}
+
+          <div className={css({ display: "flex", justifyContent: "center", marginBottom: "2rem" })}>
+            <PinInput
+              length={6}
+              autoFocus
+              value={code}
+              onChange={(v) => {
+                setCode(v);
+                if (verify.isError) verify.reset();
+              }}
+              onComplete={submitCode}
+              label="Login code"
+              disabled={verify.isPending}
+            />
+          </div>
+
           <Button
-            type="submit"
             variant="submit"
-            loading={login.isPending}
+            onClick={() => submitCode(code)}
+            loading={verify.isPending}
+            disabled={code.length !== 6}
             className={css({ width: "100%" })}
           >
-            Log in
+            Verify My Identity
           </Button>
-        </div>
 
-        <p
-          className={css({
-            marginTop: "1.6rem",
-            textAlign: "center",
-            color: "textDim",
-            fontSize: "0.9rem",
-          })}
-        >
-          No account yet?{" "}
-          <Link to="/register" className={ui.link}>
-            Create one
-          </Link>
-        </p>
-      </form>
+          <div
+            className={css({
+              display: "flex",
+              justifyContent: "space-between",
+              marginTop: "1.6rem",
+              fontSize: "0.9rem",
+            })}
+          >
+            <button
+              type="button"
+              className={cx(ui.link, css({ color: "textDim", _hover: { color: "navLink" } }))}
+              onClick={changeEmail}
+            >
+              Use a different email
+            </button>
+            <button
+              type="button"
+              className={ui.link}
+              onClick={() => submitEmail()}
+              aria-disabled={request.isPending}
+            >
+              {request.isPending ? "Resending…" : "Resend code"}
+            </button>
+          </div>
+        </div>
+      )}
     </Section>
   );
 }

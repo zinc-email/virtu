@@ -354,10 +354,11 @@ Settled (2026-08-08):
    the user's own mailboxes is refused (550), never sent.
 10. **Per-device SMTP passwords** (2026-08-10). `smtp_credentials` rows are
     app-style passwords (generated server-side, shown once, argon2id-hashed),
-    one per device, revocable independently of each other and of the account
-    password. SMTP AUTH accepts the account password or any device credential;
-    device use stamps `last_used_at`. API: GET/POST/DELETE `/smtp/credentials`
-    (a Virtu extension — SimpleLogin has no SMTP submission).
+    one per device, revocable independently of each other. Accounts have no
+    password (decision #13), so device credentials are the ONLY thing SMTP
+    AUTH accepts; device use stamps `last_used_at`. API: GET/POST/DELETE
+    `/smtp/credentials` (a Virtu extension — SimpleLogin has no SMTP
+    submission).
 11. **Trash inbox** (2026-08-10). A user may designate one verified mailbox as
     the account's trash inbox (`users.trash_mailbox_id`, set via
     PUT /mailboxes/:id `{trash}`). Mail for a disabled ("off") alias is then
@@ -372,5 +373,24 @@ Settled (2026-08-08):
     skipped), each copy with its own email_log and VERP so bounce accounting
     stays per-mailbox. A broken primary no longer drops mail that a healthy
     extra mailbox can receive.
+13. **Passwordless single-entrypoint auth** (2026-08-10). Login and signup
+    are ONE flow, re-adopting legacy virtu (and Zinc-from-day-one): a single
+    email field; `POST /auth/login {email}` creates a *provisional* user
+    (`users.activated = false` — the modern form of legacy's accountId-NULL
+    row) when the address is unknown and emails a 6-digit code either way
+    (uniform response — registration status is never revealed);
+    `POST /auth/verify {email, code}` graduates a provisional user
+    (activated, trial started, self-mailbox created) and mints the api key.
+    No `password_hash` column exists. Unlike legacy, codes keep the modern
+    hardening: sha256-stored, 15-min TTL, dead after 3 wrong tries, sends
+    budgeted 3/hour/address behind the per-IP limit. Sudo re-auth
+    (`PATCH /sudo`) is the same code machinery (purpose `sudo`, two-step on
+    one endpoint), and a verify-minted key starts inside the sudo window — a
+    code round-trip is our strongest re-auth. This deliberately breaks
+    SimpleLogin wire-compat on the auth surface only (third-party SL apps
+    can't do an OTP round-trip anyway); everything behind the
+    `Authentication` header stays SL-shaped. The www homepage CTA submits its
+    email field to `/app/login?email=…`, which auto-requests the code — the
+    old "redirects into a create-user flow unconditionally" seam is gone.
 
 Open: none.

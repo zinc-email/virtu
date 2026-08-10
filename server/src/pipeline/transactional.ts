@@ -1,7 +1,7 @@
 /**
  * Transactional email (PLAN Lane C `transactional` VERP type) and the
- * verification codes built on it (account activation + mailbox verification,
- * SimpleLogin's AccountActivation / MailboxActivation flows).
+ * verification codes built on it: login codes (the passwordless login/signup
+ * flow), sudo re-auth codes, and mailbox verification.
  *
  * Sending mirrors SimpleLogin's `send_email`: a plain-text message from the
  * noreply address, DKIM-signed with our service key, enqueued with a unique
@@ -254,7 +254,7 @@ export const VERIFICATION_CODE_TTL_MS = 15 * 60 * 1000;
 /** Wrong attempts before the code dies (SimpleLogin MAX_ACTIVATION_TRIES). */
 export const MAX_VERIFICATION_ATTEMPTS = 3;
 
-export type VerificationPurpose = "account" | "mailbox";
+export type VerificationPurpose = "login" | "sudo" | "mailbox";
 
 /** 6 random digits, leading zeros kept (SimpleLogin's activation format). */
 export function generateVerificationCode(): string {
@@ -407,26 +407,58 @@ function codeScope(userId: number, purpose: VerificationPurpose, mailboxId?: num
 // Email templates (plain text only — MVP)
 // ---------------------------------------------------------------------------
 
-/** Ledger key for account-activation sends (register + reactivate share it). */
-export const ACCOUNT_ACTIVATION_ALERT_TYPE = "account_activation";
+/** Ledger key for login-code sends (every /auth/login submit shares it). */
+export const LOGIN_CODE_ALERT_TYPE = "login_code";
+
+/** Ledger key for sudo re-auth code sends. */
+export const SUDO_CODE_ALERT_TYPE = "sudo_code";
 
 /** Ledger key for one mailbox's verification sends. */
 export function mailboxVerificationAlertType(mailboxId: number): string {
   return `mailbox_verification_${mailboxId}`;
 }
 
-/** The account-activation email (SimpleLogin's code-activation template). */
-export function accountActivationEmail(code: string): { subject: string; textBody: string } {
+/**
+ * The login-code email — one template for login AND signup, since the flow
+ * can't (and shouldn't) reveal which one is happening. Copy carried over
+ * from legacy virtu (views/emails/auth.php), minus the magic link.
+ */
+export function loginCodeEmail(code: string): { subject: string; textBody: string } {
   return {
-    subject: "Just one more step to join Virtu",
+    subject: `Your login code: ${code}`,
     textBody: [
-      "Hi,",
+      "Hello!",
       "",
-      "Thank you for signing up for Virtu. Enter this activation code to confirm your account:",
+      "We received a sign-in request for your email address.",
+      "",
+      "To authenticate your account, enter this one-time access code:",
       "",
       code,
       "",
-      "The code expires in 15 minutes. If you did not create an account, you can safely ignore this email.",
+      "The code expires in 15 minutes.",
+      "",
+      "We sent this message because you (or someone) entered your email address",
+      "into our sign-in form. If you did not expect this email, you can safely",
+      "ignore it. Please do not mark it as spam.",
+    ].join("\n"),
+  };
+}
+
+/** The sudo re-auth email: confirm a sensitive action on a logged-in account. */
+export function sudoCodeEmail(code: string): { subject: string; textBody: string } {
+  return {
+    subject: `Your confirmation code: ${code}`,
+    textBody: [
+      "Hello!",
+      "",
+      "Someone logged in to your account asked to perform a sensitive action.",
+      "",
+      "To confirm it's you, enter this one-time confirmation code:",
+      "",
+      code,
+      "",
+      "The code expires in 15 minutes. If this wasn't you, log out of your",
+      "other sessions and revoke any devices you don't recognize.",
     ].join("\n"),
   };
 }

@@ -27,11 +27,23 @@ const BASE = "/app";
 /**
  * Render `Component` mounted at `path` (default "/register") with the app's
  * providers and a memory router under the /app basepath. `search` (e.g.
- * "?email=x") seeds the initial URL query. Returns the RTL utils plus router.
+ * "?email=x") seeds the initial URL query. `extraRoutes` registers additional
+ * real pages the flow navigates to (e.g. a detail page). Returns the RTL
+ * utils plus router.
  */
-export function renderPage(Component: FunctionComponent, path = "/register", search = "") {
+export function renderPage(
+  Component: FunctionComponent,
+  path = "/register",
+  search = "",
+  extraRoutes: { path: string; component: FunctionComponent }[] = [],
+) {
   const rootRoute = createRootRoute();
-  const routes = [createRoute({ getParentRoute: () => rootRoute, path, component: Component })];
+  const routes = [
+    createRoute({ getParentRoute: () => rootRoute, path, component: Component }),
+    ...extraRoutes.map((r) =>
+      createRoute({ getParentRoute: () => rootRoute, path: r.path, component: r.component }),
+    ),
+  ];
   if (path !== "/") {
     routes.push(
       createRoute({

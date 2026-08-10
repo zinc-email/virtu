@@ -9,6 +9,9 @@ const ConfigSchema = z.object({
   databaseUrl: z.string().default("postgres://virtu:virtu@localhost:5432/virtu"),
   apiHost: z.string().default("0.0.0.0"),
   apiPort: z.coerce.number().int().default(3000),
+  // Requests/minute per IP across the auth routes (register/activate/login).
+  // The dev compose raises it: the DOM test tier registers users freely.
+  authRateLimitMax: z.coerce.number().int().default(10),
 
   // ── Mail path (mx / submission / deliverd — PLAN Milestones 1-3) ─────────
   // The domain aliases + reverse aliases + VERP addresses live on.

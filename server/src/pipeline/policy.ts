@@ -13,8 +13,32 @@
 
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
-import { type Alias, aliases, type Mailbox, mailboxes, type User, users } from "../db/schema.ts";
+import {
+  type Alias,
+  aliases,
+  type CustomDomain,
+  customDomains,
+  deletedAliases,
+  type Mailbox,
+  mailboxes,
+  type User,
+  users,
+} from "../db/schema.ts";
 import { parseVerp, type VerpInfo } from "../mail/index.ts";
+
+/**
+ * Facts about a VERIFIED custom domain matching the address's domain, only
+ * gathered when no alias matched (the catch-all question).
+ */
+export interface CatchAllFacts {
+  domain: CustomDomain;
+  /** The domain owner's account. */
+  owner: User;
+  /** The owner's default mailbox — where a minted alias would deliver. */
+  mailbox: Mailbox | null;
+  /** The exact address was deleted before; tombstones are never re-minted. */
+  tombstoned: boolean;
+}
 
 /** Facts about one RCPT address, gathered by {@link evaluateRcpt}. */
 export interface RcptFacts {
@@ -25,6 +49,7 @@ export interface RcptFacts {
   alias: Alias | null;
   user: User | null;
   mailbox: Mailbox | null;
+  catchAll: CatchAllFacts | null;
 }
 
 /** What the mx should do with one RCPT address. */
@@ -33,6 +58,12 @@ export type RcptDecision =
   | { kind: "verp"; info: VerpInfo }
   /** Deliverable alias: accept; DATA runs the forward pipeline. */
   | { kind: "deliver" }
+  /**
+   * Catch-all: create the alias on the fly, then deliver. Internal to
+   * {@link evaluateRcpt} — it performs the mint and returns "deliver", so mx
+   * callers never see this kind.
+   */
+  | { kind: "mint" }
   /** Accept-and-drop (250, blocked log, no queue). */
   | { kind: "drop"; reason: "alias_disabled" | "mailbox_unavailable" }
   | { kind: "reject"; code: number; enhanced: string; message: string };
@@ -47,6 +78,22 @@ export function decideRcpt(facts: RcptFacts): RcptDecision {
   if (facts.verp !== null) return { kind: "verp", info: facts.verp };
 
   if (facts.alias === null) {
+    // Catch-all mint (SimpleLogin's on-the-fly creation): only when the
+    // domain opted in AND everything the minted alias needs is healthy.
+    // Every failed precondition falls through to the ordinary "user
+    // unknown" — the address genuinely doesn't exist, and a probe must not
+    // learn WHY (tombstone, disabled owner, broken mailbox).
+    const ca = facts.catchAll;
+    if (
+      ca !== null &&
+      ca.domain.catchAll &&
+      !ca.tombstoned &&
+      !ca.owner.disabled &&
+      ca.mailbox !== null &&
+      !ca.mailbox.disabled
+    ) {
+      return { kind: "mint" };
+    }
     if (!facts.isLocalDomain) {
       return { kind: "reject", code: 554, enhanced: "5.7.1", message: "Relay access denied" };
     }
@@ -105,6 +152,7 @@ export async function evaluateRcpt(
   let alias: Alias | null = null;
   let user: User | null = null;
   let mailbox: Mailbox | null = null;
+  let catchAll: CatchAllFacts | null = null;
 
   if (verp === null) {
     const rows = await db
@@ -119,14 +167,101 @@ export async function evaluateRcpt(
       user = rows[0].user;
       mailbox = rows[0].mailbox;
     }
+
+    // No alias: is this a VERIFIED custom domain of ours? (Also what makes
+    // an unknown localpart there "user unknown" instead of "relay denied".)
+    if (alias === null) {
+      const cdRows = await db
+        .select({ cd: customDomains, owner: users })
+        .from(customDomains)
+        .innerJoin(users, eq(customDomains.userId, users.id))
+        .where(and(eq(customDomains.domain, domain), eq(customDomains.verified, true)))
+        .limit(1);
+      if (cdRows[0] !== undefined) {
+        const { cd, owner } = cdRows[0];
+        const mb =
+          owner.defaultMailboxId === null
+            ? null
+            : ((
+                await db
+                  .select()
+                  .from(mailboxes)
+                  .where(eq(mailboxes.id, owner.defaultMailboxId))
+                  .limit(1)
+              )[0] ?? null);
+        const tombstoned =
+          (
+            await db
+              .select({ id: deletedAliases.id })
+              .from(deletedAliases)
+              .where(eq(deletedAliases.email, normalized))
+              .limit(1)
+          ).length > 0;
+        catchAll = { domain: cd, owner, mailbox: mb, tombstoned };
+      }
+    }
   }
 
-  // A domain is "ours" when it's the service domain or the domain of a known
-  // alias (covers verified custom domains without an extra lookup for MVP).
-  const isLocalDomain = domain === opts.mailDomain || alias !== null;
+  // A domain is "ours" when it's the service domain, the domain of a known
+  // alias, or a verified custom domain.
+  const isLocalDomain = domain === opts.mailDomain || alias !== null || catchAll !== null;
 
-  const facts: RcptFacts = { verp, isLocalDomain, alias, user, mailbox };
-  return { address: normalized, decision: decideRcpt(facts), facts };
+  const facts: RcptFacts = { verp, isLocalDomain, alias, user, mailbox, catchAll };
+  let decision = decideRcpt(facts);
+
+  // Perform the catch-all mint here so callers only ever see "deliver": the
+  // alias row must exist before DATA runs the forward pipeline anyway.
+  if (decision.kind === "mint" && catchAll !== null && catchAll.mailbox !== null) {
+    const minted = await mintCatchAllAlias(db, normalized, {
+      domain: catchAll.domain,
+      owner: catchAll.owner,
+      mailbox: catchAll.mailbox,
+    });
+    if (minted !== null) {
+      facts.alias = minted;
+      facts.user = catchAll.owner;
+      facts.mailbox = catchAll.mailbox;
+      decision = { kind: "deliver" };
+    } else {
+      // Lost every race AND the row vanished (concurrent delete): the
+      // address is tombstoned now — same answer a fresh evaluation gives.
+      decision = {
+        kind: "reject",
+        code: 550,
+        enhanced: "5.1.1",
+        message: "Recipient address rejected: User unknown",
+      };
+    }
+  }
+
+  return { address: normalized, decision, facts };
+}
+
+/**
+ * Insert the on-the-fly alias (SimpleLogin's automatic creation). Race-safe:
+ * concurrent RCPTs for the same fresh address collapse onto one row via the
+ * unique(email) constraint + re-select.
+ */
+async function mintCatchAllAlias(
+  db: Db,
+  email: string,
+  ca: { domain: CustomDomain; owner: User; mailbox: Mailbox },
+): Promise<Alias | null> {
+  const inserted = await db
+    .insert(aliases)
+    .values({
+      userId: ca.owner.id,
+      email,
+      mailboxId: ca.mailbox.id,
+      customDomainId: ca.domain.id,
+      note: `Created by the catch-all of ${ca.domain.domain}`,
+      automaticCreation: true,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (inserted[0] !== undefined) return inserted[0];
+  const existing = await db.select().from(aliases).where(eq(aliases.email, email)).limit(1);
+  return existing[0] ?? null;
 }
 
 /** How a submission sender address relates to the authed user. */

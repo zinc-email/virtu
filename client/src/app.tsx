@@ -21,6 +21,8 @@ import { getLogout } from "src/gen";
 import { AliasDetailPage } from "src/pages/AliasDetail";
 import { AliasesPage } from "src/pages/Aliases";
 import { BillingPage } from "src/pages/Billing";
+import { DomainDetailPage } from "src/pages/DomainDetail";
+import { DomainsPage } from "src/pages/Domains";
 import { LoginPage } from "src/pages/Login";
 import { RegisterPage } from "src/pages/Register";
 import { SettingsPage } from "src/pages/Settings";
@@ -106,7 +108,10 @@ function Shell() {
   // location.pathname includes the /app basepath; compare against app paths.
   const path = location.pathname.replace(/^\/app(?=\/|$)/, "") || "/";
   const isAuthPage = path === "/login" || path === "/register";
-  const isDetailPage = path.startsWith("/aliases/");
+  const isAliasDetail = path.startsWith("/aliases/");
+  const isDomainDetail = path.startsWith("/domains/");
+  // Detail pages swap the logo for the big back arrow.
+  const backTo = isAliasDetail ? "/" : isDomainDetail ? "/domains" : null;
   const authed = Boolean(getApiKey());
 
   const logout = async () => {
@@ -140,10 +145,10 @@ function Shell() {
         >
           <ul className={navList}>
             <li>
-              {isDetailPage ? (
+              {backTo !== null ? (
                 <Link
-                  to="/"
-                  aria-label="Back to your aliases"
+                  to={backTo}
+                  aria-label="Back"
                   className={css({
                     display: "block",
                     color: "primary",
@@ -161,8 +166,11 @@ function Shell() {
           </ul>
           {authed && !isAuthPage && (
             <ul className={navList}>
-              <NavItem to="/" active={path === "/" || isDetailPage}>
+              <NavItem to="/" active={path === "/" || isAliasDetail}>
                 Emails
+              </NavItem>
+              <NavItem to="/domains" active={path === "/domains" || isDomainDetail}>
+                Domains
               </NavItem>
               <NavItem to="/settings" active={path === "/settings"}>
                 Settings
@@ -237,6 +245,20 @@ const aliasDetailRoute = createRoute({
   component: AliasDetailPage,
 });
 
+const domainsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/domains",
+  beforeLoad: requireAuth,
+  component: DomainsPage,
+});
+
+const domainDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/domains/$domainId",
+  beforeLoad: requireAuth,
+  component: DomainDetailPage,
+});
+
 const billingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/billing",
@@ -270,6 +292,8 @@ export const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
     aliasDetailRoute,
+    domainsRoute,
+    domainDetailRoute,
     billingRoute,
     settingsRoute,
     loginRoute,

@@ -5,9 +5,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { Alias, Mailbox, User } from "../db/schema.ts";
+import type { Alias, CustomDomain, Mailbox, User } from "../db/schema.ts";
 import type { VerpInfo } from "../mail/index.ts";
-import { decideRcpt, type RcptFacts } from "./policy.ts";
+import { type CatchAllFacts, decideRcpt, type RcptFacts } from "./policy.ts";
 
 const NOW = new Date("2026-08-08T12:00:00Z");
 
@@ -68,6 +68,36 @@ function fakeMailbox(over: Partial<Mailbox> = {}): Mailbox {
   };
 }
 
+function fakeCustomDomain(over: Partial<CustomDomain> = {}): CustomDomain {
+  return {
+    id: 7,
+    userId: 1,
+    domain: "user.com",
+    name: null,
+    verified: true,
+    dkimVerified: false,
+    spfVerified: false,
+    dmarcVerified: false,
+    ownershipVerified: true,
+    ownershipTxtToken: "tok",
+    catchAll: true,
+    nbFailedChecks: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...over,
+  };
+}
+
+function fakeCatchAll(over: Partial<CatchAllFacts> = {}): CatchAllFacts {
+  return {
+    domain: fakeCustomDomain(),
+    owner: fakeUser(),
+    mailbox: fakeMailbox(),
+    tombstoned: false,
+    ...over,
+  };
+}
+
 function facts(over: Partial<RcptFacts> = {}): RcptFacts {
   return {
     verp: null,
@@ -75,6 +105,7 @@ function facts(over: Partial<RcptFacts> = {}): RcptFacts {
     alias: fakeAlias(),
     user: fakeUser(),
     mailbox: fakeMailbox(),
+    catchAll: null,
     ...over,
   };
 }
@@ -127,5 +158,64 @@ describe("decideRcpt", () => {
 
   test("healthy alias/user/mailbox: deliver", () => {
     expect(decideRcpt(facts())).toEqual({ kind: "deliver" });
+  });
+});
+
+describe("decideRcpt — catch-all", () => {
+  const noAlias = { alias: null, user: null, mailbox: null };
+
+  test("unknown localpart on a catch-all domain with a healthy owner: mint", () => {
+    const decision = decideRcpt(facts({ ...noAlias, catchAll: fakeCatchAll() }));
+    expect(decision).toEqual({ kind: "mint" });
+  });
+
+  test("catch-all off: plain user unknown (domain is still local)", () => {
+    const decision = decideRcpt(
+      facts({
+        ...noAlias,
+        catchAll: fakeCatchAll({ domain: fakeCustomDomain({ catchAll: false }) }),
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "reject", code: 550, enhanced: "5.1.1" });
+  });
+
+  test("tombstoned address never re-mints: user unknown, indistinguishable", () => {
+    const decision = decideRcpt(
+      facts({ ...noAlias, catchAll: fakeCatchAll({ tombstoned: true }) }),
+    );
+    expect(decision).toMatchObject({ kind: "reject", code: 550, enhanced: "5.1.1" });
+  });
+
+  test("disabled owner account: user unknown, not mint", () => {
+    const decision = decideRcpt(
+      facts({ ...noAlias, catchAll: fakeCatchAll({ owner: fakeUser({ disabled: true }) }) }),
+    );
+    expect(decision).toMatchObject({ kind: "reject", code: 550, enhanced: "5.1.1" });
+  });
+
+  test("no default mailbox: user unknown, not mint", () => {
+    const decision = decideRcpt(facts({ ...noAlias, catchAll: fakeCatchAll({ mailbox: null }) }));
+    expect(decision).toMatchObject({ kind: "reject", code: 550, enhanced: "5.1.1" });
+  });
+
+  test("disabled mailbox: user unknown, not mint", () => {
+    const decision = decideRcpt(
+      facts({
+        ...noAlias,
+        catchAll: fakeCatchAll({ mailbox: fakeMailbox({ disabled: true }) }),
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "reject", code: 550, enhanced: "5.1.1" });
+  });
+
+  test("VERP still wins over a mintable catch-all", () => {
+    const verp: VerpInfo = { type: "bounce_forward", id: 42 };
+    const decision = decideRcpt(facts({ ...noAlias, verp, catchAll: fakeCatchAll() }));
+    expect(decision).toEqual({ kind: "verp", info: verp });
+  });
+
+  test("an existing alias is untouched by catch-all facts", () => {
+    const decision = decideRcpt(facts({ catchAll: fakeCatchAll() }));
+    expect(decision).toEqual({ kind: "deliver" });
   });
 });

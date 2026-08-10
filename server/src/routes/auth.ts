@@ -18,6 +18,7 @@ import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { generateApiKey, hashApiKey } from "../auth/apiKey";
+import { config } from "../config";
 import { db } from "../db";
 import { apiKeys, mailboxes, users } from "../db/schema";
 import {
@@ -122,7 +123,7 @@ async function sendActivationCode(userId: number, email: string): Promise<void> 
 export async function withAuthRoutes(api: FastifyInstance) {
   await api.register(async (authCtx) => {
     await authCtx.register(rateLimit, {
-      max: 10,
+      max: config.authRateLimitMax,
       timeWindow: "1 minute",
       // Must return an Error (thrown into the shared envelope handler) — a
       // plain { error } object would serialize as a 500.

@@ -1,7 +1,7 @@
 # STATE — progress against PLAN.md
 
-Last updated: 2026-08-09 (client restyled to the legacy design on Panda CSS).
-Companion to
+Last updated: 2026-08-09 (custom domains: full UI, API-driven DNS
+verification story, catch-all minting in the mail pipeline). Companion to
 `PLAN.md` (the design doc); this file tracks what is built, how it was
 verified, and what remains.
 
@@ -19,11 +19,11 @@ and the entire production/deploy story, which has not been started.
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~385 tests / 27 files | `just test-unit` | green |
+| Unit | ~393 tests / 27 files | `just test-unit` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit | `just check` | green |
 | Integration (API vs real Postgres) | 106 tests / 7 files | `just up && just db push && just test-int` | green ×2 consecutive |
-| Client DOM (real React vs running stack) | 3 tests / 1 file | `just up && just db push && just test-client` | green |
-| Stories (simulated internet) | 13 stories / 9 files | `just test-net-up && just test-story` | green ×2 against dirty state |
+| Client DOM (real React vs running stack) | 5 tests / 2 files | `just up && just db push && just test-client` | green |
+| Stories (simulated internet) | 14 stories / 10 files | `just test-net-up && just test-story` | green ×2 against dirty state |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
 
 Story coverage: forward with `dkim=pass` at the receiving peer (M1), authed
@@ -32,7 +32,10 @@ at threshold (M3), DSN delivery + rate-limit suppression, custom-domain
 forward AND custom-domain DKIM (`dkim=pass header.d=user.com` at initech),
 transactional activation email delivered through our own queue, policy edges
 (nonexistent alias 550, disabled alias accept-and-drop, relay denied),
-network smoke (peers verify SPF/DKIM/DMARC independently of our server).
+network smoke (peers verify SPF/DKIM/DMARC independently of our server),
+and the custom-domain API lifecycle (create → publish the exact GET .../dns
+records via nsupdate → verify all five checks green → catch-all mints an
+alias through the real pipeline → tombstones stay dead).
 
 The live Stripe pass caught a real bug the self-signed tests missed
 (out-of-order `subscription.created` regressing status — fixed in `fdf36a2`
@@ -48,7 +51,7 @@ with a regression test encoding the observed sequence).
 | C — Rewrite core | ✅ done | VERP byte-compatible with SimpleLogin (CPython golden vector) + constant-time compare + real expiry; forward/reply whitelists; refuse-to-leak on replies |
 | D — Queue + deliverd | ✅ done* | SKIP LOCKED worker, backoff, RFC 3464 DSNs (null reverse path, rate-limited). *Gap: bounces OF transactional mail are log-only |
 | E — API (SimpleLogin-compat) | ~85% | 25+ spec paths incl. custom domains + billing extras. Deferred: MFA, forgot_password, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone |
-| F — Client | ~80% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login, register/activation, alias index (hero + one-click random alias), alias detail (new/used states + activities + contacts/delete), settings (native selects), billing (key/value + Stripe actions). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Missing: custom-domain UI, mailboxes page, notifications, search |
+| F — Client | ~80% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login, register/activation, alias index (hero + one-click random alias), alias detail (new/used states + activities + contacts/delete), settings (native selects), billing (key/value + Stripe actions), domains index + detail (DNS records to publish, verify with per-check errors, catch-all switch, delete). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Missing: mailboxes page, notifications, search |
 | G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Served at `/` behind the Caddy proxy; SPA under `/app`, API under `/api` — one origin, same topology dev and prod (dev proxy built; see below) |
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |
@@ -60,19 +63,17 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
 1. **Transactional bounce intake** — a bounced activation email only logs;
    the VERP id doesn't resolve to the verification_codes row. (Cross-branch
    timing artifact; small.)
-2. **Custom-domain catch-all / automatic alias creation** — `catch_all`
-   column exists, behavior not implemented.
-3. **Reverse aliases always mint on the service domain** — SimpleLogin's
+2. **Reverse aliases always mint on the service domain** — SimpleLogin's
    `use_as_reverse_alias` per-domain option not implemented.
-4. **Per-user disabled-alias behavior** — accept-and-drop is the only mode;
+3. **Per-user disabled-alias behavior** — accept-and-drop is the only mode;
    SimpleLogin's `block_behaviour` 550 option not wired.
-5. **No `Received:` header prepended at the mx** — minor RFC nicety.
-6. **Spam-check hook** — pluggable pre-queue slot deliberately unwired
+4. **No `Received:` header prepended at the mx** — minor RFC nicety.
+5. **Spam-check hook** — pluggable pre-queue slot deliberately unwired
    (PLAN decision #4). Candidates: spamd/SPAMC or rspamd.
-7. **API deferred endpoints** — list in Lane E row above; also GET-with-body
+6. **API deferred endpoints** — list in Lane E row above; also GET-with-body
    alias search, multi-window rate limits collapsed to single-window,
    150-word wordlist, mailbox email-change returns 400.
-8. **PGP** — fields accepted/serialized as unsupported (`support_pgp:false`).
+7. **PGP** — fields accepted/serialized as unsupported (`support_pgp:false`).
 
 ## Not started
 

@@ -78,7 +78,7 @@ describe("MailboxesPage — real transport against the running stack", () => {
     const rowOf = (email: string) => {
       const row = screen.getByText(email).closest("li");
       if (!row) throw new Error(`no row for ${email}`);
-      return within(row as HTMLElement);
+      return within(row);
     };
     await user.click(rowOf(mailboxEmail).getByRole("button", { name: "Use as trash" }));
     await screen.findByText(/Trash inbox\./, undefined, { timeout: 15_000 });

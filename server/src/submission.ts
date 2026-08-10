@@ -16,7 +16,9 @@
  *   contact is minted for (alias, recipient) so future replies thread, and
  *   the message goes out with From = the alias). To/Cc entries that are
  *   reverse aliases are translated; other entries pass through verbatim —
- *   except the user's own mailbox addresses, which refuse (never leak).
+ *   except the user's own mailbox addresses (including plus-tagged variants),
+ *   any OTHER reverse alias, and unknown local addresses, which refuse
+ *   (never leak, never emit an internal address outsiders can't reply to).
  * - MAIL FROM = one of the user's MAILBOXES ("reply mode", what a stock MUA
  *   does when replying): every recipient must be a reverse alias, and they
  *   must all belong to the same alias — the contact rows decide WHICH alias
@@ -31,7 +33,7 @@
 import { config } from "./config.ts";
 import { db } from "./db/index.ts";
 import type { Db } from "./db/index.ts";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   type Alias,
   aliases,
@@ -122,6 +124,7 @@ const MAILBOX_LEAK = rejectWith(
   "5.7.1",
   "To/Cc must not contain your own mailbox address (it would leak)",
 );
+const ALIAS_DISABLED = rejectWith(550, "5.7.1", "Alias is disabled");
 
 /** Load the authenticated user for a session, or null. */
 async function authedUser(db: Db, authUser: string | undefined): Promise<User | null> {
@@ -136,16 +139,33 @@ async function authedUser(db: Db, authUser: string | undefined): Promise<User | 
   return user;
 }
 
-/** True when the address's domain is one we host mail for. */
-async function isLocalDomain(db: Db, mailDomain: string, address: string): Promise<boolean> {
-  const domain = address.slice(address.lastIndexOf("@") + 1).toLowerCase();
-  if (domain === mailDomain) return true;
-  const rows = await db
-    .select({ id: customDomains.id })
-    .from(customDomains)
-    .where(and(eq(customDomains.domain, domain), eq(customDomains.verified, true)))
+/**
+ * The one local-address rule, shared by RCPT-time and DATA-time checks so the
+ * two can never diverge: on our domains an address must be an existing alias
+ * (alias→alias mail routes back through the mx) or covered by the domain's
+ * catch-all (the mx mints the alias on arrival); anything else is a
+ * typo/probe — refuse rather than bounce later. Returns true when the
+ * address is local AND undeliverable; non-local addresses never refuse here.
+ */
+async function refusesLocalAddress(db: Db, mailDomain: string, address: string): Promise<boolean> {
+  const normalized = address.trim().toLowerCase();
+  const domain = normalized.slice(normalized.lastIndexOf("@") + 1);
+  if (domain !== mailDomain) {
+    const domainRows = await db
+      .select({ catchAll: customDomains.catchAll })
+      .from(customDomains)
+      .where(and(eq(customDomains.domain, domain), eq(customDomains.verified, true)))
+      .limit(1);
+    const custom = domainRows[0];
+    if (custom === undefined) return false; // not a domain of ours
+    if (custom.catchAll) return false; // the mx mints on arrival
+  }
+  const aliasRows = await db
+    .select({ id: aliases.id })
+    .from(aliases)
+    .where(eq(aliases.email, normalized))
     .limit(1);
-  return rows[0] !== undefined;
+  return aliasRows[0] === undefined;
 }
 
 /** One resolved outbound recipient: the contact row that carries the metadata. */
@@ -156,16 +176,19 @@ interface OutboundTarget {
 }
 
 /**
- * Resolve the sending alias and the outbound targets for one submission.
- * Returns a rejection when anything violates the mode rules (all-or-nothing;
- * nothing is created for cold recipients until every recipient resolves).
+ * Resolve the sending alias, the mode, and the outbound targets for one
+ * submission. Returns a rejection when anything violates the mode rules
+ * (all-or-nothing; nothing is created for cold recipients until every
+ * recipient — and the alias itself — resolves cleanly).
  */
 async function resolveOutbound(
   opts: SubmissionOptions,
   user: User,
   mailFrom: string,
   rcptAddresses: string[],
-): Promise<{ alias: Alias; targets: OutboundTarget[] } | { reject: SmtpHookResult }> {
+): Promise<
+  { alias: Alias; targets: OutboundTarget[]; mode: "send" | "reply" } | { reject: SmtpHookResult }
+> {
   const log = opts.log ?? ((m: string) => console.log(m));
   const ownership = await senderOwnership(opts.db, user.id, mailFrom);
 
@@ -178,6 +201,11 @@ async function resolveOutbound(
     // the outbound alias. Every recipient must resolve, to the SAME alias.
     if (!ownership.mailbox.verified) {
       return { reject: rejectWith(550, "5.7.1", "Sending mailbox is not verified") };
+    }
+    if (ownership.mailbox.disabled) {
+      // A disabled mailbox is excluded from inbound delivery; it must not
+      // keep an outbound path either.
+      return { reject: rejectWith(550, "5.7.1", "Sending mailbox is disabled") };
     }
     const contacts: Contact[] = [];
     for (const rcpt of rcptAddresses) {
@@ -194,14 +222,21 @@ async function resolveOutbound(
     const aliasRows = await opts.db.select().from(aliases).where(eq(aliases.id, aliasId)).limit(1);
     const alias = aliasRows[0];
     if (alias === undefined || alias.userId !== user.id) return { reject: NOT_REVERSE_ALIAS };
-    return { alias, targets: contacts.map((contact) => ({ contact, kind: "reply" as const })) };
+    if (!alias.enabled) return { reject: ALIAS_DISABLED };
+    return {
+      alias,
+      targets: contacts.map((contact) => ({ contact, kind: "reply" as const })),
+      mode: "reply",
+    };
   }
 
   // Send mode (MAIL FROM = the alias): reverse aliases reply; anything else
   // is a cold email, contact minted so future replies thread. Two passes so
   // refusal is all-or-nothing — nothing is created until every recipient
-  // classifies cleanly.
+  // classifies cleanly (and the alias-disabled refusal fires before any
+  // contact row exists).
   const alias = ownership.alias;
+  if (!alias.enabled) return { reject: ALIAS_DISABLED };
   const scope = { userId: user.id, aliasId: alias.id };
   const plan: Array<{ kind: "reply"; contact: Contact } | { kind: "cold"; address: string }> = [];
   for (const rcpt of rcptAddresses) {
@@ -214,19 +249,9 @@ async function resolveOutbound(
       plan.push({ kind: "reply", contact: reverse });
       continue;
     }
-    // A local-domain address that is not a reverse alias must be an existing
-    // alias (alias→alias mail routes back through the mx); anything else on
-    // our domains is a typo/probe — refuse rather than bounce later.
-    if (await isLocalDomain(opts.db, opts.mailDomain, rcpt)) {
-      const aliasRows = await opts.db
-        .select({ id: aliases.id })
-        .from(aliases)
-        .where(eq(aliases.email, rcpt.trim().toLowerCase()))
-        .limit(1);
-      if (aliasRows[0] === undefined) {
-        log(`submission: refused rcpt ${rcpt} for ${alias.email}: unknown local address`);
-        return { reject: NOT_REVERSE_ALIAS };
-      }
+    if (await refusesLocalAddress(opts.db, opts.mailDomain, rcpt)) {
+      log(`submission: refused rcpt ${rcpt} for ${alias.email}: unknown local address`);
+      return { reject: NOT_REVERSE_ALIAS };
     }
     plan.push({ kind: "cold", address: rcpt });
   }
@@ -250,7 +275,7 @@ async function resolveOutbound(
     );
     targets.push({ contact, kind: "cold" });
   }
-  return { alias, targets };
+  return { alias, targets, mode: "send" };
 }
 
 /** Handle a completed authenticated submission. */
@@ -271,8 +296,7 @@ async function handleSubmissionData(
     envelope.rcptTo.map((r) => r.address),
   );
   if ("reject" in resolved) return resolved.reject;
-  const { alias, targets } = resolved;
-  if (!alias.enabled) return rejectWith(550, "5.7.1", "Alias is disabled");
+  const { alias, targets, mode } = resolved;
 
   const parsed = parseMessage(event.raw);
   const emailLogs = [];
@@ -289,7 +313,6 @@ async function handleSubmissionData(
   const primaryLog = emailLogs[0]!;
 
   const aliasDomain = alias.email.slice(alias.email.indexOf("@") + 1);
-  const sendMode = targets.some((t) => t.kind === "cold");
   const result = await rewriteReply(
     { headers: parsed.headers },
     {
@@ -305,16 +328,37 @@ async function handleSubmissionData(
       resolveOurMessageId: (originalId) => resolveOurMessageId(opts.db, user.id, originalId),
       messageIdDomain: aliasDomain,
       // Send mode keeps unknown To/Cc entries (they're the real cold
-      // recipients) — the mailbox-leak guard below still refuses.
-      allowExternalRecipients: sendMode,
-      isUserMailbox: async (addr) => {
-        const rows = await opts.db
-          .select({ id: mailboxes.id })
-          .from(mailboxes)
-          .where(and(eq(mailboxes.userId, user.id), eq(mailboxes.email, addr.trim().toLowerCase())))
-          .limit(1);
-        return rows[0] !== undefined;
-      },
+      // recipients) after screening: the user's own mailbox addresses
+      // (including plus-tagged variants) refuse — never leak; other users'
+      // or aliases' reverse aliases refuse — internal ra+ addresses must not
+      // go out verbatim (replies to them would hard-bounce); unknown local
+      // addresses refuse under the same rule as the envelope side.
+      externalRecipients:
+        mode !== "send"
+          ? undefined
+          : {
+              screen: async (addr) => {
+                const normalized = addr.trim().toLowerCase();
+                const candidates = [normalized];
+                const stripped = normalized.replace(/^([^@+]+)\+[^@]*(@.*)$/, "$1$2");
+                if (stripped !== normalized) candidates.push(stripped);
+                const rows = await opts.db
+                  .select({ id: mailboxes.id })
+                  .from(mailboxes)
+                  .where(and(eq(mailboxes.userId, user.id), inArray(mailboxes.email, candidates)))
+                  .limit(1);
+                if (rows[0] !== undefined) return "mailbox_address";
+                // Non-null here means SOME reverse alias — this alias's own
+                // were already translated by resolveReverseAlias above.
+                if ((await resolveReverseAlias(opts.db, normalized)) !== null) {
+                  return "non_reverse_alias";
+                }
+                if (await refusesLocalAddress(opts.db, opts.mailDomain, normalized)) {
+                  return "non_reverse_alias";
+                }
+                return null;
+              },
+            },
     },
   );
   if (!result.ok) {
@@ -408,19 +452,13 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
     onRcptTo: async (event) => {
       if (event.session.authUser === undefined) return AUTH_REQUIRED;
       // Early refusal only for what is wrong in EVERY mode: a local-domain
-      // address that is neither a reverse alias nor an alias. Mode rules
-      // (reply vs cold) need MAIL FROM context and run at DATA.
+      // address that is neither a reverse alias nor otherwise deliverable
+      // (same refusesLocalAddress rule as DATA, so the two never diverge).
+      // Mode rules (reply vs cold) need MAIL FROM context and run at DATA.
       const address = event.address.trim().toLowerCase();
       const contact = await resolveReverseAlias(opts.db, address);
       if (contact !== null) return { accept: true };
-      if (await isLocalDomain(opts.db, opts.mailDomain, address)) {
-        const aliasRows = await opts.db
-          .select({ id: aliases.id })
-          .from(aliases)
-          .where(eq(aliases.email, address))
-          .limit(1);
-        if (aliasRows[0] === undefined) return NOT_REVERSE_ALIAS;
-      }
+      if (await refusesLocalAddress(opts.db, opts.mailDomain, address)) return NOT_REVERSE_ALIAS;
       return { accept: true };
     },
     onData: (event) => handleSubmissionData(event, opts),

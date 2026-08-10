@@ -44,41 +44,47 @@ const timestamps = {
 // Accounts
 // ---------------------------------------------------------------------------
 
-export const users = pgTable("users", {
-  id: id(),
-  email: varchar({ length: 256 }).unique().notNull(),
-  name: varchar({ length: 128 }),
-  // Bun.password argon2id encoded string (includes salt + params).
-  passwordHash: text().notNull(),
-  // TODO(MVP): email verification is skipped — register activates immediately.
-  activated: boolean().default(false).notNull(),
-  // An account can be disabled for harmful behavior.
-  disabled: boolean().default(false).notNull(),
-  // Lifetime premium (no subscription needed).
-  lifetime: boolean().default(false).notNull(),
-  // User can use all premium features until this date.
-  trialEnd: timestamp({ withTimezone: true, mode: "date" }),
-  // The mailbox used when creating a new alias. Nullable only because of the
-  // users <-> mailboxes FK cycle; in practice always set after registration.
-  defaultMailboxId: integer().references((): AnyPgColumn => mailboxes.id),
-  // Stricter per-user spam threshold (null = server default).
-  maxSpamScore: integer(),
-  // Whether the user receives notification emails.
-  notification: boolean().default(true).notNull(),
-  // Settings (SimpleLogin GET/PATCH /setting) — values zod-validated at the
-  // route layer: alias_generator word|uuid, sender_format AT|A|NAME_ONLY|
-  // AT_ONLY|NO_NAME, random_alias_suffix word|random_string.
-  aliasGenerator: varchar({ length: 16 }).default("word").notNull(),
-  senderFormat: varchar({ length: 16 }).default("AT").notNull(),
-  randomAliasSuffix: varchar({ length: 16 }).default("random_string").notNull(),
-  defaultAliasDomain: varchar({ length: 128 }),
-  // Bitfield for misc account flags (SimpleLogin User.flags).
-  flags: bigint({ mode: "number" }).default(0).notNull(),
-  // The "trash inbox": mail for a disabled ("off") alias is forwarded here
-  // instead of being dropped. Null = accept-and-drop (the default).
-  trashMailboxId: integer().references((): AnyPgColumn => mailboxes.id, { onDelete: "set null" }),
-  ...timestamps,
-});
+export const users = pgTable(
+  "users",
+  {
+    id: id(),
+    email: varchar({ length: 256 }).unique().notNull(),
+    name: varchar({ length: 128 }),
+    // Bun.password argon2id encoded string (includes salt + params).
+    passwordHash: text().notNull(),
+    // TODO(MVP): email verification is skipped — register activates immediately.
+    activated: boolean().default(false).notNull(),
+    // An account can be disabled for harmful behavior.
+    disabled: boolean().default(false).notNull(),
+    // Lifetime premium (no subscription needed).
+    lifetime: boolean().default(false).notNull(),
+    // User can use all premium features until this date.
+    trialEnd: timestamp({ withTimezone: true, mode: "date" }),
+    // The mailbox used when creating a new alias. Nullable only because of the
+    // users <-> mailboxes FK cycle; in practice always set after registration.
+    defaultMailboxId: integer().references((): AnyPgColumn => mailboxes.id),
+    // Stricter per-user spam threshold (null = server default).
+    maxSpamScore: integer(),
+    // Whether the user receives notification emails.
+    notification: boolean().default(true).notNull(),
+    // Settings (SimpleLogin GET/PATCH /setting) — values zod-validated at the
+    // route layer: alias_generator word|uuid, sender_format AT|A|NAME_ONLY|
+    // AT_ONLY|NO_NAME, random_alias_suffix word|random_string.
+    aliasGenerator: varchar({ length: 16 }).default("word").notNull(),
+    senderFormat: varchar({ length: 16 }).default("AT").notNull(),
+    randomAliasSuffix: varchar({ length: 16 }).default("random_string").notNull(),
+    defaultAliasDomain: varchar({ length: 128 }),
+    // Bitfield for misc account flags (SimpleLogin User.flags).
+    flags: bigint({ mode: "number" }).default(0).notNull(),
+    // The "trash inbox": mail for a disabled ("off") alias is forwarded here
+    // instead of being dropped. Null = accept-and-drop (the default).
+    trashMailboxId: integer().references((): AnyPgColumn => mailboxes.id, { onDelete: "set null" }),
+    ...timestamps,
+    // Indexed so mailbox DELETEs (ON DELETE SET NULL back-reference) don't
+    // seq-scan users to enforce the FK.
+  },
+  (t) => [index("users_trash_mailbox_id_idx").on(t.trashMailboxId)],
+);
 
 // One-time codes for account activation and mailbox verification, sent via
 // transactional email (VERP type `transactional`).

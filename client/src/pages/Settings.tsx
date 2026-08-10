@@ -91,27 +91,33 @@ function SmtpCredentialsSection() {
       {create.isError && <Alert>{apiErrorMessage(create.error)}</Alert>}
       {revoke.isError && <Alert>{apiErrorMessage(revoke.error)}</Alert>}
 
-      {rows.length > 0 && (
-        <KeyValue>
-          {rows.map((c) => (
-            <KV key={c.id} k={c.name}>
-              <span className={css({ color: "textDim" })}>
-                {c.last_used_timestamp === null
-                  ? "Never used"
-                  : `Last used ${timeAgo(c.last_used_timestamp)}`}
-              </span>
-              <Button
-                size="tiny"
-                variant="cta"
-                disabled={revoke.isPending}
-                onClick={() => revoke.mutate({ credential_id: c.id })}
-                className={css({ marginLeft: "1rem" })}
-              >
-                Revoke
-              </Button>
-            </KV>
-          ))}
-        </KeyValue>
+      {credentials.isPending ? (
+        <p className={css({ textAlign: "center", padding: "2rem", color: "textDim" })}>Loading…</p>
+      ) : credentials.isError ? (
+        <Alert>{apiErrorMessage(credentials.error)}</Alert>
+      ) : (
+        rows.length > 0 && (
+          <KeyValue>
+            {rows.map((c) => (
+              <KV key={c.id} k={c.name}>
+                <span className={css({ color: "textDim" })}>
+                  {c.last_used_timestamp === null
+                    ? "Never used"
+                    : `Last used ${timeAgo(c.last_used_timestamp)}`}
+                </span>
+                <Button
+                  size="tiny"
+                  variant="cta"
+                  disabled={revoke.isPending}
+                  onClick={() => revoke.mutate({ credential_id: c.id })}
+                  className={css({ marginLeft: "1rem" })}
+                >
+                  Revoke
+                </Button>
+              </KV>
+            ))}
+          </KeyValue>
+        )
       )}
 
       <form

@@ -83,17 +83,18 @@ export interface ReplyContext {
   messageIdDomain?: string;
   /**
    * Cold-send mode (submission MAIL FROM = the alias): a To/Cc entry that is
-   * not a known reverse alias is kept verbatim — it's a real outside address
-   * the user typed — instead of refusing. The mailbox-leak invariant still
-   * holds: an entry matching one of the user's own mailbox addresses refuses
-   * with reason "mailbox_address" (outside recipients must never see it).
+   * not one of this alias's reverse aliases is screened instead of refused
+   * outright. `screen` returns a refusal reason to refuse the WHOLE message
+   * (all-or-nothing, never a partial rewrite), or null to keep the entry
+   * verbatim — it's a real outside address the user typed. The refuse-to-leak
+   * invariant lives in the implementation: it must return "mailbox_address"
+   * for the sending user's own mailbox addresses (outside recipients must
+   * never see them). Bundling the guard with the mode makes enabling
+   * cold-send without a leak guard a compile error.
    */
-  allowExternalRecipients?: boolean;
-  /**
-   * Leak guard for cold-send mode: true when addr is one of the sending
-   * user's mailbox addresses. Required when `allowExternalRecipients` is set.
-   */
-  isUserMailbox?(addr: string): Promise<boolean>;
+  externalRecipients?: {
+    screen(addr: string): Promise<"mailbox_address" | "non_reverse_alias" | null>;
+  };
   /** Clock override for tests (synthesized Date header). */
   now?: Date;
 }
@@ -175,11 +176,12 @@ export async function rewriteReply(
       const contact = await ctx.resolveReverseAlias(entry.address);
       if (contact === null) {
         const header = headerName === "To" ? ("to" as const) : ("cc" as const);
-        if (ctx.allowExternalRecipients === true) {
-          if ((await ctx.isUserMailbox?.(entry.address)) === true) {
+        if (ctx.externalRecipients !== undefined) {
+          const refuse = await ctx.externalRecipients.screen(entry.address);
+          if (refuse !== null) {
             return {
               ok: false,
-              refusal: { reason: "mailbox_address", header, address: entry.address },
+              refusal: { reason: refuse, header, address: entry.address },
             };
           }
           mapped.push(entry); // real outside address, kept verbatim (cold send)

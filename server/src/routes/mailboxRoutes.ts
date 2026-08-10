@@ -278,6 +278,12 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
         if (!mb.verified) {
           throw new HttpError(400, "Unverified mailbox cannot be used as trash mailbox");
         }
+        // decideRcpt only routes to a verified AND enabled trash mailbox;
+        // accepting a disabled one here would silently drop the very mail
+        // the user configured trash to collect.
+        if (mb.disabled) {
+          throw new HttpError(400, "Disabled mailbox cannot be used as trash mailbox");
+        }
         await db.update(users).set({ trashMailboxId: mb.id }).where(eq(users.id, req.user.id));
       } else if (req.body.trash === false && req.user.trashMailboxId === mb.id) {
         await db.update(users).set({ trashMailboxId: null }).where(eq(users.id, req.user.id));

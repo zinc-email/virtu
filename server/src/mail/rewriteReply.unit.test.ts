@@ -37,11 +37,12 @@ const BASIC =
   "\r\n" +
   "Sounds good.\r\n";
 
-describe("rewriteReply cold-send mode (allowExternalRecipients)", () => {
+describe("rewriteReply cold-send mode (externalRecipients)", () => {
   const coldCtx = (overrides: Partial<ReplyContext> = {}): ReplyContext =>
     baseCtx({
-      allowExternalRecipients: true,
-      isUserMailbox: async (addr) => addr.toLowerCase() === "wes@qmail.com",
+      externalRecipients: {
+        screen: async (addr) => (addr.toLowerCase() === "wes@qmail.com" ? "mailbox_address" : null),
+      },
       ...overrides,
     });
 

@@ -158,7 +158,11 @@ export async function sendAlertOnce(db: Db, input: AlertInput): Promise<boolean>
 
 /** Result of {@link recordTransactionalBounce}. */
 export interface TransactionalBounceResult {
-  /** The verification_codes row the VERP id referenced, when it resolved. */
+  /**
+   * The verification_codes row this bounce invalidated; null when the VERP
+   * id was unknown or the code was no longer live (already used, already
+   * invalidated by an earlier bounce copy) — in which case nothing happened.
+   */
   code: VerificationCode | null;
   /** True when a mailbox-verification bounce bumped nb_failed_checks. */
   mailboxFlagged: boolean;
@@ -172,6 +176,12 @@ export interface TransactionalBounceResult {
  * bounced mailbox-verification additionally bumps the mailbox's
  * nb_failed_checks. Either way the user gets a notification, de-duplicated
  * through sent_alerts like every other alert.
+ *
+ * Every side effect is gated on the guarded invalidation below actually
+ * claiming a still-live code: duplicate bounce copies (MTA retries,
+ * auto-responders re-mailing the VERP address) and late bounces of a code
+ * the user already consumed are no-ops — one bounce event is one strike,
+ * and a verified mailbox's health is never dinged retroactively.
  */
 export async function recordTransactionalBounce(
   db: Db,
@@ -179,44 +189,32 @@ export async function recordTransactionalBounce(
   now: Date = new Date(),
 ): Promise<TransactionalBounceResult> {
   if (refId <= 0) return { code: null, mailboxFlagged: false };
-  const rows = await db
-    .select()
-    .from(verificationCodes)
-    .where(eq(verificationCodes.id, refId))
-    .limit(1);
-  const code = rows[0];
+  const invalidated = await db
+    .update(verificationCodes)
+    .set({ usedAt: now })
+    .where(and(eq(verificationCodes.id, refId), isNull(verificationCodes.usedAt)))
+    .returning();
+  const code = invalidated[0];
   if (code === undefined) return { code: null, mailboxFlagged: false };
 
-  if (code.usedAt === null) {
-    await db
-      .update(verificationCodes)
-      .set({ usedAt: now })
-      .where(and(eq(verificationCodes.id, code.id), isNull(verificationCodes.usedAt)));
-  }
-
   if (code.mailboxId !== null) {
-    await db
+    const bumped = await db
       .update(mailboxes)
       .set({ nbFailedChecks: sql`${mailboxes.nbFailedChecks} + 1` })
-      .where(eq(mailboxes.id, code.mailboxId));
-    const mbRows = await db
-      .select()
-      .from(mailboxes)
       .where(eq(mailboxes.id, code.mailboxId))
-      .limit(1);
-    const mailbox = mbRows[0];
-    if (mailbox !== undefined) {
-      await sendAlertOnce(db, {
-        userId: code.userId,
-        toEmail: mailbox.email,
-        alertType: `transactional_bounce_mailbox_${mailbox.id}`,
-        title: `Verification email to ${mailbox.email} bounced`,
-        message:
-          `The verification email for your mailbox ${mailbox.email} could not be ` +
-          `delivered. Check the address and request a new code.`,
-        now,
-      });
-    }
+      .returning();
+    const mailbox = bumped[0];
+    if (mailbox === undefined) return { code, mailboxFlagged: false };
+    await sendAlertOnce(db, {
+      userId: code.userId,
+      toEmail: mailbox.email,
+      alertType: `transactional_bounce_mailbox_${mailbox.id}`,
+      title: `Verification email to ${mailbox.email} bounced`,
+      message:
+        `The verification email for your mailbox ${mailbox.email} could not be ` +
+        `delivered. Check the address and request a new code.`,
+      now,
+    });
     return { code, mailboxFlagged: true };
   }
 

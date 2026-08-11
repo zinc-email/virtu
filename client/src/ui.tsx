@@ -596,7 +596,8 @@ export function Tag({ tone = "neutral", children }: { tone?: TagTone; children: 
 }
 
 // Lays Tags out on an entity row's detail line (a span: the detail slot
-// renders inside one).
+// renders inside one). The margin is the title→tags gap: the detail slot's
+// own marginTop never applies (it's an inline span), so the space lives here.
 export function Tags({ children }: { children: ReactNode }) {
   return (
     <span
@@ -605,6 +606,7 @@ export function Tags({ children }: { children: ReactNode }) {
         flexWrap: "wrap",
         gap: "0.5rem",
         alignItems: "center",
+        marginTop: "0.5rem",
       })}
     >
       {children}

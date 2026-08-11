@@ -481,6 +481,8 @@ export const router = createRouter({
   // The SPA is served under /app behind the reverse proxy; must match
   // rsbuild's server.base / output.assetPrefix (rsbuild.config.ts).
   basepath: "/app",
+  // Going back to an index page lands where you left off, not at the top.
+  scrollRestoration: true,
   routeTree: rootRoute.addChildren([
     indexRoute,
     aliasDetailRoute,

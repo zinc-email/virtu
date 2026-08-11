@@ -101,6 +101,6 @@ describe("DomainsPage — real transport against the running stack", () => {
     // A fresh mount of the index lists it, unverified.
     renderPage(DomainsPage, "/domains", "", [DETAIL_ROUTE]);
     await screen.findByText(domainName);
-    expect(screen.getAllByText("Not verified.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Not verified").length).toBeGreaterThan(0);
   }, 60_000);
 });

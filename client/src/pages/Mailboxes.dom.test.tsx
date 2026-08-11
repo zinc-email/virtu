@@ -51,7 +51,7 @@ describe("MailboxesPage — real transport against the running stack", () => {
 
     // The registration mailbox renders, verified and default.
     await screen.findByText("Your mailboxes.");
-    await screen.findByText(/Default\./);
+    await screen.findByText("Default");
 
     // Add a second mailbox → the verify dialog opens with the code prompt.
     await user.type(screen.getByLabelText("Add a mailbox"), mailboxEmail);
@@ -70,7 +70,7 @@ describe("MailboxesPage — real transport against the running stack", () => {
     // Both mailboxes now read Verified (registration one + the new one).
     await waitFor(
       () => {
-        expect(screen.getAllByText(/Verified\./).length).toBe(2);
+        expect(screen.getAllByText("Verified").length).toBe(2);
       },
       { timeout: 15_000 },
     );
@@ -127,7 +127,7 @@ describe("MailboxesPage — real transport against the running stack", () => {
     // Close the dialog without verifying.
     await user.click(screen.getByRole("button", { name: "Close" }));
 
-    await screen.findByText(/Not verified\./);
+    await screen.findByText("Not verified");
     expect(screen.getByRole("button", { name: "Enter code" })).toBeTruthy();
   }, 60_000);
 });

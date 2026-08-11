@@ -20,15 +20,20 @@ import {
   Field,
   FieldRow,
   Section,
+  Tag,
+  Tags,
   ui,
 } from "src/ui";
 
-export function mailboxDetail(mb: Mailbox): string {
-  const parts = [mb.verified ? "Verified." : "Not verified."];
-  parts.push(mb.nb_alias === 1 ? "1 alias." : `${mb.nb_alias} aliases.`);
-  if (mb.default) parts.push("Default.");
-  if (mb.trash) parts.push("Trash inbox.");
-  return parts.join(" ");
+export function mailboxTags(mb: Mailbox) {
+  return (
+    <Tags>
+      {mb.verified ? <Tag tone="primary">Verified</Tag> : <Tag tone="accent">Not verified</Tag>}
+      <Tag>{mb.nb_alias === 1 ? "1 alias" : `${mb.nb_alias} aliases`}</Tag>
+      {mb.default && <Tag>Default</Tag>}
+      {mb.trash && <Tag>Trash inbox</Tag>}
+    </Tags>
+  );
 }
 
 export function MailboxesPage() {
@@ -138,7 +143,7 @@ export function MailboxesPage() {
                 to="/mailboxes/$mailboxId"
                 params={{ mailboxId: String(mb.id) }}
                 title={mb.email}
-                detail={mailboxDetail(mb)}
+                detail={mailboxTags(mb)}
                 // Below the desktop nav the controls hide — tap the row, the
                 // detail page has them.
                 hideMetaBelow="md"

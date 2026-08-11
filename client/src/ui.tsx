@@ -564,6 +564,54 @@ export function Switch({
   );
 }
 
+// ── Tags (state chips on entity rows) ────────────────────────────────────────
+// Read-only state markers: mono/uppercase like tiny buttons, but filled with
+// a translucent wash of their own text color — no border — so they can't be
+// mistaken for actions. Tones name roles: primary = healthy state, accent =
+// needs attention, neutral = informational.
+
+type TagTone = "primary" | "accent" | "neutral";
+
+const tagCss = css({
+  display: "inline-block",
+  fontFamily: "mono",
+  fontSize: "0.6rem",
+  lineHeight: "1em",
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  padding: "0.5em 0.9em 0.4em 0.9em",
+  borderRadius: "0.111rem",
+  backgroundColor: "color-mix(in srgb, currentColor 12%, transparent)",
+  whiteSpace: "nowrap",
+});
+
+const tagTone: Record<TagTone, string> = {
+  primary: css({ color: "primary" }),
+  accent: css({ color: "accent" }),
+  neutral: css({ color: "label" }),
+};
+
+export function Tag({ tone = "neutral", children }: { tone?: TagTone; children: ReactNode }) {
+  return <span className={cx(tagCss, tagTone[tone])}>{children}</span>;
+}
+
+// Lays Tags out on an entity row's detail line (a span: the detail slot
+// renders inside one).
+export function Tags({ children }: { children: ReactNode }) {
+  return (
+    <span
+      className={css({
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "0.5rem",
+        alignItems: "center",
+      })}
+    >
+      {children}
+    </span>
+  );
+}
+
 // ── Copy button ──────────────────────────────────────────────────────────────
 
 export function CopyButton({

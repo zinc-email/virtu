@@ -17,6 +17,8 @@ import {
   Field,
   FieldRow,
   Section,
+  Tag,
+  Tags,
   ui,
 } from "src/ui";
 
@@ -108,7 +110,15 @@ export function DomainsPage() {
                 to="/domains/$domainId"
                 params={{ domainId: String(d.id) }}
                 title={d.domain_name}
-                detail={d.is_verified ? "Verified." : "Not verified."}
+                detail={
+                  <Tags>
+                    {d.is_verified ? (
+                      <Tag tone="primary">Verified</Tag>
+                    ) : (
+                      <Tag tone="accent">Not verified</Tag>
+                    )}
+                  </Tags>
+                }
               />
             ))}
           </EntityList>

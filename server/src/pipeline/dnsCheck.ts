@@ -26,7 +26,8 @@ import { randomBytes } from "node:crypto";
 import { promises as dnsPromises } from "node:dns";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
-import { type CustomDomain, customDomains } from "../db/schema.ts";
+import { isUniqueViolation } from "../db/pgError.ts";
+import { type Domain, domains } from "../db/schema.ts";
 import { CUSTOM_DOMAIN_DKIM_SELECTOR, loadDkimKeyRow } from "./dkim.ts";
 import { resolveTxt } from "./dnsTxt.ts";
 
@@ -280,8 +281,8 @@ export interface DomainVerification {
   spf: CheckResult;
   dkim: CheckResult;
   dmarc: CheckResult;
-  /** The custom_domains row after flag updates. */
-  domain: CustomDomain;
+  /** The domains row after flag updates. */
+  domain: Domain;
 }
 
 /** Generate the ownership token (30 hex chars, SL uses random_string(30)). */
@@ -290,15 +291,20 @@ export function newOwnershipToken(): string {
 }
 
 /**
- * Run every DNS check for a custom domain against real DNS and persist the
- * outcome on the row. Flag semantics mirror SimpleLogin: `ownership_verified`
- * and `verified` (MX) only ever UPGRADE here (their SL checks never reset a
- * previously-verified domain); spf/dkim/dmarc reflect the latest check both
- * ways. Generates and stores the ownership token on first use.
+ * Run every DNS check for a domain against real DNS and persist the outcome on
+ * the row. `verified_owner` and `verified_mx` only ever UPGRADE here (an
+ * interactive re-check never demotes a live domain — that's the cron's job,
+ * behind nb_failed_checks); spf/dkim/dmarc reflect the latest check both ways.
+ *
+ * Winner-take-all: flipping `verified_owner` true recomputes the generated
+ * `name` column, which is UNIQUE. If another account already owns this name,
+ * that update violates the constraint — we catch it, persist the other checks
+ * WITHOUT ownership (so this row's `name` stays NULL), and report ownership as
+ * failed. First to prove control of DNS wins; a squatter can never take it.
  */
 export async function verifyCustomDomain(
   db: Db,
-  domainRow: CustomDomain,
+  domainRow: Domain,
   opts: DnsExpectations & { resolvers?: DnsCheckResolvers },
 ): Promise<DomainVerification> {
   const r = opts.resolvers ?? defaultResolvers();
@@ -306,35 +312,49 @@ export async function verifyCustomDomain(
   let token = domainRow.ownershipTxtToken;
   if (token === null || token === "") {
     token = newOwnershipToken();
-    await db
-      .update(customDomains)
-      .set({ ownershipTxtToken: token })
-      .where(eq(customDomains.id, domainRow.id));
+    await db.update(domains).set({ ownershipTxtToken: token }).where(eq(domains.id, domainRow.id));
   }
 
-  const keyRow = await loadDkimKeyRow(db, domainRow.domain, CUSTOM_DOMAIN_DKIM_SELECTOR);
+  const keyRow = await loadDkimKeyRow(db, domainRow.nameRequested, CUSTOM_DOMAIN_DKIM_SELECTOR);
 
   const [ownership, mx, spf, dkim, dmarc] = await Promise.all([
-    checkOwnership(domainRow.domain, [`${OWNERSHIP_PREFIX}=${token}`], r),
-    checkMx(domainRow.domain, expectedMxExchanges(opts.mailDomain), r),
-    checkSpf(domainRow.domain, allowedSpfIncludes(opts.mailDomain), r),
+    checkOwnership(domainRow.nameRequested, [`${OWNERSHIP_PREFIX}=${token}`], r),
+    checkMx(domainRow.nameRequested, expectedMxExchanges(opts.mailDomain), r),
+    checkSpf(domainRow.nameRequested, allowedSpfIncludes(opts.mailDomain), r),
     keyRow === null
       ? Promise.resolve<CheckResult>({ ok: false, errors: ["no signing key for this domain"] })
-      : checkDkim(domainRow.domain, keyRow.selector, keyRow.publicKeyBase64, r),
-    checkDmarc(domainRow.domain, r),
+      : checkDkim(domainRow.nameRequested, keyRow.selector, keyRow.publicKeyBase64, r),
+    checkDmarc(domainRow.nameRequested, r),
   ]);
 
-  const updated = await db
-    .update(customDomains)
-    .set({
-      ownershipVerified: domainRow.ownershipVerified || ownership.ok,
-      verified: domainRow.verified || mx.ok,
-      spfVerified: spf.ok,
-      dkimVerified: dkim.ok,
-      dmarcVerified: dmarc.ok,
-    })
-    .where(eq(customDomains.id, domainRow.id))
-    .returning();
+  // The non-ownership flags always persist; ownership is the one that can lose
+  // the winner-take-all race.
+  const otherFlags = {
+    verifiedMx: domainRow.verifiedMx || mx.ok,
+    verifiedSpf: spf.ok,
+    verifiedDkim: dkim.ok,
+    verifiedDmarc: dmarc.ok,
+  };
+  const wantOwner = domainRow.verifiedOwner || ownership.ok;
 
-  return { ownership, mx, spf, dkim, dmarc, domain: updated[0]! };
+  let ownershipResult = ownership;
+  let updated: Domain[];
+  try {
+    updated = await db
+      .update(domains)
+      .set({ ...otherFlags, verifiedOwner: wantOwner })
+      .where(eq(domains.id, domainRow.id))
+      .returning();
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    // Someone else already owns this name: keep this row unowned (name = NULL).
+    updated = await db
+      .update(domains)
+      .set(otherFlags)
+      .where(eq(domains.id, domainRow.id))
+      .returning();
+    ownershipResult = { ok: false, errors: ["this domain is already verified by another account"] };
+  }
+
+  return { ownership: ownershipResult, mx, spf, dkim, dmarc, domain: updated[0]! };
 }

@@ -8,6 +8,7 @@
 //
 // Migrations are push-based: `just db push` (drizzle-kit push).
 
+import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   bigint,
@@ -178,30 +179,58 @@ export const mailboxes = pgTable(
   (t) => [uniqueIndex("mailboxes_user_id_email_uq").on(t.userId, t.email)],
 );
 
-export const customDomains = pgTable(
-  "custom_domains",
+// Custom domains. Winner-take-all ownership WITHOUT blocking provisional
+// claims: `nameRequested` is the FQDN the user claimed (always set, not
+// globally unique — many users may hold a provisional claim on the same name),
+// while `name` is a GENERATED column that mirrors nameRequested ONLY once the
+// per-row ownership TXT token verifies (`verifiedOwner`). The unique index on
+// `name` (NULLs distinct) is the winner-take-all lock: exactly one account can
+// own a given FQDN, and it's the one that proved control of DNS — unraceable,
+// because the token is per-row. Every routing lookup keys on `name`, so a
+// provisional claim (name = NULL) can never be selected. `name` is DB-derived
+// and un-writable by app code; the app only ever writes the base flags.
+//
+// Capabilities are NOT columns — see pipeline/domainCapability.ts
+// (canReceive = owner+mx, canSend = owner+dkim+spf). The DNS re-check writes
+// only the base verified_* flags (debounced by nbFailedChecks); name and the
+// capabilities derive from them.
+export const domains = pgTable(
+  "domains",
   {
     id: id(),
     userId: integer()
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
-    domain: varchar({ length: 128 }).unique().notNull(),
+    // The claimed FQDN (source of truth); always present, even while unowned.
+    nameRequested: varchar({ length: 128 }).notNull(),
+    // The owned/live FQDN: nameRequested once ownership verifies, else NULL.
+    // Generated + unique => the winner-take-all lock; routing keys on this.
+    name: varchar({ length: 128 }).generatedAlwaysAs(
+      sql`case when verified_owner then name_requested end`,
+    ),
     // Default display name when the user replies/sends from an alias.
-    name: varchar({ length: 128 }),
-    // MX record points at us.
-    verified: boolean().default(false).notNull(),
-    dkimVerified: boolean().default(false).notNull(),
-    spfVerified: boolean().default(false).notNull(),
-    dmarcVerified: boolean().default(false).notNull(),
-    ownershipVerified: boolean().default(false).notNull(),
-    // Random TXT value proving domain ownership.
+    fromName: varchar({ length: 128 }),
+    // Base verification facts — the ONLY columns the DNS checker writes.
+    verifiedOwner: boolean().default(false).notNull(), // ownership TXT token present
+    verifiedMx: boolean().default(false).notNull(), // MX points at us
+    verifiedDkim: boolean().default(false).notNull(),
+    verifiedSpf: boolean().default(false).notNull(),
+    verifiedDmarc: boolean().default(false).notNull(),
+    // Random TXT value proving domain ownership (per-row → unraceable).
     ownershipTxtToken: varchar({ length: 128 }),
     // Auto-create an alias the first time it receives an email.
     catchAll: boolean().default(false).notNull(),
     nbFailedChecks: integer().default(0).notNull(),
     ...timestamps,
   },
-  (t) => [index("custom_domains_user_id_idx").on(t.userId)],
+  (t) => [
+    index("domains_user_id_idx").on(t.userId),
+    // One provisional claim per user per name.
+    uniqueIndex("domains_user_id_name_requested_uq").on(t.userId, t.nameRequested),
+    // Winner-take-all: at most one owner per FQDN (NULLs distinct, so any
+    // number of provisional claims coexist).
+    uniqueIndex("domains_name_uq").on(t.name),
+  ],
 );
 
 export const aliases = pgTable(
@@ -219,7 +248,7 @@ export const aliases = pgTable(
     mailboxId: integer()
       .references(() => mailboxes.id)
       .notNull(),
-    customDomainId: integer().references(() => customDomains.id, { onDelete: "cascade" }),
+    domainId: integer().references(() => domains.id, { onDelete: "cascade" }),
     // Bypass the bounce auto-disable mechanism (PLAN Lane C).
     cannotBeDisabled: boolean().default(false).notNull(),
     // Created "on the fly" via the custom-domain catch-all.
@@ -231,7 +260,7 @@ export const aliases = pgTable(
   (t) => [
     index("aliases_user_id_idx").on(t.userId),
     index("aliases_mailbox_id_idx").on(t.mailboxId),
-    index("aliases_custom_domain_id_idx").on(t.customDomainId),
+    index("aliases_domain_id_idx").on(t.domainId),
   ],
 );
 
@@ -496,7 +525,7 @@ export type Contact = typeof contacts.$inferSelect;
 export type AliasUsedOn = typeof aliasUsedOn.$inferSelect;
 export type AliasMailbox = typeof aliasMailboxes.$inferSelect;
 export type VerificationCode = typeof verificationCodes.$inferSelect;
-export type CustomDomain = typeof customDomains.$inferSelect;
+export type Domain = typeof domains.$inferSelect;
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type OutboundMessage = typeof outboundMessages.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;

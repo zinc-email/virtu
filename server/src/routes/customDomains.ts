@@ -22,12 +22,13 @@ import { z } from "zod";
 import { isPremium } from "../billing/premium";
 import { config } from "../config";
 import { db } from "../db";
+import { isUniqueViolation } from "../db/pgError";
 import {
   aliases,
-  type CustomDomain,
-  customDomains,
   deletedAliases,
   dkimKeys,
+  type Domain,
+  domains,
   mailboxes,
   type User,
 } from "../db/schema";
@@ -37,6 +38,7 @@ import {
   ensureDkimKeyRow,
   loadDkimKeyRow,
 } from "../pipeline/dkim";
+import { canReceive, canSend } from "../pipeline/domainCapability";
 import { expectedDnsRecords, newOwnershipToken, verifyCustomDomain } from "../pipeline/dnsCheck";
 import { ALIAS_DOMAINS } from "./aliasConfig";
 import { formatCreationDate, timestampOf } from "./aliasText";
@@ -44,17 +46,6 @@ import { HttpError } from "./httpError";
 import { DeletedResponse, ErrorResponse, MailboxLite } from "./schema";
 
 const DomainIdParams = z.object({ custom_domain_id: z.coerce.number().int() });
-
-/** Unique-violation detection across the driver's wrapping (err.cause chain). */
-function isUniqueViolation(err: unknown): boolean {
-  for (let e = err, depth = 0; typeof e === "object" && e !== null && depth < 4; depth++) {
-    const rec = e as { code?: unknown; errno?: unknown; message?: unknown; cause?: unknown };
-    if (rec.code === "23505" || rec.errno === "23505") return true;
-    if (typeof rec.message === "string" && rec.message.includes("duplicate key")) return true;
-    e = rec.cause;
-  }
-  return false;
-}
 
 /** RFC 1035-ish shape check; length-capped, lowercase, at least one dot. */
 const DOMAIN_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -79,6 +70,11 @@ const CustomDomainDto = z
     spf_verified: z.boolean(),
     dkim_verified: z.boolean(),
     dmarc_verified: z.boolean(),
+    // Computed capabilities (Virtu extension): can_receive = owner+mx,
+    // can_send = owner+dkim+spf. Derived from the flags above by the same
+    // pipeline/domainCapability predicates the mail path uses.
+    can_receive: z.boolean(),
+    can_send: z.boolean(),
   })
   .meta({ id: "CustomDomain" });
 
@@ -144,11 +140,11 @@ const VerifyCustomDomainResponse = z
 export async function withCustomDomainRoutes(authed: FastifyInstance) {
   const a = authed.withTypeProvider<FastifyZodOpenApiTypeProvider>();
 
-  async function domainToDict(cd: CustomDomain, user: User) {
+  async function domainToDict(cd: Domain, user: User) {
     const [aliasCount] = await db
       .select({ n: count() })
       .from(aliases)
-      .where(eq(aliases.customDomainId, cd.id));
+      .where(eq(aliases.domainId, cd.id));
     // SL CustomDomain.mailboxes falls back to the default mailbox when no
     // per-domain mailboxes are set; we don't model per-domain mailboxes.
     const mbs =
@@ -160,30 +156,31 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
             .where(eq(mailboxes.id, user.defaultMailboxId));
     return {
       id: cd.id,
-      domain_name: cd.domain,
-      name: cd.name,
-      is_verified: cd.verified,
+      // SL wire keeps `domain_name`; it's the claimed FQDN (shown even while
+      // unowned/provisional, so name_requested — not the NULL-until-owned name).
+      domain_name: cd.nameRequested,
+      name: cd.fromName,
+      // "Verified/usable" now means can-receive (owner + MX).
+      is_verified: canReceive(cd),
       nb_alias: aliasCount?.n ?? 0,
       creation_date: formatCreationDate(cd.createdAt),
       creation_timestamp: timestampOf(cd.createdAt),
       catch_all: cd.catchAll,
       random_prefix_generation: false,
       mailboxes: mbs,
-      ownership_verified: cd.ownershipVerified,
-      mx_verified: cd.verified,
-      spf_verified: cd.spfVerified,
-      dkim_verified: cd.dkimVerified,
-      dmarc_verified: cd.dmarcVerified,
+      ownership_verified: cd.verifiedOwner,
+      mx_verified: cd.verifiedMx,
+      spf_verified: cd.verifiedSpf,
+      dkim_verified: cd.verifiedDkim,
+      dmarc_verified: cd.verifiedDmarc,
+      can_receive: canReceive(cd),
+      can_send: canSend(cd),
     };
   }
 
   /** Load a domain row and enforce ownership (403 like the mailbox routes). */
-  async function ownedDomain(userId: number, domainId: number): Promise<CustomDomain> {
-    const rows = await db
-      .select()
-      .from(customDomains)
-      .where(eq(customDomains.id, domainId))
-      .limit(1);
+  async function ownedDomain(userId: number, domainId: number): Promise<Domain> {
+    const rows = await db.select().from(domains).where(eq(domains.id, domainId)).limit(1);
     const cd = rows[0];
     if (!cd || cd.userId !== userId) throw new HttpError(403, "Forbidden");
     return cd;
@@ -201,9 +198,9 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
     handler: async (req) => {
       const rows = await db
         .select()
-        .from(customDomains)
-        .where(eq(customDomains.userId, req.user.id))
-        .orderBy(customDomains.id);
+        .from(domains)
+        .where(eq(domains.userId, req.user.id))
+        .orderBy(domains.id);
       const out = [];
       for (const cd of rows) out.push(await domainToDict(cd, req.user));
       return { custom_domains: out };
@@ -244,22 +241,26 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
         throw new HttpError(400, "Invalid domain");
       }
 
-      let cd: CustomDomain | undefined;
+      // A provisional claim: NOT globally unique (many users may claim the same
+      // name), only unique per user. The winner-take-all lock lives on `name`
+      // and fires at verify time, not here — so squatting a name doesn't block
+      // the real owner, who wins by proving ownership.
+      let cd: Domain | undefined;
       try {
         const inserted = await db
-          .insert(customDomains)
+          .insert(domains)
           .values({
             userId: req.user.id,
-            domain,
+            nameRequested: domain,
             ownershipTxtToken: newOwnershipToken(),
           })
           .returning();
         cd = inserted[0];
       } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(400, `${domain} already used`);
+        if (isUniqueViolation(err)) throw new HttpError(400, `${domain} already added`);
         throw err;
       }
-      if (!cd) throw new Error("custom domain insert returned no row");
+      if (!cd) throw new Error("domain insert returned no row");
 
       // The domain signs its own mail: mint its key pair now so the DKIM
       // TXT value is available immediately.
@@ -294,22 +295,19 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
       let token = cd.ownershipTxtToken;
       if (token === null || token === "") {
         token = newOwnershipToken();
-        await db
-          .update(customDomains)
-          .set({ ownershipTxtToken: token })
-          .where(eq(customDomains.id, cd.id));
+        await db.update(domains).set({ ownershipTxtToken: token }).where(eq(domains.id, cd.id));
       }
 
-      const keyRow = await loadDkimKeyRow(db, cd.domain, CUSTOM_DOMAIN_DKIM_SELECTOR);
+      const keyRow = await loadDkimKeyRow(db, cd.nameRequested, CUSTOM_DOMAIN_DKIM_SELECTOR);
       const records = expectedDnsRecords(
-        cd.domain,
+        cd.nameRequested,
         token,
         keyRow === null
           ? null
           : { selector: keyRow.selector, publicKeyBase64: keyRow.publicKeyBase64 },
         { mailDomain: config.mailDomain },
       );
-      return { domain_name: cd.domain, records };
+      return { domain_name: cd.nameRequested, records };
     },
   });
 
@@ -375,19 +373,13 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
         throw new HttpError(400, "mailbox_ids is not supported yet");
       }
 
-      const patch: Partial<typeof customDomains.$inferInsert> = {};
+      const patch: Partial<typeof domains.$inferInsert> = {};
       if (req.body.catch_all !== undefined) patch.catchAll = req.body.catch_all;
-      if (req.body.name !== undefined) patch.name = req.body.name;
+      if (req.body.name !== undefined) patch.fromName = req.body.name;
       const updated =
         Object.keys(patch).length === 0
           ? cd
-          : (
-              await db
-                .update(customDomains)
-                .set(patch)
-                .where(eq(customDomains.id, cd.id))
-                .returning()
-            )[0]!;
+          : (await db.update(domains).set(patch).where(eq(domains.id, cd.id)).returning())[0]!;
 
       return { custom_domain: await domainToDict(updated, req.user) };
     },
@@ -419,7 +411,7 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
         const doomed = await tx
           .select({ id: aliases.id, email: aliases.email })
           .from(aliases)
-          .where(eq(aliases.customDomainId, cd.id));
+          .where(eq(aliases.domainId, cd.id));
         if (doomed.length > 0) {
           await tx
             .insert(deletedAliases)
@@ -432,15 +424,18 @@ export async function withCustomDomainRoutes(authed: FastifyInstance) {
             )
             .onConflictDoNothing();
         }
-        // The aliases.customDomainId FK cascades, but delete explicitly so
+        // The aliases.domainId FK cascades, but delete explicitly so
         // the tombstone/delete pair stays atomic and visible.
-        await tx.delete(aliases).where(eq(aliases.customDomainId, cd.id));
+        await tx.delete(aliases).where(eq(aliases.domainId, cd.id));
         await tx
           .delete(dkimKeys)
           .where(
-            and(eq(dkimKeys.domain, cd.domain), eq(dkimKeys.selector, CUSTOM_DOMAIN_DKIM_SELECTOR)),
+            and(
+              eq(dkimKeys.domain, cd.nameRequested),
+              eq(dkimKeys.selector, CUSTOM_DOMAIN_DKIM_SELECTOR),
+            ),
           );
-        await tx.delete(customDomains).where(eq(customDomains.id, cd.id));
+        await tx.delete(domains).where(eq(domains.id, cd.id));
       });
       // This process's key cache only (the mail processes' TTL covers them).
       clearDkimKeyCache();

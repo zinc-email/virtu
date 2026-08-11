@@ -7,7 +7,7 @@ import { hashApiKey } from "../auth/apiKey";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { db } from "../db";
-import { apiKeys, customDomains, emailLogs, users } from "../db/schema";
+import { apiKeys, domains, emailLogs, users } from "../db/schema";
 import { createAlias, latestEmailedCode, registerAndLogin } from "./intHarness";
 
 let app: App;
@@ -136,7 +136,7 @@ describe("GET+PATCH /api/setting", () => {
 
     // Unverified custom domain: rejected.
     const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
-    await db.insert(customDomains).values({ userId: userRow.id, domain: unverified });
+    await db.insert(domains).values({ userId: userRow.id, nameRequested: unverified });
     const rejected = await app.inject({
       method: "PATCH",
       url: "/api/setting",
@@ -150,7 +150,12 @@ describe("GET+PATCH /api/setting", () => {
     const other = await registerAndLogin(app);
     const otherRow = (await db.select().from(users).where(eq(users.email, other.email)))[0]!;
     const foreign = `f${crypto.randomUUID().slice(0, 8)}.example.com`;
-    await db.insert(customDomains).values({ userId: otherRow.id, domain: foreign, verified: true });
+    await db.insert(domains).values({
+      userId: otherRow.id,
+      nameRequested: foreign,
+      verifiedOwner: true,
+      verifiedMx: true,
+    });
     const stolen = await app.inject({
       method: "PATCH",
       url: "/api/setting",
@@ -162,7 +167,9 @@ describe("GET+PATCH /api/setting", () => {
 
     // The user's own verified custom domain: accepted and round-trips.
     const mine = `m${crypto.randomUUID().slice(0, 8)}.example.com`;
-    await db.insert(customDomains).values({ userId: userRow.id, domain: mine, verified: true });
+    await db
+      .insert(domains)
+      .values({ userId: userRow.id, nameRequested: mine, verifiedOwner: true, verifiedMx: true });
     const accepted = await app.inject({
       method: "PATCH",
       url: "/api/setting",
@@ -213,9 +220,9 @@ describe("GET /api/v2/setting/domains", () => {
     const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
     const verified = `v${crypto.randomUUID().slice(0, 8)}.example.com`;
     const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
-    await db.insert(customDomains).values([
-      { userId: userRow.id, domain: verified, verified: true },
-      { userId: userRow.id, domain: unverified },
+    await db.insert(domains).values([
+      { userId: userRow.id, nameRequested: verified, verifiedOwner: true, verifiedMx: true },
+      { userId: userRow.id, nameRequested: unverified },
     ]);
 
     const res = await app.inject({

@@ -207,7 +207,7 @@ describe("story: custom-domain API flow", () => {
     const minted = mintedRows[0];
     expect(minted).toBeDefined();
     expect(minted!.automaticCreation).toBe(true);
-    expect(minted!.customDomainId).toBe(domainId);
+    expect(minted!.domainId).toBe(domainId);
     expect(minted!.note).toContain("catch-all");
 
     // ── Catch-all back OFF: fresh localparts are refused again ──────────

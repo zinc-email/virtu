@@ -39,8 +39,8 @@ import {
   type Alias,
   aliases,
   type Contact,
-  customDomains,
   deletedAliases,
+  domains,
   mailboxes,
   smtpCredentials,
   type User,
@@ -159,9 +159,9 @@ async function refusesLocalAddress(db: Db, mailDomain: string, address: string):
   const domain = normalized.slice(at + 1);
   if (domain !== mailDomain) {
     const domainRows = await db
-      .select({ catchAll: customDomains.catchAll })
-      .from(customDomains)
-      .where(and(eq(customDomains.domain, domain), eq(customDomains.verified, true)))
+      .select({ catchAll: domains.catchAll })
+      .from(domains)
+      .where(and(eq(domains.name, domain), eq(domains.verifiedMx, true)))
       .limit(1);
     const custom = domainRows[0];
     if (custom === undefined) return false; // not a domain of ours

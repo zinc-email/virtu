@@ -31,11 +31,12 @@ import {
   type Alias,
   aliases,
   aliasUsedOn,
-  customDomains,
+  domains,
   mailboxes,
   type User,
   users,
 } from "../db/schema";
+import { canReceive } from "../pipeline/domainCapability";
 import {
   ALIAS_DOMAINS,
   FIRST_ALIAS_DOMAIN,
@@ -155,21 +156,21 @@ function randomAliasSuffixFor(user: User): string {
  */
 export async function randomAliasDomainFor(
   user: User,
-): Promise<{ domain: string; customDomainId: number | null }> {
+): Promise<{ domain: string; domainId: number | null }> {
   const preferred = user.defaultAliasDomain;
   if (preferred && preferred !== FIRST_ALIAS_DOMAIN) {
-    if (ALIAS_DOMAINS.includes(preferred)) return { domain: preferred, customDomainId: null };
+    if (ALIAS_DOMAINS.includes(preferred)) return { domain: preferred, domainId: null };
     const rows = await db
       .select()
-      .from(customDomains)
-      .where(eq(customDomains.domain, preferred))
+      .from(domains)
+      .where(and(eq(domains.nameRequested, preferred), eq(domains.userId, user.id)))
       .limit(1);
     const cd = rows[0];
-    if (cd && cd.userId === user.id && cd.verified) {
-      return { domain: preferred, customDomainId: cd.id };
+    if (cd && canReceive(cd)) {
+      return { domain: preferred, domainId: cd.id };
     }
   }
-  return { domain: FIRST_ALIAS_DOMAIN, customDomainId: null };
+  return { domain: FIRST_ALIAS_DOMAIN, domainId: null };
 }
 
 export async function withAliasNewRoutes(authed: FastifyInstance) {
@@ -205,19 +206,17 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       const defaultDomainFirst = (a: string, b: string) =>
         a === user.defaultAliasDomain ? -1 : b === user.defaultAliasDomain ? 1 : 0;
       const userCustomDomains = (
-        await db
-          .select()
-          .from(customDomains)
-          .where(and(eq(customDomains.userId, user.id), eq(customDomains.verified, true)))
-          .orderBy(customDomains.id)
-      ).sort((a, b) => defaultDomainFirst(a.domain, b.domain));
-      const domains = [...ALIAS_DOMAINS].sort(defaultDomainFirst);
+        await db.select().from(domains).where(eq(domains.userId, user.id)).orderBy(domains.id)
+      )
+        .filter(canReceive)
+        .sort((a, b) => defaultDomainFirst(a.nameRequested, b.nameRequested));
+      const sharedDomains = [...ALIAS_DOMAINS].sort(defaultDomainFirst);
       const suffixes = [
         ...userCustomDomains.flatMap((cd) => [
-          signed(`@${cd.domain}`, true),
-          signed(`.${randomAliasSuffixFor(user)}@${cd.domain}`, true),
+          signed(`@${cd.nameRequested}`, true),
+          signed(`.${randomAliasSuffixFor(user)}@${cd.nameRequested}`, true),
         ]),
-        ...domains.map((domain) => signed(`.${randomAliasSuffixFor(user)}@${domain}`, false)),
+        ...sharedDomains.map((domain) => signed(`.${randomAliasSuffixFor(user)}@${domain}`, false)),
       ];
 
       // The latest alias already created for this hostname (AliasUsedOn).
@@ -313,7 +312,7 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       const at = aliasSuffix.lastIndexOf("@");
       const suffixDomain = at === -1 ? "" : aliasSuffix.slice(at + 1);
       const suffixLocal = at === -1 ? aliasSuffix : aliasSuffix.slice(0, at);
-      let customDomainId: number | null = null;
+      let domainId: number | null = null;
       if (ALIAS_DOMAINS.includes(suffixDomain)) {
         if (!suffixLocal.startsWith(".")) {
           throw new HttpError(400, "wrong alias prefix or suffix");
@@ -322,15 +321,15 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         const cd = (
           await db
             .select()
-            .from(customDomains)
-            .where(eq(customDomains.domain, suffixDomain))
+            .from(domains)
+            .where(and(eq(domains.nameRequested, suffixDomain), eq(domains.userId, user.id)))
             .limit(1)
         )[0];
-        const ownedVerified = cd !== undefined && cd.userId === user.id && cd.verified;
+        const ownedVerified = cd !== undefined && canReceive(cd);
         if (!ownedVerified || (suffixLocal !== "" && !suffixLocal.startsWith("."))) {
           throw new HttpError(400, "wrong alias prefix or suffix");
         }
-        customDomainId = cd.id;
+        domainId = cd.id;
       }
 
       const fullAlias = (aliasPrefix + aliasSuffix).toLowerCase();
@@ -354,7 +353,7 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
               email: fullAlias,
               note,
               name,
-              customDomainId,
+              domainId,
               // First mailbox is the primary; the rest go to alias_mailboxes.
               mailboxId: mailboxIds[0]!,
             })
@@ -415,7 +414,7 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       // ?mode= overrides the user's alias_generator setting (SimpleLogin).
       const scheme: "uuid" | "word" = mode ?? (user.aliasGenerator === "uuid" ? "uuid" : "word");
       const note = req.body?.note ?? null;
-      const { domain, customDomainId } = await randomAliasDomainFor(user);
+      const { domain, domainId } = await randomAliasDomainFor(user);
 
       // Always set after registration; null only in a half-created account.
       const mailboxId = user.defaultMailboxId;
@@ -429,7 +428,7 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         try {
           const inserted = await db
             .insert(aliases)
-            .values({ userId: user.id, email, note, mailboxId, customDomainId })
+            .values({ userId: user.id, email, note, mailboxId, domainId })
             .returning();
           created = inserted[0];
         } catch (err) {

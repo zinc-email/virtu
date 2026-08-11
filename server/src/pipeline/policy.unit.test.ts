@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { Alias, CustomDomain, Mailbox, User } from "../db/schema.ts";
+import type { Alias, Domain, Mailbox, User } from "../db/schema.ts";
 import type { VerpInfo } from "../mail/index.ts";
 import { type CatchAllFacts, decideRcpt, type RcptFacts } from "./policy.ts";
 
@@ -44,7 +44,7 @@ function fakeAlias(over: Partial<Alias> = {}): Alias {
     enabled: true,
     note: null,
     mailboxId: 10,
-    customDomainId: null,
+    domainId: null,
     cannotBeDisabled: false,
     automaticCreation: false,
     pinned: false,
@@ -68,17 +68,18 @@ function fakeMailbox(over: Partial<Mailbox> = {}): Mailbox {
   };
 }
 
-function fakeCustomDomain(over: Partial<CustomDomain> = {}): CustomDomain {
+function fakeCustomDomain(over: Partial<Domain> = {}): Domain {
   return {
     id: 7,
     userId: 1,
-    domain: "user.com",
-    name: null,
-    verified: true,
-    dkimVerified: false,
-    spfVerified: false,
-    dmarcVerified: false,
-    ownershipVerified: true,
+    nameRequested: "user.com",
+    name: "user.com", // owned (verifiedOwner) => generated name is populated
+    fromName: null,
+    verifiedMx: true,
+    verifiedDkim: false,
+    verifiedSpf: false,
+    verifiedDmarc: false,
+    verifiedOwner: true,
     ownershipTxtToken: "tok",
     catchAll: true,
     nbFailedChecks: 0,

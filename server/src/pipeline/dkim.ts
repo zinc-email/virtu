@@ -12,7 +12,8 @@
 import { generateKeyPairSync } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
-import { customDomains, type DkimKey, dkimKeys } from "../db/schema.ts";
+import { type DkimKey, dkimKeys, domains } from "../db/schema.ts";
+import { canSend } from "./domainCapability.ts";
 import type { DkimKeyConfig } from "../mailauth/index.ts";
 
 /** Cache TTL. Small: key rotation must take effect quickly. */
@@ -181,18 +182,17 @@ export interface ReplyKeySelection {
  */
 export async function selectReplyDkimKey(
   db: Db,
-  alias: { customDomainId: number | null },
+  alias: { domainId: number | null },
   opts: ReplyKeySelection,
 ): Promise<DkimKeyConfig | null> {
-  if (alias.customDomainId !== null) {
-    const rows = await db
-      .select()
-      .from(customDomains)
-      .where(eq(customDomains.id, alias.customDomainId))
-      .limit(1);
+  if (alias.domainId !== null) {
+    const rows = await db.select().from(domains).where(eq(domains.id, alias.domainId)).limit(1);
     const domain = rows[0];
-    if (domain !== undefined && domain.dkimVerified) {
-      const key = await loadDkimKey(db, domain.domain, CUSTOM_DOMAIN_DKIM_SELECTOR);
+    // Only sign as the custom domain when it can safely send (owner+dkim+spf);
+    // otherwise fall back to the service key so we never lend the domain's
+    // From to mail that would fail DKIM/SPF at the recipient.
+    if (domain !== undefined && canSend(domain)) {
+      const key = await loadDkimKey(db, domain.nameRequested, CUSTOM_DOMAIN_DKIM_SELECTOR);
       if (key !== null) return key;
     }
   }

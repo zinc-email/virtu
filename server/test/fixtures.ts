@@ -14,8 +14,8 @@ import {
   type Alias,
   aliases,
   apiKeys,
-  type CustomDomain,
-  customDomains,
+  type Domain,
+  domains,
   type DkimKey,
   dkimKeys,
   type Mailbox,
@@ -200,26 +200,25 @@ export async function ensureWes(): Promise<UserFixture> {
  * for user.com already MXes at mail.virtu.email with delegated SPF, so a
  * row here is all the "setup" a custom-domain story needs.
  */
-export async function ensureCustomDomain(userId: number, domain: string): Promise<CustomDomain> {
+export async function ensureCustomDomain(userId: number, domain: string): Promise<Domain> {
   const normalized = domain.trim().toLowerCase();
   for (let attempt = 0; attempt < 3; attempt++) {
     const existing = (
-      await db.select().from(customDomains).where(eq(customDomains.domain, normalized)).limit(1)
+      await db
+        .select()
+        .from(domains)
+        .where(and(eq(domains.nameRequested, normalized), eq(domains.userId, userId)))
+        .limit(1)
     )[0];
-    if (existing !== undefined) {
-      if (existing.userId !== userId) {
-        throw new Error(`custom domain ${normalized} already owned by user ${existing.userId}`);
-      }
-      return existing;
-    }
+    if (existing !== undefined) return existing;
     const inserted = await db
-      .insert(customDomains)
+      .insert(domains)
       .values({
         userId,
-        domain: normalized,
-        verified: true,
-        spfVerified: true,
-        ownershipVerified: true,
+        nameRequested: normalized,
+        verifiedMx: true,
+        verifiedSpf: true,
+        verifiedOwner: true,
       })
       .onConflictDoNothing()
       .returning();
@@ -237,7 +236,7 @@ export interface CreateAliasOptions {
   /** Domain for the alias; default config.mailDomain. */
   domain?: string;
   /** Link the alias to a custom domain row. */
-  customDomainId?: number;
+  domainId?: number;
 }
 
 /**
@@ -256,7 +255,7 @@ export async function createAlias(
       email,
       enabled: opts.enabled ?? true,
       mailboxId: opts.mailboxId ?? fixture.mailbox.id,
-      customDomainId: opts.customDomainId ?? null,
+      domainId: opts.domainId ?? null,
     })
     .returning();
   return rows[0]!;

@@ -174,12 +174,52 @@ First security audit pass; fixes landed on `main`. `just check` green.
     refuses to boot under `VIRTU_ENV=production` if it's unset, rather than
     deriving the suffix HMAC key from `DATABASE_URL`.
 
+### Custom-domain squatting fixed — the `domains` model (2026-08-11)
+
+`custom_domains` was renamed to `domains` and reshaped so a squatter can no
+longer permanently block a domain by POSTing it first:
+
+- `name_requested` (varchar, NOT NULL) is the claimed FQDN — NOT globally
+  unique (only `UNIQUE(user_id, name_requested)`), so any number of accounts
+  can hold a provisional claim on the same name.
+- `name` is a **STORED generated column** = `CASE WHEN verified_owner THEN
+  name_requested END`, with `UNIQUE(name)` (NULLs distinct). That unique index
+  is the winner-take-all lock: exactly one account can own an FQDN, and it's
+  whoever proves DNS control (the per-row ownership TXT token — unraceable).
+  App code never writes `name`; the DB derives it from `verified_owner`.
+- The verified flags are a `verified_*` family (`verified_owner`,
+  `verified_mx`, `verified_dkim`, `verified_spf`, `verified_dmarc`); the DNS
+  re-check writes only these. `verifyCustomDomain` flips `verified_owner` and
+  catches the `UNIQUE(name)` violation (`db/pgError.ts:isUniqueViolation`): the
+  loser keeps its other checks but stays unowned (`name` NULL) and is told
+  "already verified by another account". Ownership/MX are upgrade-only in the
+  interactive path (demotion is the future cron's job, behind
+  nb_failed_checks). The old display-name column `name` is now `from_name`;
+  `aliases.custom_domain_id` is now `aliases.domain_id`.
+- **Capabilities are code, not columns** (`pipeline/domainCapability.ts`):
+  `canReceive = owner && mx` (inbound forwarding, re-signed with our key),
+  `canSend = owner && dkim && spf` (outbound `d=customdomain` — reply signing
+  falls back to the service key when false, so we never send from a
+  misconfigured domain). Surfaced as additive `can_receive`/`can_send`
+  computed fields on the CustomDomain API DTO. DMARC is a quality flag, not a
+  gate. Every mail-path lookup keys on the unique `name` (a provisional row's
+  NULL can never match); this also resolves the old "routing keys off MX, not
+  ownership" note.
+- The whole change stays **off the SimpleLogin wire**: the rename is internal;
+  responses still serialize `domain_name`, `is_verified` (now = can_receive),
+  `*_verified`, and `custom_domain_id`. Verified end to end: unit (capability
+  predicates), int (`customDomains.int.test.ts` two-accounts-race:
+  provisional coexist → first verify wins → second locked out), and the
+  custom-domain story tier.
+
 Still deferred (need a product/UX/architecture decision, or are accept-only):
-custom-domain squatting (reclaim policy), sudo gating on destructive deletes
-(UX), moving the API key out of `localStorage` into an httpOnly cookie
-(architecture + CSRF), 64-bit VERP MAC (accepted, SL-compat), the `postcss`
-dev-only advisory, and flipping the CSP from reasoned-safe to
-violation-verified after watching a real deploy's report logs.
+sudo gating on destructive deletes (UX), moving the API key out of
+`localStorage` into an httpOnly cookie (architecture + CSRF), 64-bit VERP MAC
+(accepted, SL-compat), the `postcss` dev-only advisory, flipping the CSP from
+reasoned-safe to violation-verified after a deploy, and the domain
+DNS-re-check cron (writes debounced `verified_*` flags; `name` + capabilities
+auto-derive — demotes a domain whose ownership TXT lapses, freeing the name
+for the next controller).
 
 ## Not started
 

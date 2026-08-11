@@ -393,4 +393,17 @@ Settled (2026-08-08):
     email field to `/app/login?email=…`, which auto-requests the code — the
     old "redirects into a create-user flow unconditionally" seam is gone.
 
+14. **Custom domains are winner-take-all via a generated `name` column**
+    (2026-08-11). The `domains` table (renamed from `custom_domains`) stores
+    the claimed FQDN as `name_requested` (unique only per user) and derives
+    `name` as a STORED generated column (`CASE WHEN verified_owner THEN
+    name_requested END`) with `UNIQUE(name)`. Provisional claims on the same
+    name coexist; the unique index lets exactly one account own it — the one
+    that proves DNS control via the per-row ownership TXT token (unraceable).
+    Two capabilities, `canReceive` (owner+mx) and `canSend` (owner+dkim+spf),
+    are pure functions in `pipeline/domainCapability.ts` (not columns), reused
+    by the mail path and surfaced as `can_receive`/`can_send` API fields; the
+    DNS re-check writes only the base `verified_*` flags and everything else
+    derives. Internal rename only — the SimpleLogin wire is unchanged.
+
 Open: none.

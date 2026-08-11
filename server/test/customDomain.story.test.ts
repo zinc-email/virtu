@@ -38,7 +38,7 @@ beforeAll(async () => {
 describe("stretch: custom domain user.com", () => {
   test("milton -> wes.{tag}@user.com forwards into wes@qmail.com", async () => {
     const domain = await ensureCustomDomain(fixture.user.id, "user.com");
-    const alias = await createAlias(fixture, { domain: "user.com", customDomainId: domain.id });
+    const alias = await createAlias(fixture, { domain: "user.com", domainId: domain.id });
     const testId = newTestId();
 
     await smtpSend({

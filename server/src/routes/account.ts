@@ -23,7 +23,8 @@ import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { generateApiKey, hashApiKey } from "../auth/apiKey";
 import { db } from "../db";
-import { aliases, apiKeys, customDomains, emailLogs, type User, users } from "../db/schema";
+import { aliases, apiKeys, domains, emailLogs, type User, users } from "../db/schema";
+import { canReceive } from "../pipeline/domainCapability";
 import {
   consumeVerificationCode,
   createVerificationCode,
@@ -96,9 +97,13 @@ async function usableDefaultAliasDomain(user: User): Promise<string> {
   const d = user.defaultAliasDomain;
   if (!d) return FIRST_ALIAS_DOMAIN;
   if (ALIAS_DOMAINS.includes(d)) return d;
-  const rows = await db.select().from(customDomains).where(eq(customDomains.domain, d)).limit(1);
+  const rows = await db
+    .select()
+    .from(domains)
+    .where(and(eq(domains.nameRequested, d), eq(domains.userId, user.id)))
+    .limit(1);
   const cd = rows[0];
-  if (cd && cd.userId === user.id && cd.verified) return d;
+  if (cd && canReceive(cd)) return d;
   return FIRST_ALIAS_DOMAIN;
 }
 
@@ -222,11 +227,11 @@ export async function withAccountRoutes(authed: FastifyInstance) {
           // domains (SimpleLogin's "invalid domain").
           const rows = await db
             .select()
-            .from(customDomains)
-            .where(eq(customDomains.domain, domain))
+            .from(domains)
+            .where(and(eq(domains.nameRequested, domain), eq(domains.userId, req.user.id)))
             .limit(1);
           const cd = rows[0];
-          if (!cd || cd.userId !== req.user.id || !cd.verified) {
+          if (!cd || !canReceive(cd)) {
             throw new HttpError(400, "invalid domain");
           }
         }
@@ -253,14 +258,16 @@ export async function withAccountRoutes(authed: FastifyInstance) {
       response: { 200: z.array(DomainDto), 401: ErrorResponse },
     },
     handler: async (req) => {
-      const custom = await db
-        .select()
-        .from(customDomains)
-        .where(and(eq(customDomains.userId, req.user.id), eq(customDomains.verified, true)))
-        .orderBy(customDomains.domain);
+      const custom = (
+        await db
+          .select()
+          .from(domains)
+          .where(eq(domains.userId, req.user.id))
+          .orderBy(domains.nameRequested)
+      ).filter(canReceive);
       return [
         ...ALIAS_DOMAINS.map((domain) => ({ domain, is_custom: false })),
-        ...custom.map((cd) => ({ domain: cd.domain, is_custom: true })),
+        ...custom.map((cd) => ({ domain: cd.nameRequested, is_custom: true })),
       ];
     },
   });

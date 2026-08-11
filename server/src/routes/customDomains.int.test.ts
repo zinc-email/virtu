@@ -10,7 +10,13 @@ import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { config } from "../config";
 import { db } from "../db";
-import { aliases, customDomains, deletedAliases, dkimKeys, users } from "../db/schema";
+import { aliases, deletedAliases, dkimKeys, domains, users } from "../db/schema";
+import {
+  type DnsCheckResolvers,
+  expectedMxExchanges,
+  OWNERSHIP_PREFIX,
+  verifyCustomDomain,
+} from "../pipeline/dnsCheck";
 import { registerAndLogin, type TestUser } from "./intHarness";
 
 let app: App;
@@ -96,7 +102,7 @@ describe("POST /api/custom_domains", () => {
     expect(dto.mailboxes).toHaveLength(1);
 
     const row = (
-      await db.select().from(customDomains).where(eq(customDomains.domain, domain)).limit(1)
+      await db.select().from(domains).where(eq(domains.nameRequested, domain)).limit(1)
     )[0]!;
     expect(row.ownershipTxtToken).toMatch(/^[0-9a-f]{30}$/);
     const key = (
@@ -116,8 +122,8 @@ describe("POST /api/custom_domains", () => {
       headers: auth(apiKey),
     });
     expect(list.statusCode).toBe(200);
-    const domains = list.json<{ custom_domains: { domain_name: string }[] }>().custom_domains;
-    expect(domains.some((d) => d.domain_name === domain)).toBe(true);
+    const dtos = list.json<{ custom_domains: { domain_name: string }[] }>().custom_domains;
+    expect(dtos.some((d) => d.domain_name === domain)).toBe(true);
   });
 
   test("rejects duplicates, invalid shapes and our own domains", async () => {
@@ -131,7 +137,7 @@ describe("POST /api/custom_domains", () => {
       payload: { domain: created.domain_name },
     });
     expect(dup.statusCode).toBe(400);
-    expect(dup.json<{ error: string }>().error).toBe(`${created.domain_name} already used`);
+    expect(dup.json<{ error: string }>().error).toBe(`${created.domain_name} already added`);
 
     for (const bad of ["not a domain", "nodots", "-bad.com", `sub.${config.mailDomain}`]) {
       const res = await app.inject({
@@ -301,7 +307,7 @@ describe("DELETE /api/custom_domains/:id", () => {
       userId: dbUser.id,
       email: aliasEmail,
       mailboxId: dbUser.defaultMailboxId!,
-      customDomainId: created.id,
+      domainId: created.id,
     });
 
     const res = await app.inject({
@@ -312,7 +318,7 @@ describe("DELETE /api/custom_domains/:id", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json<{ deleted: boolean }>().deleted).toBe(true);
 
-    const remaining = await db.select().from(customDomains).where(eq(customDomains.id, created.id));
+    const remaining = await db.select().from(domains).where(eq(domains.id, created.id));
     expect(remaining).toHaveLength(0);
     expect(await db.select().from(aliases).where(eq(aliases.email, aliasEmail))).toHaveLength(0);
     const tombstones = await db
@@ -336,5 +342,62 @@ describe("DELETE /api/custom_domains/:id", () => {
       headers: auth(stranger.apiKey),
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe("winner-take-all ownership", () => {
+  test("two accounts claim one domain; first to prove ownership wins, the other is locked out", async () => {
+    const a = await premiumUser();
+    const b = await premiumUser();
+    const domain = uniqueDomain();
+
+    // Both claims succeed: provisional rows coexist, so squatting the name does
+    // NOT block the real owner (the old global-unique behavior would 400 here).
+    await createDomain(a.apiKey, domain);
+    await createDomain(b.apiKey, domain);
+
+    const rows = await db
+      .select()
+      .from(domains)
+      .where(eq(domains.nameRequested, domain))
+      .orderBy(domains.id);
+    expect(rows.length).toBe(2);
+    expect(rows.every((r) => r.name === null)).toBe(true); // neither owns yet
+
+    // A resolver where BOTH rows' ownership tokens are published, so both would
+    // pass the ownership check — the unique `name` constraint alone decides.
+    const tokens = rows.map((r) => [`${OWNERSHIP_PREFIX}=${r.ownershipTxtToken}`]);
+    const resolvers: DnsCheckResolvers = {
+      resolveTxt: async (name) => (name === domain ? tokens : []),
+      resolveMx: async (name) =>
+        name === domain
+          ? expectedMxExchanges(config.mailDomain).map((exchange, i) => ({
+              exchange,
+              priority: (i + 1) * 10,
+            }))
+          : [],
+    };
+
+    // First to verify wins: the generated `name` column populates.
+    const first = await verifyCustomDomain(db, rows[0]!, {
+      mailDomain: config.mailDomain,
+      resolvers,
+    });
+    expect(first.ownership.ok).toBe(true);
+    expect(first.domain.name).toBe(domain);
+    expect(first.domain.verifiedOwner).toBe(true);
+
+    // The loser's ownership check passes too, but the unique constraint rejects
+    // the win: the row stays unowned (name = NULL) and is told why.
+    const second = await verifyCustomDomain(db, rows[1]!, {
+      mailDomain: config.mailDomain,
+      resolvers,
+    });
+    expect(second.ownership.ok).toBe(false);
+    expect(second.ownership.errors.join(" ")).toContain("already verified by another account");
+    expect(second.domain.name).toBeNull();
+    expect(second.domain.verifiedOwner).toBe(false);
+    // The loser still keeps its non-ownership check results (MX passed here).
+    expect(second.domain.verifiedMx).toBe(true);
   });
 });

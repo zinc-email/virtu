@@ -18,7 +18,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { config } from "../src/config.ts";
 import { db } from "../src/db/index.ts";
-import { customDomains } from "../src/db/schema.ts";
+import { domains } from "../src/db/schema.ts";
 import { CUSTOM_DOMAIN_DKIM_SELECTOR, ensureDkimKeyRow } from "../src/pipeline/dkim.ts";
 import { OWNERSHIP_PREFIX, verifyCustomDomain } from "../src/pipeline/dnsCheck.ts";
 import { connectSmtp } from "../src/smtp/index.ts";
@@ -85,20 +85,22 @@ describe("story: custom-domain DKIM (user.com)", () => {
     expect(verification.dmarc.ok).toBe(false); // no _dmarc record on purpose
 
     domain = verification.domain;
-    expect(domain.ownershipVerified).toBe(true);
-    expect(domain.verified).toBe(true);
-    expect(domain.spfVerified).toBe(true);
-    expect(domain.dkimVerified).toBe(true);
-    expect(domain.dmarcVerified).toBe(false);
+    expect(domain.verifiedOwner).toBe(true);
+    expect(domain.verifiedMx).toBe(true);
+    expect(domain.verifiedSpf).toBe(true);
+    expect(domain.verifiedDkim).toBe(true);
+    expect(domain.verifiedDmarc).toBe(false);
+    // Ownership verified => the generated `name` column is now populated.
+    expect(domain.name).toBe("user.com");
 
     // DB round-trip really persisted the flags.
     const persisted = (
-      await db.select().from(customDomains).where(eq(customDomains.id, domain.id)).limit(1)
+      await db.select().from(domains).where(eq(domains.id, domain.id)).limit(1)
     )[0]!;
-    expect(persisted.dkimVerified).toBe(true);
+    expect(persisted.verifiedDkim).toBe(true);
 
     // ── Forward mints the reverse alias ─────────────────────────────────
-    const alias = await createAlias(fixture, { domain: "user.com", customDomainId: domain.id });
+    const alias = await createAlias(fixture, { domain: "user.com", domainId: domain.id });
     const forwardId = newTestId();
     await smtpSend({
       host: milton.submission.host,

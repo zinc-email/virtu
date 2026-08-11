@@ -1100,6 +1100,12 @@
           },
           "dmarc_verified": {
             "type": "boolean"
+          },
+          "can_receive": {
+            "type": "boolean"
+          },
+          "can_send": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1117,7 +1123,9 @@
           "mx_verified",
           "spf_verified",
           "dkim_verified",
-          "dmarc_verified"
+          "dmarc_verified",
+          "can_receive",
+          "can_send"
         ],
         "additionalProperties": false
       },

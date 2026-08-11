@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { db } from "../db";
-import { aliases, contacts, customDomains, emailLogs, users } from "../db/schema";
+import { aliases, contacts, domains, emailLogs, users } from "../db/schema";
 import { createAlias, latestEmailedCode, registerAndLogin } from "./intHarness";
 
 let app: App;
@@ -125,9 +125,9 @@ describe("custom domain suffixes", () => {
     const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
     const domain = `d${crypto.randomUUID().slice(0, 8)}.example.com`;
     const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
-    await db.insert(customDomains).values([
-      { userId: userRow.id, domain, verified: true },
-      { userId: userRow.id, domain: unverified },
+    await db.insert(domains).values([
+      { userId: userRow.id, nameRequested: domain, verifiedOwner: true, verifiedMx: true },
+      { userId: userRow.id, nameRequested: unverified },
     ]);
 
     const res = await app.inject({
@@ -156,8 +156,8 @@ describe("custom domain suffixes", () => {
     const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
     const domain = `d${crypto.randomUUID().slice(0, 8)}.example.com`;
     const [cd] = await db
-      .insert(customDomains)
-      .values({ userId: userRow.id, domain, verified: true })
+      .insert(domains)
+      .values({ userId: userRow.id, nameRequested: domain, verifiedOwner: true, verifiedMx: true })
       .returning();
 
     const options = await app.inject({
@@ -189,7 +189,7 @@ describe("custom domain suffixes", () => {
         .from(aliases)
         .where(eq(aliases.email, `billing.dept@${domain}`))
     )[0]!;
-    expect(row.customDomainId).toBe(cd!.id);
+    expect(row.domainId).toBe(cd!.id);
   });
 
   test("a signed suffix for someone else's or an unverified domain is rejected", async () => {
@@ -199,9 +199,9 @@ describe("custom domain suffixes", () => {
     const otherRow = (await db.select().from(users).where(eq(users.email, other.email)))[0]!;
     const foreign = `f${crypto.randomUUID().slice(0, 8)}.example.com`;
     const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
-    await db.insert(customDomains).values([
-      { userId: otherRow.id, domain: foreign, verified: true },
-      { userId: userRow.id, domain: unverified },
+    await db.insert(domains).values([
+      { userId: otherRow.id, nameRequested: foreign, verifiedOwner: true, verifiedMx: true },
+      { userId: userRow.id, nameRequested: unverified },
     ]);
 
     // White-box: the signature is not user-bound, so ownership must be
@@ -984,8 +984,8 @@ describe("random alias generator settings", () => {
     const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
     const domain = `d${crypto.randomUUID().slice(0, 8)}.example.com`;
     const [cd] = await db
-      .insert(customDomains)
-      .values({ userId: userRow.id, domain, verified: true })
+      .insert(domains)
+      .values({ userId: userRow.id, nameRequested: domain, verifiedOwner: true, verifiedMx: true })
       .returning();
 
     const patch = await app.inject({
@@ -1009,7 +1009,7 @@ describe("random alias generator settings", () => {
     const body = res.json<{ id: number; alias: string }>();
     expect(body.alias.endsWith(`@${domain}`)).toBe(true);
     const row = (await db.select().from(aliases).where(eq(aliases.id, body.id)))[0]!;
-    expect(row.customDomainId).toBe(cd!.id);
+    expect(row.domainId).toBe(cd!.id);
   });
 
   test("random_alias_suffix=word shapes the options suffixes", async () => {

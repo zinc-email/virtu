@@ -17,9 +17,9 @@ import {
   type Alias,
   aliases,
   aliasMailboxes,
-  type CustomDomain,
-  customDomains,
   deletedAliases,
+  type Domain,
+  domains,
   type Mailbox,
   mailboxes,
   type User,
@@ -32,7 +32,7 @@ import { parseVerp, type VerpInfo } from "../mail/index.ts";
  * gathered when no alias matched (the catch-all question).
  */
 export interface CatchAllFacts {
-  domain: CustomDomain;
+  domain: Domain;
   /** The domain owner's account. */
   owner: User;
   /** The owner's default mailbox — where a minted alias would deliver. */
@@ -230,11 +230,14 @@ export async function evaluateRcpt(
     // No alias: is this a VERIFIED custom domain of ours? (Also what makes
     // an unknown localpart there "user unknown" instead of "relay denied".)
     if (alias === null) {
+      // Owned + can-receive: `name` is set only for the ownership winner, and
+      // verified_mx completes canReceive. Keying on the unique `name` means a
+      // squatter's provisional claim (name = NULL) can never match here.
       const cdRows = await db
-        .select({ cd: customDomains, owner: users })
-        .from(customDomains)
-        .innerJoin(users, eq(customDomains.userId, users.id))
-        .where(and(eq(customDomains.domain, domain), eq(customDomains.verified, true)))
+        .select({ cd: domains, owner: users })
+        .from(domains)
+        .innerJoin(users, eq(domains.userId, users.id))
+        .where(and(eq(domains.name, domain), eq(domains.verifiedMx, true)))
         .limit(1);
       if (cdRows[0] !== undefined) {
         const { cd, owner } = cdRows[0];
@@ -321,7 +324,7 @@ export async function evaluateRcpt(
 async function mintCatchAllAlias(
   db: Db,
   email: string,
-  ca: { domain: CustomDomain; owner: User; mailbox: Mailbox },
+  ca: { domain: Domain; owner: User; mailbox: Mailbox },
 ): Promise<Alias | null> {
   const inserted = await db
     .insert(aliases)
@@ -329,8 +332,8 @@ async function mintCatchAllAlias(
       userId: ca.owner.id,
       email,
       mailboxId: ca.mailbox.id,
-      customDomainId: ca.domain.id,
-      note: `Created by the catch-all of ${ca.domain.domain}`,
+      domainId: ca.domain.id,
+      note: `Created by the catch-all of ${ca.domain.nameRequested}`,
       automaticCreation: true,
     })
     .onConflictDoNothing()

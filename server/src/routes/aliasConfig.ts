@@ -39,6 +39,20 @@ export const ALIAS_DOMAINS: readonly string[] =
 /** The default alias domain (SimpleLogin FIRST_ALIAS_DOMAIN / EMAIL_DOMAIN). */
 export const FIRST_ALIAS_DOMAIN = ALIAS_DOMAINS[0] ?? config.mailDomain;
 
+// Fail closed: in production, require an explicit ALIAS_SIGNING_SECRET rather
+// than silently deriving the suffix HMAC key from DATABASE_URL (predictable if
+// the DB URL is ever a default; deriving a signing key from a connection
+// string is poor practice regardless). Mirrors config.ts:assertProductionSecrets.
+if (
+  (process.env.VIRTU_ENV ?? process.env.NODE_ENV) === "production" &&
+  aliasEnv.aliasSigningSecret === undefined
+) {
+  throw new Error(
+    "refusing to start with VIRTU_ENV=production and no ALIAS_SIGNING_SECRET set " +
+      "— see server/.env.example.",
+  );
+}
+
 /** HMAC key for signed suffixes — see the module doc for the derivation. */
 export const SUFFIX_SIGNING_SECRET: string =
   aliasEnv.aliasSigningSecret ??

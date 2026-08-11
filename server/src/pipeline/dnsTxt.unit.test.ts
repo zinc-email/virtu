@@ -89,6 +89,22 @@ describe("parseTxtResponse", () => {
     const response = buildResponse(query, [{ chunks: ["x"] }], { id: 10 });
     expect(() => parseTxtResponse(response, 9, NAME)).toThrow(DnsError);
   });
+
+  test("character-string length overrunning its RDATA: EBADRESP (no cross-record read)", () => {
+    const query = encodeTxtQuery(NAME, 5);
+    // One TXT answer: rdlength=3, rdata=[len=10, 'a','b'] — the length byte
+    // claims 10 octets but only 2 remain inside the record.
+    const answer = [0xc0, 12, 0, 16, 0, 1, 0, 0, 0, 60, 0, 3, 10, 0x61, 0x62];
+    const out = new Uint8Array(query.length + answer.length);
+    out.set(query);
+    out.set(new Uint8Array(answer), query.length);
+    const view = new DataView(out.buffer);
+    view.setUint16(2, 0x8180); // QR + RD + RA, rcode 0
+    view.setUint16(6, 1); // ANCOUNT
+    expect(() => parseTxtResponse(out, 5, NAME)).toThrow(
+      expect.objectContaining({ code: "EBADRESP" }),
+    );
+  });
 });
 
 describe("encodeTxtQuery", () => {

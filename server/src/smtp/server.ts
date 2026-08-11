@@ -41,10 +41,18 @@ const DEFAULTS = {
   maxMessageSize: 25 * 1024 * 1024,
   maxRecipients: 100,
   maxErrors: 10,
+  maxConnections: 1024,
+  maxConnectionsPerIp: 64,
   maxDataLineLength: 10_000,
   commandTimeoutMs: 300_000,
   dataTimeoutMs: 600_000,
 };
+
+/** Normalize a remote address for per-IP accounting (fold IPv4-mapped IPv6). */
+function normalizeRemoteIp(addr: string | undefined): string {
+  if (addr === undefined || addr === "") return "unknown";
+  return addr.startsWith("::ffff:") ? addr.slice(7) : addr;
+}
 
 type Resolved = SmtpServerOptions & typeof DEFAULTS & { requireAuthTls: boolean };
 
@@ -63,11 +71,32 @@ export function createSmtpServer(options: SmtpServerOptions): SmtpServer {
   }
 
   const connections = new Set<Connection>();
+  const perIp = new Map<string, number>();
   let server: net.Server | null = null;
   let bound: { port: number; host: string } | null = null;
 
   const onSocket = (socket: net.Socket | tls.TLSSocket, secure: boolean) => {
-    const conn = new Connection(socket, secure, opts, () => connections.delete(conn));
+    // Backpressure: cap concurrent connections globally and per remote IP so a
+    // flood of slow/idle sockets (each alive up to commandTimeoutMs) can't
+    // exhaust memory/timers. Refuse over the cap without allocating a session.
+    const ip = normalizeRemoteIp(socket.remoteAddress ?? undefined);
+    const ipCount = perIp.get(ip) ?? 0;
+    if (connections.size >= opts.maxConnections || ipCount >= opts.maxConnectionsPerIp) {
+      try {
+        socket.write(reply(421, "4.7.0", "Too many concurrent connections; try again later"));
+      } catch {
+        // socket may already be gone; destroying below is enough.
+      }
+      socket.destroy();
+      return;
+    }
+    perIp.set(ip, ipCount + 1);
+    const conn = new Connection(socket, secure, opts, () => {
+      connections.delete(conn);
+      const n = (perIp.get(ip) ?? 1) - 1;
+      if (n <= 0) perIp.delete(ip);
+      else perIp.set(ip, n);
+    });
     connections.add(conn);
     conn.start();
   };

@@ -472,3 +472,18 @@ describe("smtp server: AUTH (plaintext dev mode)", () => {
     await client.waitFor(/^504 5\.5\.4/);
   });
 });
+
+describe("smtp server: connection cap", () => {
+  test("refuses past the per-IP cap with 421 and closes", async () => {
+    const { server, port } = await listen({ hostname: HOST, maxConnectionsPerIp: 1 });
+    servers.push(server);
+    const c1 = await RawClient.connect(port);
+    clients.push(c1);
+    await c1.waitFor(/^220 /);
+
+    const c2 = await RawClient.connect(port);
+    clients.push(c2);
+    const line = await c2.waitFor(/^421 /);
+    expect(line).toContain("Too many concurrent connections");
+  });
+});

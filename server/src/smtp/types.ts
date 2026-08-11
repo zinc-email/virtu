@@ -219,6 +219,10 @@ export interface SmtpServerOptions extends SmtpServerHooks {
   maxRecipients?: number;
   /** Max error replies per connection before `421 4.7.0` + disconnect. Default 10. */
   maxErrors?: number;
+  /** Max concurrent connections server-wide (`421` + close beyond it). Default 1024. */
+  maxConnections?: number;
+  /** Max concurrent connections from one remote IP (`421` + close beyond it). Default 64. */
+  maxConnectionsPerIp?: number;
   /** DATA line-length cap; see the line-length policy above. Default 10000. */
   maxDataLineLength?: number;
   /** Idle timeout while waiting for a command, ms (=> `421 4.4.2` + close). Default 300000. */

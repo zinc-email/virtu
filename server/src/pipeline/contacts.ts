@@ -143,13 +143,22 @@ export async function getOrCreateContact(
  * address is not a known reverse alias (the caller then refuses — never
  * leaks). Case-insensitive: reverse aliases are minted lowercase.
  */
-export async function resolveReverseAlias(db: Db, address: string): Promise<Contact | null> {
+export async function resolveReverseAlias(
+  db: Db,
+  address: string,
+  userId?: number,
+): Promise<Contact | null> {
   const replyEmail = address.trim().toLowerCase();
-  const found = await db
-    .select()
-    .from(contacts)
-    .where(eq(contacts.replyEmail, replyEmail))
-    .limit(1);
+  // When userId is given, scope the lookup to that account. reply_email is
+  // globally unique, so an unscoped lookup at RCPT time would let one user
+  // probe whether another account's reverse alias exists (250 vs 550) —
+  // cross-tenant enumeration. Callers inside the already-ownership-gated DATA
+  // flow may omit it.
+  const where =
+    userId === undefined
+      ? eq(contacts.replyEmail, replyEmail)
+      : and(eq(contacts.replyEmail, replyEmail), eq(contacts.userId, userId));
+  const found = await db.select().from(contacts).where(where).limit(1);
   return found[0] ?? null;
 }
 

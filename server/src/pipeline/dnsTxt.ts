@@ -105,6 +105,11 @@ export function parseTxtResponse(msg: Uint8Array, expectId: number, name: string
       let p = rdataStart;
       while (p < rdataEnd) {
         const len = msg[p]!;
+        // A character-string must stay within its record's RDATA. A malformed
+        // length byte that overruns rdataEnd would otherwise splice adjacent
+        // answer bytes into the string — and TXT drives DKIM-key / ownership
+        // comparisons, so a corrupted read is a security signal. Reject.
+        if (p + 1 + len > rdataEnd) throw new DnsError("EBADRESP", name);
         chunks.push(decoder.decode(msg.subarray(p + 1, p + 1 + len)));
         p += 1 + len;
       }

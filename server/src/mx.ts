@@ -104,21 +104,23 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   for (const rcpt of evaluated) {
     if (rcpt.decision.kind !== "verp") continue;
     const info = rcpt.decision.info;
+    // Only a failure-DSN-shaped message counts as a bounce — for EVERY VERP
+    // type. A vacation/OOO auto-reply to the return path, or a "delivery
+    // delayed" report, must not invalidate a live code (transactional) NOR
+    // book a bounce against the user's own alias (forward/reply) — the latter
+    // could trip auto-disable on a victim whose mailbox answers the return
+    // path. (utf-8 with replacement chars is fine: the Action fields are ASCII.)
+    const dsnish = looksLikeDsn({
+      envelopeFrom: envelope.mailFrom,
+      contentType: parsed.headers.get("Content-Type"),
+      autoSubmitted: parsed.headers.get("Auto-Submitted"),
+      body: new TextDecoder().decode(parsed.body),
+    });
+    if (!dsnish) {
+      log(`mx: ignored non-DSN mail to ${info.type} VERP (ref ${info.id})`);
+      continue;
+    }
     if (info.type === "transactional") {
-      // Only a failure-DSN-shaped message counts: a vacation auto-reply to
-      // the verification email's Return-Path, or a "delivery delayed"
-      // report, must not invalidate a live code.
-      const dsnish = looksLikeDsn({
-        envelopeFrom: envelope.mailFrom,
-        contentType: parsed.headers.get("Content-Type"),
-        autoSubmitted: parsed.headers.get("Auto-Submitted"),
-        // utf-8 with replacement chars is fine: the Action fields are ASCII.
-        body: new TextDecoder().decode(parsed.body),
-      });
-      if (!dsnish) {
-        log(`mx: ignored non-DSN mail to transactional VERP (ref ${info.id})`);
-        continue;
-      }
       const result = await recordTransactionalBounce(opts.db, info.id);
       log(
         `mx: transactional bounce (ref ${info.id})` +

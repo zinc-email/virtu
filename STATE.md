@@ -151,11 +151,35 @@ First security audit pass; fixes landed on `main`. `just check` green.
 6. **CSP + HSTS added** (was Medium). `Caddyfile`: strict CSP site-wide
    (`script-src 'self'`, no eval), HSTS on the public host only.
 
-Deferred (from the same audit, not yet done): custom-domain squatting
-(unverified claim blocks the real owner), reverse-alias enumeration at
-submission RCPT, unbounded SMTP connection count, sudo gating on destructive
-deletes, provider-aliasing in `isOwnMailboxAddress`, TXT-chunk length clamp,
-and flipping the CSP from reasoned-safe to violation-verified after a deploy.
+### Second batch (clear-cut hardening, 2026-08-11)
+
+7. **Forward/reply VERP bounce intake gated by `looksLikeDsn`** (was Low). The
+   `mx.ts` intake now applies the DSN-shape gate to ALL VERP types, not just
+   transactional — a vacation/OOO auto-reply to a forward/reply return path no
+   longer books a bounce (which could auto-disable a victim's alias).
+8. **`isOwnMailboxAddress` is provider-aware** (was Low). New pure
+   `pipeline/addressMatch.ts:mailboxMatchKey` folds Gmail dots + googlemail.com
+   (dot-folding is Gmail-only, so look-alike cold emails elsewhere aren't
+   wrongly refused); the own-mailbox refuse-to-leak guard uses it.
+9. **DNS TXT character-string clamp** (was Low). `dnsTxt.ts` rejects a chunk
+   whose length overruns its record's RDATA (`EBADRESP`) instead of splicing
+   adjacent answer bytes into a DKIM/ownership comparison.
+10. **Reverse-alias RCPT lookup scoped to the authed user** (was Low).
+    `resolveReverseAlias` takes an optional `userId`; submission `onRcptTo`
+    passes it so another account's reverse alias can't be probed (250 vs 550).
+11. **SMTP connection caps** (was Low/Medium). `smtp/server.ts` bounds
+    concurrent connections globally (1024) and per remote IP (64), refusing
+    over the cap with `421` before allocating a session.
+12. **`ALIAS_SIGNING_SECRET` required in production** (was Low). `aliasConfig.ts`
+    refuses to boot under `VIRTU_ENV=production` if it's unset, rather than
+    deriving the suffix HMAC key from `DATABASE_URL`.
+
+Still deferred (need a product/UX/architecture decision, or are accept-only):
+custom-domain squatting (reclaim policy), sudo gating on destructive deletes
+(UX), moving the API key out of `localStorage` into an httpOnly cookie
+(architecture + CSRF), 64-bit VERP MAC (accepted, SL-compat), the `postcss`
+dev-only advisory, and flipping the CSP from reasoned-safe to
+violation-verified after watching a real deploy's report logs.
 
 ## Not started
 

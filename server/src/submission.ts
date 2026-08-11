@@ -48,6 +48,7 @@ import {
 } from "./db/schema.ts";
 import { buildVerp, parseMessage, rewriteReply, serializeMessage } from "./mail/index.ts";
 import { signOutbound } from "./mailauth/index.ts";
+import { mailboxMatchKey } from "./pipeline/addressMatch.ts";
 import { type AuthThrottle, authThrottleKey, createAuthThrottle } from "./pipeline/authThrottle.ts";
 import { findOrCreateContact, resolveReverseAlias } from "./pipeline/contacts.ts";
 import { selectReplyDkimKey } from "./pipeline/dkim.ts";
@@ -184,28 +185,20 @@ async function refusesLocalAddress(db: Db, mailDomain: string, address: string):
 }
 
 /**
- * True when `address` — allowing plus-tag variants on either side — resolves
- * to one of the user's own mailboxes. The refuse-to-leak invariant (PLAN #9):
+ * True when `address` resolves to one of the user's own mailboxes under
+ * provider-aware normalization ({@link mailboxMatchKey}: plus-tags everywhere,
+ * plus Gmail dot/googlemail folding). The refuse-to-leak invariant (PLAN #9):
  * an outbound recipient (envelope OR To/Cc) that lands back in the user's own
- * inbox must never go out. Plus-addressing is normalized on both sides, so a
- * mailbox stored as `wes+work@` and a recipient `wes+work+x@` still match.
+ * inbox must never go out — so `wes@gmail.com` matches a `w.es@googlemail.com`
+ * mailbox, not just plus-tag variants.
  */
 async function isOwnMailboxAddress(db: Db, userId: number, address: string): Promise<boolean> {
-  const base = (addr: string): string => {
-    const at = addr.trim().toLowerCase().lastIndexOf("@");
-    const lower = addr.trim().toLowerCase();
-    if (at === -1) return lower;
-    const local = lower.slice(0, at);
-    const domain = lower.slice(at);
-    const plus = local.indexOf("+");
-    return `${plus === -1 ? local : local.slice(0, plus)}${domain}`;
-  };
-  const target = base(address);
+  const target = mailboxMatchKey(address);
   const rows = await db
     .select({ email: mailboxes.email })
     .from(mailboxes)
     .where(eq(mailboxes.userId, userId));
-  return rows.some((r) => base(r.email) === target);
+  return rows.some((r) => mailboxMatchKey(r.email) === target);
 }
 
 /** One classified envelope recipient (no rows created yet). */
@@ -529,12 +522,16 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
     },
     onRcptTo: async (event) => {
       if (event.session.authUser === undefined) return AUTH_REQUIRED;
+      const user = await authedUser(opts.db, event.session.authUser);
+      if (user === null) return BAD_CREDENTIALS;
       // Early refusal only for what is wrong in EVERY mode: a local-domain
       // address that is neither a reverse alias nor otherwise deliverable
       // (same refusesLocalAddress rule as DATA, so the two never diverge).
       // Mode rules (reply vs cold) need MAIL FROM context and run at DATA.
+      // Scope the reverse-alias lookup to the authed user so another account's
+      // reverse alias can't be probed for existence here (250 vs 550).
       const address = event.address.trim().toLowerCase();
-      const contact = await resolveReverseAlias(opts.db, address);
+      const contact = await resolveReverseAlias(opts.db, address, user.id);
       if (contact !== null) return { accept: true };
       if (await refusesLocalAddress(opts.db, opts.mailDomain, address)) return NOT_REVERSE_ALIAS;
       return { accept: true };

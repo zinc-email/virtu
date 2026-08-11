@@ -22,6 +22,7 @@ import { getColorScheme, setColorScheme } from "src/colorScheme";
 import { getLogout } from "src/gen";
 import { AliasDetailPage } from "src/pages/AliasDetail";
 import { AliasesPage } from "src/pages/Aliases";
+import { AliasNewPage } from "src/pages/AliasNew";
 import { BillingPage } from "src/pages/Billing";
 import { DomainDetailPage } from "src/pages/DomainDetail";
 import { DomainsPage } from "src/pages/Domains";
@@ -419,6 +420,15 @@ const indexRoute = createRoute({
   component: AliasesPage,
 });
 
+// Static /aliases/new outranks the $aliasId param route (TanStack ranks
+// static segments above dynamic ones regardless of declaration order).
+const aliasNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/aliases/new",
+  beforeLoad: requireAuth,
+  component: AliasNewPage,
+});
+
 const aliasDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/aliases/$aliasId",
@@ -511,6 +521,7 @@ export const router = createRouter({
   scrollRestoration: true,
   routeTree: rootRoute.addChildren([
     indexRoute,
+    aliasNewRoute,
     aliasDetailRoute,
     mailboxesRoute,
     mailboxDetailRoute,

@@ -1,8 +1,12 @@
-// Create-alias modal: GET /v5/alias/options -> prefix input + suffix picker
-// (+ mailboxes + note), POST /v3/alias/custom/new. A 412 (signed suffix
-// expired) refetches options so the user can retry immediately.
+// Customize-alias page ("/aliases/new") — the old create-alias modal grown
+// into a narrow page: GET /v5/alias/options -> prefix input + suffix picker
+// (+ mailboxes + note), POST /v3/alias/custom/new, then straight to the new
+// alias's detail page. A 412 (signed suffix expired) refetches options so
+// the user can retry immediately. The prefix/suffix pair sits side by side
+// where it fits and stacks on phones.
 
 import { useQueryClient } from "@tanstack/react-query";
+import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
@@ -13,15 +17,12 @@ import {
   useGetV5AliasOptions,
   usePostV3AliasCustomNew,
 } from "src/gen";
-import { Dialog } from "src/overlays";
-import { Alert, Button, CheckboxGroup, Field, SelectField, TextArea } from "src/ui";
+import { Alert, Button, CheckboxGroup, Field, Section, SelectField, TextArea, ui } from "src/ui";
 
-interface Props {
-  opened: boolean;
-  onClose: () => void;
-}
-
-export function CreateAliasModal({ opened, onClose }: Props) {
+export function AliasNewPage() {
+  const navigate = useNavigate();
+  const router = useRouter();
+  const canGoBack = useCanGoBack();
   const queryClient = useQueryClient();
   const [prefix, setPrefix] = useState("");
   const [signedSuffix, setSignedSuffix] = useState<string | null>(null);
@@ -29,30 +30,31 @@ export function CreateAliasModal({ opened, onClose }: Props) {
   const [mailboxesSeeded, setMailboxesSeeded] = useState(false);
   const [note, setNote] = useState("");
 
+  // Signed suffixes expire — always arrive with a fresh set.
   const options = useGetV5AliasOptions(undefined, {
-    query: { enabled: opened, refetchOnMount: "always", staleTime: 0 },
+    query: { refetchOnMount: "always", staleTime: 0 },
   });
-  const mailboxes = useGetV2Mailboxes({ query: { enabled: opened } });
+  const mailboxes = useGetV2Mailboxes();
 
   // Default the pickers once data arrives.
   useEffect(() => {
     const first = options.data?.suffixes[0];
-    if (opened && first && signedSuffix === null) setSignedSuffix(first.signed_suffix);
-  }, [opened, options.data, signedSuffix]);
+    if (first && signedSuffix === null) setSignedSuffix(first.signed_suffix);
+  }, [options.data, signedSuffix]);
   useEffect(() => {
     const def = mailboxes.data?.mailboxes.find((m) => m.default) ?? mailboxes.data?.mailboxes[0];
-    if (opened && def && !mailboxesSeeded) {
+    if (def && !mailboxesSeeded) {
       setMailboxIds([String(def.id)]);
       setMailboxesSeeded(true);
     }
-  }, [opened, mailboxes.data, mailboxesSeeded]);
+  }, [mailboxes.data, mailboxesSeeded]);
 
   const create = usePostV3AliasCustomNew({
     mutation: {
-      onSuccess: () => {
+      onSuccess: (alias) => {
         void queryClient.invalidateQueries({ queryKey: getV2AliasesQueryKey() });
         void queryClient.invalidateQueries({ queryKey: getStatsQueryKey() });
-        handleClose();
+        void navigate({ to: "/aliases/$aliasId", params: { aliasId: String(alias.id) } });
       },
       onError: (err) => {
         // Signed suffix expired: fetch fresh options so a retry can succeed.
@@ -64,14 +66,11 @@ export function CreateAliasModal({ opened, onClose }: Props) {
     },
   });
 
-  const handleClose = () => {
-    setPrefix("");
-    setSignedSuffix(null);
-    setMailboxIds([]);
-    setMailboxesSeeded(false);
-    setNote("");
-    create.reset();
-    onClose();
+  // Cancel mirrors the shell's back arrow: a real history back when there is
+  // an in-app entry (restoring the index scroll), the index otherwise.
+  const cancel = () => {
+    if (canGoBack) router.history.back();
+    else void navigate({ to: "/" });
   };
 
   const suffixOptions =
@@ -86,7 +85,11 @@ export function CreateAliasModal({ opened, onClose }: Props) {
     options.data?.can_create !== false;
 
   return (
-    <Dialog opened={opened} onClose={handleClose} title="New alias">
+    <Section narrow>
+      <header className={css({ marginBottom: "2.11rem" })}>
+        <h1 className={ui.h1}>Customize your alias.</h1>
+      </header>
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -107,7 +110,15 @@ export function CreateAliasModal({ opened, onClose }: Props) {
         )}
         {create.isError && <Alert>{apiErrorMessage(create.error)}</Alert>}
 
-        <div className={css({ display: "flex", gap: "0.75rem", alignItems: "flex-start" })}>
+        <div
+          className={css({
+            display: "flex",
+            gap: "0.75rem",
+            alignItems: "flex-start",
+            // Phones: the pair stacks — a squeezed select shows no text.
+            "@media (max-width: 480px)": { flexDirection: "column", alignItems: "stretch" },
+          })}
+        >
           <div className={css({ flex: "1 1 55%", minWidth: 0 })}>
             <Field
               label="Alias"
@@ -164,7 +175,7 @@ export function CreateAliasModal({ opened, onClose }: Props) {
         />
 
         <div className={css({ display: "flex", justifyContent: "flex-end", gap: "0.75rem" })}>
-          <Button type="button" size="tiny" onClick={handleClose}>
+          <Button type="button" size="tiny" onClick={cancel}>
             Cancel
           </Button>
           <Button
@@ -179,6 +190,6 @@ export function CreateAliasModal({ opened, onClose }: Props) {
           </Button>
         </div>
       </form>
-    </Dialog>
+    </Section>
   );
 }

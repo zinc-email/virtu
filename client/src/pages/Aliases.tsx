@@ -7,9 +7,8 @@
 import { useState } from "react";
 import { css } from "styled-system/css";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { apiErrorMessage } from "src/api/errors";
-import { CreateAliasModal } from "src/components/CreateAliasModal";
 import {
   type Alias,
   getV2AliasesQueryKey,
@@ -53,7 +52,6 @@ export function AliasesPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
-  const [customizing, setCustomizing] = useState(false);
 
   const aliases = useGetV2Aliases({ page_id: String(page) });
   const invalidateAliases = () =>
@@ -93,9 +91,9 @@ export function AliasesPage() {
             ➜&nbsp;&nbsp;Share an email alias
           </Button>
           <p className={ui.lead}>
-            <button type="button" className={ui.link} onClick={() => setCustomizing(true)}>
+            <Link to="/aliases/new" className={ui.link}>
               Customize an email alias
-            </button>
+            </Link>
           </p>
         </div>
         {createRandom.isError && <Alert>{apiErrorMessage(createRandom.error)}</Alert>}
@@ -154,8 +152,6 @@ export function AliasesPage() {
           </div>
         </div>
       )}
-
-      <CreateAliasModal opened={customizing} onClose={() => setCustomizing(false)} />
     </Section>
   );
 }

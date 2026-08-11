@@ -1,0 +1,61 @@
+; each.email — virtu-ts test deployment
+; VPS: 172.234.30.194 (web + all mail processes on one box)
+;
+; Matching server/.env:
+;   VIRTU_HOST=each.email
+;   MAIL_DOMAIN=each.email
+;   MAIL_HOSTNAME=mail.each.email
+;   DKIM_SELECTOR=mail          (the default)
+;
+; If your DNS is hosted at a provider with a web zone editor, the SOA/NS
+; block is managed for you — paste only the records below it.
+
+$ORIGIN each.email.
+$TTL 300                        ; short TTL while testing; raise later
+
+@       IN  SOA ns1.each.email. hostmaster.each.email. (
+                2026081001      ; serial (YYYYMMDDnn)
+                7200            ; refresh
+                900             ; retry
+                1209600         ; expire
+                300 )           ; negative-cache TTL
+@       IN  NS  ns1.each.email. ; REPLACE with your actual nameservers
+@       IN  NS  ns2.each.email. ; (or delete SOA+NS if provider-managed)
+
+; ── Web ─────────────────────────────────────────────────────────────────────
+; One origin behind Caddy: / homepage, /app/* SPA, /api/* API.
+@       IN  A       172.234.30.194
+www     IN  A       172.234.30.194  ; only if Caddy also answers/redirects www
+
+; ── Mail ────────────────────────────────────────────────────────────────────
+; mail.each.email is MAIL_HOSTNAME (SMTP banner/EHLO, TLS cert name) and the
+; MX exchange — both for this zone and the one the app tells custom-domain
+; users to publish (expectedMxExchanges: mail.{MAIL_DOMAIN}). MX targets must
+; be A records, never CNAMEs.
+mail    IN  A       172.234.30.194
+@       IN  MX  10  mail.each.email.
+
+; ── SPF ─────────────────────────────────────────────────────────────────────
+; The apex record authorizes our outbound IP AND serves as the include target
+; customers publish on their domains (v=spf1 include:each.email ~all).
+; spf1.each.email is the legacy include target the verifier also accepts
+; (allowedSpfIncludes) — kept for parity, costs nothing.
+@       IN  TXT     "v=spf1 ip4:172.234.30.194 ~all"
+spf1    IN  TXT     "v=spf1 ip4:172.234.30.194 ~all"
+
+; ── DKIM ────────────────────────────────────────────────────────────────────
+; Selector "mail" (DKIM_SELECTOR) for the signing key in the dkim_keys table.
+; Replace p= with the base64 SPKI public key once generated (see notes).
+; A 2048-bit p= value exceeds BIND's 255-char string limit — split it into
+; adjacent quoted strings exactly as shown; resolvers concatenate them.
+mail._domainkey IN TXT ( "v=DKIM1; k=rsa; "
+                         "p=REPLACE_WITH_FIRST_255_CHARS"
+                         "REPLACE_WITH_REMAINDER" )
+
+; ── DMARC ───────────────────────────────────────────────────────────────────
+; Same policy the app recommends to custom-domain users (DMARC_RECORD).
+_dmarc  IN  TXT     "v=DMARC1; p=quarantine; pct=100; adkim=s; aspf=s"
+
+; ── CAA ─────────────────────────────────────────────────────────────────────
+; Caddy provisions TLS via Let's Encrypt; pin issuance to it.
+@       IN  CAA 0 issue "letsencrypt.org"

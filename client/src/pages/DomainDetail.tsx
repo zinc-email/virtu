@@ -19,6 +19,7 @@ import {
   usePostCustomDomainsCustomDomainIdVerify,
   type VerifyCustomDomainResponse,
 } from "src/gen";
+import { formatZoneFile } from "src/lib/zoneFile";
 import { Dialog } from "src/overlays";
 import { Alert, Button, CodeBlock, KV, KVSwitch, KeyValue, Section, ui } from "src/ui";
 
@@ -317,6 +318,23 @@ export function DomainDetailPage() {
         records={[records.dmarc]}
         check={lastVerify?.dmarc}
       />
+
+      <div className={cx(ui.actionsCenter, css({ marginTop: "2.5rem" }))}>
+        <Button
+          variant="link"
+          onClick={() => {
+            // Plaintext in a new tab. A data: URL can't be opened top-level,
+            // so hand the browser a short-lived Blob URL instead.
+            const url = URL.createObjectURL(
+              new Blob([formatZoneFile(dns.data)], { type: "text/plain;charset=utf-8" }),
+            );
+            window.open(url, "_blank", "noopener");
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+          }}
+        >
+          » View these records as a BIND zone file
+        </Button>
+      </div>
 
       <p className={cx(ui.finePrint, css({ textAlign: "center", marginTop: "3rem" }))}>
         {domain.is_verified

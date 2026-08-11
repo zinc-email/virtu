@@ -13,7 +13,8 @@
 #   VIRTU_HOST=lmnop.email  docker compose -f docker-compose.serve.yml up   # staging
 #
 # TLS is env-driven too (default: Caddy's internal self-signed CA). For a
-# public box set VIRTU_TLS_MODE=acme (+ an ACME email in the global block) or,
+# public box set VIRTU_TLS_MODE to an ACME account email (that IS Caddy's
+# "use ACME" spelling — `tls you@example.com`; `tls acme` is not a thing) or,
 # behind a DNS-challenge provider, VIRTU_TLS_CHALLENGE / VIRTU_TLS_RESOLVERS.
 
 {
@@ -70,11 +71,11 @@ https://{$VIRTU_HOST:dummy.localhost} {
 	}
 }
 
-# The MX hostname. Exists so Caddy obtains + renews the mail.{host} cert,
-# which the SMTP listeners reuse (the mail-certs one-shot copies it into the
-# mail_certs volume — see docker-compose.serve.yml). Browsers land at the
-# apex.
-https://mail.{$VIRTU_HOST:dummy.localhost} {
+# Satellite hostnames, both just redirects to the apex. mail.{host} exists so
+# Caddy obtains + renews the MX cert, which the SMTP listeners reuse (the
+# mail-certs one-shot copies it into the mail_certs volume — see
+# docker-compose.serve.yml); www.{host} so the zone's www record serves.
+https://mail.{$VIRTU_HOST:dummy.localhost}, https://www.{$VIRTU_HOST:dummy.localhost} {
 	redir https://{$VIRTU_HOST:dummy.localhost}{uri} 308
 	tls {$VIRTU_TLS_MODE:internal} {
 		{$VIRTU_TLS_CHALLENGE:}

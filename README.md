@@ -130,7 +130,9 @@ bin/compose -p virtu-serve -f docker-compose.serve.yml up --build -d
 ```
 
 Deploy env vars (all optional; sensible defaults): `VIRTU_HOST` (the box's
-hostname), `VIRTU_TLS_MODE` (default `internal` self-signed; set `acme`),
+hostname), `VIRTU_TLS_MODE` (default `internal` self-signed; set an ACME
+account email — that is Caddy's "use ACME" spelling, e.g.
+`VIRTU_TLS_MODE=you@example.com`),
 `VIRTU_TLS_CHALLENGE` / `VIRTU_TLS_RESOLVERS` (DNS-challenge providers),
 `HTTP_PUBLISH`/`HTTPS_PUBLISH`/`MX_PUBLISH`/`SUBMISSION_PUBLISH`/
 `SUBMISSION_TLS_PUBLISH` (host port bindings). `Caddyfile.dev` is the
@@ -168,8 +170,9 @@ ssh root@box 'bash -s' < bin/host-provision
 # 2. Clone as virtu, then write the two env files (both gitignored):
 ssh root@box 'runuser -u virtu -- git clone https://github.com/zinc-email/virtu.git /opt/virtu'
 #    /opt/virtu/.env          — compose interpolation: VIRTU_HOST=each.email,
-#                               VIRTU_TLS_MODE=acme, and the five *_PUBLISH
-#                               vars bound to 0.0.0.0 (80/443/25/587/465).
+#                               VIRTU_TLS_MODE=<acme account email>, and the
+#                               five *_PUBLISH vars bound to 0.0.0.0
+#                               (80/443/25/587/465).
 #    /opt/virtu/server/.env   — MAIL_DOMAIN, MAIL_HOSTNAME, a real VERP_SECRET,
 #                               SMTP_TLS_CERT_FILE=/mail-certs/fullchain.pem,
 #                               SMTP_TLS_KEY_FILE=/mail-certs/privkey.pem.

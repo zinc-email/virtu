@@ -10,7 +10,9 @@ import {
   createRoute,
   createRouter,
   redirect,
+  useCanGoBack,
   useNavigate,
+  useRouter,
   useRouterState,
 } from "@tanstack/react-router";
 import { useState } from "react";
@@ -221,6 +223,8 @@ const footerLink = css({
 
 function Shell() {
   const navigate = useNavigate();
+  const routerInstance = useRouter();
+  const canGoBack = useCanGoBack();
   const { location } = useRouterState();
   const [menuOpen, setMenuOpen] = useState(false);
   // location.pathname includes the /app basepath; compare against app paths.
@@ -276,17 +280,39 @@ function Shell() {
           <ul className={navList}>
             <li>
               {backTo !== null ? (
-                <Link
-                  to={backTo}
-                  aria-label="Back"
-                  className={css({
-                    display: "block",
-                    color: "primary",
-                    _hover: { color: "primaryHover" },
-                  })}
-                >
-                  <Icon name="arrow-left" size="3rem" />
-                </Link>
+                // A real history back (when there's an in-app entry) so
+                // scroll restoration returns to where the index was left;
+                // deep links fall back to a plain link to the index.
+                canGoBack ? (
+                  <button
+                    type="button"
+                    aria-label="Back"
+                    onClick={() => routerInstance.history.back()}
+                    className={css({
+                      display: "block",
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      color: "primary",
+                      _hover: { color: "primaryHover" },
+                    })}
+                  >
+                    <Icon name="arrow-left" size="3rem" />
+                  </button>
+                ) : (
+                  <Link
+                    to={backTo}
+                    aria-label="Back"
+                    className={css({
+                      display: "block",
+                      color: "primary",
+                      _hover: { color: "primaryHover" },
+                    })}
+                  >
+                    <Icon name="arrow-left" size="3rem" />
+                  </Link>
+                )
               ) : (
                 <Link to={authed ? "/" : "/login"} aria-label="Zinc">
                   <Logo />

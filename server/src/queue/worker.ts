@@ -104,6 +104,55 @@ export async function resolveMxTargets(
 /** Injectable delivery function; the default speaks real SMTP. */
 export type DeliverFn = (row: OutboundMessage) => Promise<DeliveryOutcome>;
 
+/** Resolve a host to its IP addresses (injectable for tests). */
+export type ResolveHostFn = (host: string) => Promise<string[]>;
+
+async function defaultResolveHost(host: string): Promise<string[]> {
+  const results = await dns.lookup(host, { all: true, verbatim: true });
+  return results.map((r) => r.address);
+}
+
+/** IPv4 ranges deliverd must never open an SMTP connection to. */
+function isBlockedIpv4(ip: string): boolean {
+  const parts = ip.split(".").map((p) => Number(p));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    return true; // unparseable => refuse
+  }
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 0) return true; // 0.0.0.0/8 "this network"
+  if (a === 10) return true; // 10/8 private
+  if (a === 127) return true; // 127/8 loopback
+  if (a === 169 && b === 254) return true; // 169.254/16 link-local
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16/12 private
+  if (a === 192 && b === 168) return true; // 192.168/16 private
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64/10 CGNAT
+  return false;
+}
+
+/**
+ * True for addresses deliverd must never connect to: loopback, RFC1918
+ * private, link-local, CGNAT, unspecified — and their IPv6 equivalents
+ * (loopback ::1, unspecified ::, unique-local fc00::/7, link-local fe80::/10),
+ * plus IPv4-mapped IPv6 (::ffff:a.b.c.d). This is the SSRF guard: a recipient
+ * domain whose MX (or implicit-MX A record) points at the internal network
+ * would otherwise make deliverd open a blind SMTP connection there. Anything
+ * unparseable is treated as blocked (fail closed).
+ */
+export function isBlockedAddress(ip: string): boolean {
+  const addr = ip.trim().toLowerCase();
+  if (addr === "") return true;
+  if (addr.includes(":")) {
+    if (addr === "::" || addr === "::1") return true;
+    const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(addr);
+    if (mapped !== null) return isBlockedIpv4(mapped[1]!);
+    const head = addr.split(":")[0] ?? "";
+    if (/^f[cd][0-9a-f]{0,2}$/.test(head)) return true; // fc00::/7 unique-local
+    if (/^fe[89ab][0-9a-f]?$/.test(head)) return true; // fe80::/10 link-local
+    return false;
+  }
+  return isBlockedIpv4(addr);
+}
+
 /** Options for the SMTP delivery path. */
 export interface SmtpDeliveryOptions {
   /** EHLO name (config.mailHostname). */
@@ -114,6 +163,14 @@ export interface SmtpDeliveryOptions {
   maxHosts?: number;
   /** Injectable MX resolution (tests). */
   resolveMx?: (domain: string) => Promise<MxTarget[]>;
+  /** Injectable host->IP resolution for the egress guard (tests). */
+  resolveHost?: ResolveHostFn;
+  /**
+   * Skip the private-address egress guard. Default false. The simulated
+   * internet (docker-compose.test.yml) uses 192.168.x peers and sets this;
+   * production must leave it off (see {@link isBlockedAddress}).
+   */
+  allowPrivateTargets?: boolean;
 }
 
 /**
@@ -140,20 +197,50 @@ export async function deliverOverSmtp(
     };
   }
 
+  const allowPrivate = opts.allowPrivateTargets ?? false;
+  const resolveHost = opts.resolveHost ?? defaultResolveHost;
+
   let lastError = `no MX targets for ${domain}`;
+  let attempted = false;
+  let sawBlocked = false;
   for (const target of targets.slice(0, opts.maxHosts ?? 3)) {
+    // Egress guard (SSRF): resolve the MX ourselves and refuse anything on the
+    // internal network, then connect to the vetted IP so no re-resolution can
+    // swap in a private address after the check.
+    let connectHost = target.exchange;
+    if (!allowPrivate) {
+      let addrs: string[];
+      try {
+        addrs = await resolveHost(target.exchange);
+      } catch (err) {
+        lastError = `${target.exchange}: address lookup failed: ${(err as Error).message}`;
+        continue;
+      }
+      if (addrs.length === 0 || addrs.some(isBlockedAddress)) {
+        sawBlocked = true;
+        lastError = `refusing to deliver to non-public MX ${target.exchange} (${addrs.join(", ") || "no address"})`;
+        continue;
+      }
+      connectHost = addrs[0]!;
+    }
+
+    attempted = true;
     try {
-      return await deliverToHost(row, target.exchange, opts, true);
+      return await deliverToHost(row, connectHost, opts, true);
     } catch (err) {
       if (err instanceof SmtpCommandError) {
-        const outcome = describeReply(`${target.exchange} ${err.command}`, err.reply);
+        const outcome = describeReply(`${connectHost} ${err.command}`, err.reply);
         if (isPermanentCode(err.reply.code)) return { kind: "permanent", error: outcome };
         lastError = outcome;
         continue; // 4xx from this host: try the next one
       }
-      lastError = `${target.exchange}: ${(err as Error).message}`;
+      lastError = `${connectHost}: ${(err as Error).message}`;
     }
   }
+  // Every candidate was a blocked internal address and none was even attempted:
+  // that will never become deliverable, so fail permanently instead of burning
+  // the full retry schedule reconnecting to nothing.
+  if (!attempted && sawBlocked) return { kind: "permanent", error: lastError };
   return { kind: "transient", error: lastError };
 }
 

@@ -18,7 +18,12 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(opts: BuildAppOptions = {}) {
-  const fastify = Fastify({ logger: opts.logger ?? true });
+  // trustProxy: in every topology a Caddy reverse proxy fronts the API (see
+  // CLAUDE.md) and is the only client that can reach api:3000, so honor its
+  // X-Forwarded-For — otherwise req.ip is the proxy's address for every
+  // request and the per-IP rate limits (auth login/verify) collapse into one
+  // global bucket, a trivial pre-auth availability foot-gun.
+  const fastify = Fastify({ logger: opts.logger ?? true, trustProxy: true });
 
   fastify.setValidatorCompiler(validatorCompiler);
   fastify.setSerializerCompiler(serializerCompiler);

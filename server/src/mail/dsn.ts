@@ -75,6 +75,22 @@ export function statusFromReply(remoteReply: string): string {
   return code === null ? "5.0.0" : `${code[1]}.0.0`;
 }
 
+/**
+ * A forward-phase bounce is reported to the OUTSIDE sender, so the diagnostic
+ * must never echo the real backing mailbox — the remote reply text (e.g.
+ * `RCPT TO realmailbox@gmail.com: 550 5.1.1 ... User unknown`) contains it
+ * verbatim. Keep only the SMTP status codes (the machine-readable signal) and
+ * replace the free text, so the sender learns the message failed without
+ * learning who actually receives the alias's mail. Reply-phase bounces go to
+ * the user's own mailbox and keep the verbatim reply.
+ */
+export function sanitizeForwardDiagnostic(remoteReply: string): string {
+  const enhanced = /\b[45]\.\d{1,3}\.\d{1,3}\b/.exec(remoteReply)?.[0];
+  const basic = /\b[45]\d\d\b/.exec(remoteReply)?.[0] ?? "550";
+  const code = enhanced === undefined ? basic : `${basic} ${enhanced}`;
+  return `${code} the recipient's mail server rejected the message`;
+}
+
 /** Collapse line breaks: reply text must not corrupt the line-oriented parts. */
 function singleLine(text: string): string {
   return text.replace(/\s*[\r\n]+\s*/g, " ").trim();

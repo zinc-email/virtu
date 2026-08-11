@@ -7,7 +7,12 @@
  * envelope MAIL FROM <> (null reverse path), From: MAILER-DAEMON@virtu.email,
  * DKIM-signed with the service key. Milton's Maildir receives it with the
  * original headers (including X-Virtu-Test-Id) in the text/rfc822-headers
- * part and the 550 detail in the delivery-status part.
+ * part and a sanitized failure in the delivery-status part.
+ *
+ * Crucially, a forward bounce goes to the OUTSIDE sender, so it must name the
+ * ALIAS as the failed recipient, never the real backing mailbox — and the
+ * diagnostic must not echo the mailbox either. Leaking it would de-anonymize
+ * the alias to anyone who can make a forward hard-bounce.
  *
  * A second doomed message to the same alias must NOT produce a second DSN:
  * DSNs are rate-limited per (user, sender, alias) through sent_alerts.
@@ -103,13 +108,18 @@ describe("story: DSN on permanent forward failure", () => {
     // Null reverse path on the wire — recorded by initech's MTA.
     expect(getHeader(raw, "Return-Path")).toBe("<>");
 
-    // ── delivery-status part: the machine-readable 550 ────────────────
+    // ── delivery-status part: the machine-readable failure, in terms of
+    //    the ALIAS (never the backing mailbox) ─────────────────────────
     expect(text).toContain("Reporting-MTA: dns; mail.virtu.email");
-    expect(text).toContain(`Final-Recipient: rfc822; ${deadLocal}@qmail.com`);
+    expect(text).toContain(`Final-Recipient: rfc822; ${alias.email}`);
     expect(text).toContain("Action: failed");
     expect(text).toMatch(/Status: 5\.\d{1,3}\.\d{1,3}/);
     expect(text).toContain("Diagnostic-Code: smtp;");
-    expect(text).toContain("550");
+    expect(text).toContain("the recipient's mail server rejected the message");
+
+    // ── the real backing mailbox must NEVER leak to the outside sender ─
+    expect(text).not.toContain(deadMailbox.email);
+    expect(text).not.toContain(deadLocal);
 
     // ── returned headers: the original is correlatable ────────────────
     expect(text).toContain(`X-Virtu-Test-Id: ${testId}`);

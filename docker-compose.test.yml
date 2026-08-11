@@ -122,6 +122,9 @@ services:
       SMTP_TLS_CERT_FILE: /repo/server/docker/test/mkcert/virtu.email.pem
       SMTP_TLS_KEY_FILE: /repo/server/docker/test/mkcert/virtu.email-key.pem
       QUEUE_POLL_MS: "500"
+      # The simulated internet's peer MTAs live on 192.168.x — deliverd's
+      # production SSRF egress guard would refuse them, so bypass it here.
+      SMTP_ALLOW_PRIVATE_TARGETS: "true"
     depends_on:
       dns:
         condition: service_started

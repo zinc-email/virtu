@@ -489,12 +489,29 @@ interface LoginSearch {
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
+// Post-login the redirect is handed to window.location.assign, so it must be a
+// same-origin URL inside the /app basepath — otherwise ?redirect=https://evil…
+// turns the login page into an open redirect (credible phishing from a trusted
+// origin). Reject anything that resolves off-origin or outside /app; return a
+// safe RELATIVE path (assign resolves it against our origin, no double-prefix).
+const safeRedirect = (v: unknown): string | undefined => {
+  if (typeof v !== "string" || v === "") return undefined;
+  try {
+    const url = new URL(v, window.location.origin);
+    if (url.origin !== window.location.origin) return undefined;
+    if (url.pathname !== "/app" && !url.pathname.startsWith("/app/")) return undefined;
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return undefined;
+  }
+};
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
   validateSearch: (search: Record<string, unknown>): LoginSearch => ({
     email: str(search.email),
-    redirect: str(search.redirect),
+    redirect: safeRedirect(search.redirect),
     reason: str(search.reason),
   }),
   component: LoginPage,

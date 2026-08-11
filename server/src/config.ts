@@ -3,7 +3,7 @@
 // snake env names via app/env.ts (databaseUrl -> DATABASE_URL, ...).
 
 import { z } from "zod";
-import { loadConfigFromEnv } from "./app/env";
+import { booleanString, loadConfigFromEnv } from "./app/env";
 
 const ConfigSchema = z.object({
   databaseUrl: z.string().default("postgres://virtu:virtu@localhost:5432/virtu"),
@@ -35,6 +35,12 @@ const ConfigSchema = z.object({
     .number()
     .int()
     .default(25 * 1024 * 1024),
+  // deliverd egress guard: when false (the default), deliverd refuses to open
+  // an SMTP connection to a recipient domain whose MX (or implicit-MX A record)
+  // resolves to a private/loopback/link-local address — the SSRF where an
+  // attacker points a domain's MX at the internal network. The simulated
+  // internet legitimately uses 192.168.x peers, so its compose sets this true.
+  smtpAllowPrivateTargets: booleanString(false),
 
   // ── Delivery queue (deliverd) ────────────────────────────────────────────
   queuePollMs: z.coerce.number().int().default(1000),
@@ -45,6 +51,42 @@ const ConfigSchema = z.object({
 
 export const config = loadConfigFromEnv(ConfigSchema);
 export type Config = typeof config;
+
+// Values every reader of this open-source repo knows. They exist as dev
+// defaults so an empty .env runs locally; production must never run on them
+// (a known VERP_SECRET lets anyone forge bounce/reply routing tokens).
+const KNOWN_INSECURE_DEFAULTS = new Set<string>([
+  "insecure-dev-verp-secret-change-me-00",
+  "postgres://virtu:virtu@localhost:5432/virtu",
+]);
+
+/**
+ * Fail closed in production: when VIRTU_ENV (or NODE_ENV) is "production",
+ * refuse to boot on a known-insecure secret rather than start silently
+ * compromised. A real deploy sets VIRTU_ENV=production alongside real secrets
+ * (see server/.env.example). Exported for unit testing; called at import.
+ */
+export function assertProductionSecrets(
+  cfg: Pick<Config, "verpSecret" | "databaseUrl">,
+  env: Record<string, string | undefined> = process.env,
+): void {
+  if ((env.VIRTU_ENV ?? env.NODE_ENV) !== "production") return;
+  const problems: string[] = [];
+  if (KNOWN_INSECURE_DEFAULTS.has(cfg.verpSecret)) {
+    problems.push("VERP_SECRET is unset or the known dev default");
+  }
+  if (KNOWN_INSECURE_DEFAULTS.has(cfg.databaseUrl)) {
+    problems.push("DATABASE_URL is unset or the known dev default");
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `refusing to start with VIRTU_ENV=production and insecure config: ${problems.join("; ")}. ` +
+        "Set real values — see server/.env.example.",
+    );
+  }
+}
+
+assertProductionSecrets(config);
 
 // SimpleLogin's MAX_NB_EMAIL_FREE_PLAN default.
 export const MAX_ALIAS_FREE_PLAN = 5;

@@ -24,7 +24,9 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: virtu
-      POSTGRES_PASSWORD: virtu
+      # Override on a real box (POSTGRES_PASSWORD in /opt/virtu/.env). The
+      # `virtu` default is for the loopback-only local preview only.
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-virtu}"
     ports:
       - "127.0.0.1:${SERVE_DB_PORT:-5433}:5432"
     healthcheck:
@@ -69,7 +71,10 @@ services:
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgres://virtu:virtu@db:5432/virtu"
+      DATABASE_URL: "postgres://virtu:${POSTGRES_PASSWORD:-virtu}@db:5432/virtu"
+      # Set VIRTU_ENV=production on a real box to make config.ts refuse to boot
+      # on known-insecure secret defaults (VERP_SECRET etc.).
+      VIRTU_ENV: "${VIRTU_ENV:-}"
       HOME: /tmp
     init: true
     depends_on:
@@ -92,7 +97,8 @@ services:
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgres://virtu:virtu@db:5432/virtu"
+      DATABASE_URL: "postgres://virtu:${POSTGRES_PASSWORD:-virtu}@db:5432/virtu"
+      VIRTU_ENV: "${VIRTU_ENV:-}"
       HOME: /tmp
     init: true
     depends_on:

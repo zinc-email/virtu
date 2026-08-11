@@ -120,6 +120,43 @@ intake paths take any mail to the VERP address at face value, as before this
 wave; and a broken trash mailbox fails silently — trash copies ride the null
 reverse path by design (PLAN #11), so nothing bumps its nb_failed_checks.)
 
+## Security hardening (2026-08-11)
+
+First security audit pass; fixes landed on `main`. `just check` green.
+
+1. **Forward-bounce DSN no longer leaks the backing mailbox** (was
+   Critical). A permanently-failed forward sends its DSN to the outside
+   sender; it now names the **alias** as the failed recipient and emits a
+   sanitized diagnostic (`sanitizeForwardDiagnostic` in `mail/dsn.ts`,
+   applied in `deliverd.ts`), never `envelope_to` (the real mailbox) or the
+   verbatim remote reply. Reply-phase DSNs (to the user's own mailbox) are
+   unchanged. `dsn.story.test.ts` now asserts the alias appears and the
+   mailbox never does. **Not yet re-run in the story tier** (needs docker;
+   run `just test-net-up && just test-story`).
+2. **Production fail-closed on insecure secret defaults** (was High).
+   `config.ts:assertProductionSecrets` refuses to boot when
+   `VIRTU_ENV`/`NODE_ENV`=`production` and `VERP_SECRET` or `DATABASE_URL`
+   is still the known dev default. Serve stack now sets `VIRTU_ENV` and
+   sources `POSTGRES_PASSWORD` (no longer hardcoded `virtu`); `.env.example`
+   documents both.
+3. **deliverd SSRF egress guard** (was Medium). `queue/worker.ts` refuses to
+   deliver to an MX/implicit-MX resolving to a private/loopback/link-local
+   address and connects to the vetted IP (`isBlockedAddress`,
+   `SMTP_ALLOW_PRIVATE_TARGETS`; the test net sets it true for its 192.168.x
+   peers).
+4. **`trustProxy` enabled** (was Medium) so per-IP auth rate limits work
+   behind Caddy instead of collapsing to one global bucket.
+5. **Login open-redirect closed** (was Medium). `client/app.tsx:safeRedirect`
+   only accepts same-origin `/app` paths for the post-login `?redirect`.
+6. **CSP + HSTS added** (was Medium). `Caddyfile`: strict CSP site-wide
+   (`script-src 'self'`, no eval), HSTS on the public host only.
+
+Deferred (from the same audit, not yet done): custom-domain squatting
+(unverified claim blocks the real owner), reverse-alias enumeration at
+submission RCPT, unbounded SMTP connection count, sudo gating on destructive
+deletes, provider-aliasing in `isOwnMailboxAddress`, TXT-chunk length clamp,
+and flipping the CSP from reasoned-safe to violation-verified after a deploy.
+
 ## Not started
 
 - **Production/deploy story** — _mostly built (2026-08-10), first target

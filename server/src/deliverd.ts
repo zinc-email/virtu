@@ -25,12 +25,12 @@
 import { config } from "./config.ts";
 import { db } from "./db/index.ts";
 import { parseMessage, parseVerp, serializeMessage, type VerpInfo } from "./mail/index.ts";
-import { buildDsn } from "./mail/dsn.ts";
+import { buildDsn, sanitizeForwardDiagnostic } from "./mail/dsn.ts";
 import { signOutbound } from "./mailauth/index.ts";
 import { claimAlertOnce, recordBounce, recordTransactionalBounce } from "./pipeline/bounce.ts";
 import { loadDkimKey } from "./pipeline/dkim.ts";
 import { eq } from "drizzle-orm";
-import { contacts, type EmailLog, mailboxes, type OutboundMessage } from "./db/schema.ts";
+import { aliases, contacts, type EmailLog, mailboxes, type OutboundMessage } from "./db/schema.ts";
 import { deliverOverSmtp, enqueue, type QueueWorker, startQueueWorker } from "./queue/index.ts";
 
 /**
@@ -51,6 +51,16 @@ async function resolveDsnRecipient(log: EmailLog, verp: VerpInfo): Promise<strin
     .select({ email: mailboxes.email })
     .from(mailboxes)
     .where(eq(mailboxes.id, log.mailboxId))
+    .limit(1);
+  return rows[0]?.email ?? null;
+}
+
+/** The alias address for a forward bounce's email_log (what the DSN names). */
+async function resolveAliasEmail(aliasId: number): Promise<string | null> {
+  const rows = await db
+    .select({ email: aliases.email })
+    .from(aliases)
+    .where(eq(aliases.id, aliasId))
     .limit(1);
   return rows[0]?.email ?? null;
 }
@@ -90,6 +100,27 @@ export async function handlePermanentFailure(row: OutboundMessage, error: string
     return;
   }
 
+  // What the DSN names as the failed recipient. A forward bounce goes to the
+  // OUTSIDE sender, so it must describe the failure in terms of the ALIAS —
+  // never row.envelopeTo, which for a forward is the user's real backing
+  // mailbox — and must sanitize the remote reply (which echoes that mailbox).
+  // Leaking it would de-anonymize the alias to anyone who can make a forward
+  // hard-bounce. A reply bounce goes to the user's own mailbox, so it keeps the
+  // real recipient and the verbatim reply.
+  let failedRecipient = row.envelopeTo;
+  let diagnostic = error;
+  if (verp.type === "bounce_forward") {
+    const aliasEmail = log.aliasId === null ? null : await resolveAliasEmail(log.aliasId);
+    if (aliasEmail === null) {
+      console.log(
+        `deliverd: no DSN for #${row.id} — alias for forward bounce no longer resolvable`,
+      );
+      return;
+    }
+    failedRecipient = aliasEmail;
+    diagnostic = sanitizeForwardDiagnostic(error);
+  }
+
   // Rate limit: one DSN per (user, recipient, alias) per 24h via sent_alerts.
   const claimed = await claimAlertOnce(db, {
     userId: log.userId,
@@ -103,8 +134,8 @@ export async function handlePermanentFailure(row: OutboundMessage, error: string
 
   const dsn = buildDsn({
     originalHeaders: parseMessage(row.raw).headers,
-    failedRecipient: row.envelopeTo,
-    remoteReply: error,
+    failedRecipient,
+    remoteReply: diagnostic,
     reportingMta: config.mailHostname,
     mailDomain: config.mailDomain,
     recipient,
@@ -145,7 +176,11 @@ export function startDeliverd(): QueueWorker {
     pollMs: config.queuePollMs,
     batchSize: config.queueBatchSize,
     maxTries: config.queueMaxTries,
-    deliver: (row) => deliverOverSmtp(row, { heloName: config.mailHostname }),
+    deliver: (row) =>
+      deliverOverSmtp(row, {
+        heloName: config.mailHostname,
+        allowPrivateTargets: config.smtpAllowPrivateTargets,
+      }),
     onPermanentFailure: handlePermanentFailure,
   });
 }

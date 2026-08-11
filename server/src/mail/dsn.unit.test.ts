@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildDsn, DSN_SUBJECT, statusFromReply } from "./dsn.ts";
+import { buildDsn, DSN_SUBJECT, sanitizeForwardDiagnostic, statusFromReply } from "./dsn.ts";
 import { parseMessage, serializeMessage } from "./headers.ts";
 
 const encoder = new TextEncoder();
@@ -50,6 +50,33 @@ describe("statusFromReply", () => {
 
   test("never picks a 2.x.x success code out of the reply text", () => {
     expect(statusFromReply("smtp; 250 2.0.0 then 550 refused")).toBe("5.0.0");
+  });
+});
+
+describe("sanitizeForwardDiagnostic", () => {
+  test("keeps the SMTP codes but strips the real mailbox address", () => {
+    const reply = "RCPT TO realmailbox@gmail.com: 550 5.1.1 <realmailbox@gmail.com>: User unknown";
+    const out = sanitizeForwardDiagnostic(reply);
+    expect(out).toBe("550 5.1.1 the recipient's mail server rejected the message");
+    expect(out).not.toContain("realmailbox");
+    expect(out).not.toContain("gmail.com");
+  });
+
+  test("preserves the status class when there is no enhanced code", () => {
+    expect(sanitizeForwardDiagnostic("RCPT TO x@y.com: 552 mailbox full")).toBe(
+      "552 the recipient's mail server rejected the message",
+    );
+  });
+
+  test("defaults to 550 when the reply carries no recognizable code", () => {
+    expect(sanitizeForwardDiagnostic("retries exhausted: connection reset")).toBe(
+      "550 the recipient's mail server rejected the message",
+    );
+  });
+
+  test("derives a clean Status via statusFromReply on its own output", () => {
+    const out = sanitizeForwardDiagnostic("RCPT TO x@y.com: 550 5.7.1 blocked");
+    expect(statusFromReply(out)).toBe("5.7.1");
   });
 });
 

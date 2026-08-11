@@ -6,7 +6,7 @@
 // where it fits and stacks on phones.
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
@@ -21,8 +21,6 @@ import { Alert, Button, CheckboxGroup, Field, Section, SelectField, TextArea, ui
 
 export function AliasNewPage() {
   const navigate = useNavigate();
-  const router = useRouter();
-  const canGoBack = useCanGoBack();
   const queryClient = useQueryClient();
   const [prefix, setPrefix] = useState("");
   const [signedSuffix, setSignedSuffix] = useState<string | null>(null);
@@ -42,7 +40,8 @@ export function AliasNewPage() {
     if (first && signedSuffix === null) setSignedSuffix(first.signed_suffix);
   }, [options.data, signedSuffix]);
   useEffect(() => {
-    const def = mailboxes.data?.mailboxes.find((m) => m.default) ?? mailboxes.data?.mailboxes[0];
+    const verified = mailboxes.data?.mailboxes.filter((m) => m.verified) ?? [];
+    const def = verified.find((m) => m.default) ?? verified[0];
     if (def && !mailboxesSeeded) {
       setMailboxIds([String(def.id)]);
       setMailboxesSeeded(true);
@@ -66,17 +65,13 @@ export function AliasNewPage() {
     },
   });
 
-  // Cancel mirrors the shell's back arrow: a real history back when there is
-  // an in-app entry (restoring the index scroll), the index otherwise.
-  const cancel = () => {
-    if (canGoBack) router.history.back();
-    else void navigate({ to: "/" });
-  };
-
   const suffixOptions =
     options.data?.suffixes.map((s) => ({ value: s.signed_suffix, label: s.suffix })) ?? [];
+  // Only verified mailboxes can receive mail — unverified ones aren't offered.
   const mailboxOptions =
-    mailboxes.data?.mailboxes.map((m) => ({ value: String(m.id), label: m.email })) ?? [];
+    mailboxes.data?.mailboxes
+      .filter((m) => m.verified)
+      .map((m) => ({ value: String(m.id), label: m.email })) ?? [];
   const chosenSuffix = options.data?.suffixes.find((s) => s.signed_suffix === signedSuffix);
   const canSubmit =
     prefix.trim().length > 0 &&
@@ -174,17 +169,13 @@ export function AliasNewPage() {
           onChange={(e) => setNote(e.currentTarget.value)}
         />
 
-        <div className={css({ display: "flex", justifyContent: "flex-end", gap: "0.75rem" })}>
-          <Button type="button" size="tiny" onClick={cancel}>
-            Cancel
-          </Button>
+        <div className={css({ marginTop: "2.42rem" })}>
           <Button
             type="submit"
             variant="submit"
-            size="tiny"
-            className={css({ fontSize: "0.7rem" })}
             loading={create.isPending}
             disabled={!canSubmit}
+            className={css({ width: "100%" })}
           >
             Create alias
           </Button>

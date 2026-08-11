@@ -88,6 +88,20 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
    150-word wordlist, mailbox email-change returns 400.
 5. **PGP** — fields accepted/serialized as unsupported (`support_pgp:false`).
 
+(Resolved 2026-08-10: custom-domain suffixes — `/v5/alias/options` now offers
+each verified custom domain as `is_custom` suffixes: the EMPTY suffix
+(`@domain`, full local-part control, SimpleLogin-style) first, plus a
+random-suffix variant; custom domains sort before shared domains, the user's
+default domain first. `/v3/alias/custom/new` accepts them, checks ownership +
+verified at creation time (the suffix signature is not user-bound) and links
+`custom_domain_id`. Shared-domain suffixes stay forced-random (shared
+namespace). The create-alias modal shows an advisory note when a no-suffix
+option is selected instead of blocking; no dictionary of "guessable" local
+parts by design — with catch-all off a guessed address bounces, with catch-all
+on every local part already delivers, so a blocklist protects nothing.
+SimpleLogin's per-domain `random_prefix_generation` default-flip remains
+unimplemented.)
+
 (Resolved 2026-08-10: transactional bounce intake — the VERP id now resolves
 to the verification_codes row in BOTH intake paths (mx inbound VERP + deliverd
 permanent failure): code invalidated, mailbox `nb_failed_checks` bumped,

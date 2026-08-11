@@ -139,6 +139,14 @@ export function CreateAliasModal({ opened, onClose }: Props) {
           </p>
         )}
 
+        {chosenSuffix?.suffix.startsWith("@") && (
+          <p className={css({ margin: "0 0 1.2rem 0", fontSize: "0.9rem", color: "textDim" })}>
+            Without a random suffix, addresses like{" "}
+            <span className={css({ fontFamily: "mono" })}>billing{chosenSuffix.suffix}</span> are
+            easy to guess, and readable names make your aliases easier to link together.
+          </p>
+        )}
+
         <CheckboxGroup
           label="Mailboxes"
           hint="Where forwarded emails arrive (the first is the primary)"

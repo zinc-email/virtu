@@ -119,6 +119,113 @@ describe("GET /api/v5/alias/options", () => {
   });
 });
 
+describe("custom domain suffixes", () => {
+  test("options: own verified domains come first with an empty and a random suffix", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
+    const domain = `d${crypto.randomUUID().slice(0, 8)}.example.com`;
+    const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(customDomains).values([
+      { userId: userRow.id, domain, verified: true },
+      { userId: userRow.id, domain: unverified },
+    ]);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v5/alias/options",
+      headers: auth(apiKey),
+    });
+    expect(res.statusCode).toBe(200);
+    const suffixes = res.json<{
+      suffixes: { suffix: string; signed_suffix: string; is_custom: boolean }[];
+    }>().suffixes;
+
+    // Empty suffix (full local-part control) first, then the random variant.
+    expect(suffixes[0]!.suffix).toBe(`@${domain}`);
+    expect(suffixes[0]!.is_custom).toBe(true);
+    expect(suffixes[1]!.suffix).toMatch(/^\.[a-z0-9]+@/);
+    expect(suffixes[1]!.suffix.endsWith(`@${domain}`)).toBe(true);
+    expect(suffixes[1]!.is_custom).toBe(true);
+    // The unverified domain offers nothing; shared domains stay random-only.
+    expect(suffixes.some((s) => s.suffix.endsWith(`@${unverified}`))).toBe(false);
+    expect(suffixes.filter((s) => !s.is_custom).every((s) => s.suffix.startsWith("."))).toBe(true);
+  });
+
+  test("empty suffix gives full local-part control and links the custom domain", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
+    const domain = `d${crypto.randomUUID().slice(0, 8)}.example.com`;
+    const [cd] = await db
+      .insert(customDomains)
+      .values({ userId: userRow.id, domain, verified: true })
+      .returning();
+
+    const options = await app.inject({
+      method: "GET",
+      url: "/api/v5/alias/options",
+      headers: auth(apiKey),
+    });
+    const empty = options
+      .json<{ suffixes: { suffix: string; signed_suffix: string }[] }>()
+      .suffixes.find((s) => s.suffix === `@${domain}`);
+    expect(empty).toBeDefined();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v3/alias/custom/new",
+      headers: auth(apiKey),
+      payload: {
+        alias_prefix: "billing.dept",
+        signed_suffix: empty!.signed_suffix,
+        mailbox_ids: [await defaultMailboxId(apiKey)],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<{ email: string }>().email).toBe(`billing.dept@${domain}`);
+
+    const row = (
+      await db
+        .select()
+        .from(aliases)
+        .where(eq(aliases.email, `billing.dept@${domain}`))
+    )[0]!;
+    expect(row.customDomainId).toBe(cd!.id);
+  });
+
+  test("a signed suffix for someone else's or an unverified domain is rejected", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const userRow = (await db.select().from(users).where(eq(users.email, email)))[0]!;
+    const other = await registerAndLogin(app);
+    const otherRow = (await db.select().from(users).where(eq(users.email, other.email)))[0]!;
+    const foreign = `f${crypto.randomUUID().slice(0, 8)}.example.com`;
+    const unverified = `u${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(customDomains).values([
+      { userId: otherRow.id, domain: foreign, verified: true },
+      { userId: userRow.id, domain: unverified },
+    ]);
+
+    // White-box: the signature is not user-bound, so ownership must be
+    // enforced at creation time even for a validly signed suffix.
+    const { SUFFIX_SIGNING_SECRET } = await import("./aliasConfig");
+    const { signSuffix } = await import("./signedSuffix");
+    const mailboxId = await defaultMailboxId(apiKey);
+    for (const suffix of [`@${foreign}`, `@${unverified}`]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v3/alias/custom/new",
+        headers: auth(apiKey),
+        payload: {
+          alias_prefix: "x",
+          signed_suffix: signSuffix(suffix, SUFFIX_SIGNING_SECRET),
+          mailbox_ids: [mailboxId],
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<{ error: string }>()).toEqual({ error: "wrong alias prefix or suffix" });
+    }
+  });
+});
+
 describe("POST /api/v3/alias/custom/new", () => {
   test("creates an alias and returns serialize_alias_info_v2 + alias", async () => {
     const { apiKey } = await registerAndLogin(app);

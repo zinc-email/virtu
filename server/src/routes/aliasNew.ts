@@ -10,11 +10,13 @@
 // (find-or-create on the unique pair) and drives the options
 // `recommendation` object, exactly like SimpleLogin's AliasUsedOn.
 //
+// Suffix policy: shared ALIAS_DOMAINS always get a random suffix (the
+// namespace is shared across users, so squatting/guessing must stay
+// impossible). The user's own verified custom domains additionally offer the
+// EMPTY suffix (`@domain`, is_custom) — full local-part control, SimpleLogin
+// style — plus a random-suffix variant for unguessability.
+//
 // Deviations (documented in the lane report):
-// - Custom-domain SUFFIXES are out of scope: /v5/alias/options builds
-//   suffixes from ALIAS_DOMAINS only (is_custom always false). A verified
-//   custom domain can still be the user's default_alias_domain, which
-//   /alias/random/new honors.
 // - Multi-window rate limits (SimpleLogin ALIAS_LIMIT "100/day;50/hour;
 //   5/minute") collapse to the tightest window, 5/minute.
 
@@ -189,19 +191,34 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       const user = req.user;
       const hostname = req.query.hostname;
 
-      // The user's default domain sorts first (SimpleLogin get_alias_suffixes).
-      const domains = [...ALIAS_DOMAINS].sort((a, b) =>
-        a === user.defaultAliasDomain ? -1 : b === user.defaultAliasDomain ? 1 : 0,
-      );
-      const suffixes = domains.map((domain) => {
-        const suffix = `.${randomAliasSuffixFor(user)}@${domain}`;
-        return {
-          suffix,
-          signed_suffix: signSuffix(suffix, SUFFIX_SIGNING_SECRET),
-          is_custom: false,
-          is_premium: false,
-        };
+      const signed = (suffix: string, isCustom: boolean) => ({
+        suffix,
+        signed_suffix: signSuffix(suffix, SUFFIX_SIGNING_SECRET),
+        is_custom: isCustom,
+        is_premium: false,
       });
+
+      // Custom domains come first, then shared domains; the user's default
+      // domain sorts first within each group (SimpleLogin get_alias_suffixes).
+      // Each verified custom domain offers the empty suffix (full local-part
+      // control) and a random variant; shared domains are always random.
+      const defaultDomainFirst = (a: string, b: string) =>
+        a === user.defaultAliasDomain ? -1 : b === user.defaultAliasDomain ? 1 : 0;
+      const userCustomDomains = (
+        await db
+          .select()
+          .from(customDomains)
+          .where(and(eq(customDomains.userId, user.id), eq(customDomains.verified, true)))
+          .orderBy(customDomains.id)
+      ).sort((a, b) => defaultDomainFirst(a.domain, b.domain));
+      const domains = [...ALIAS_DOMAINS].sort(defaultDomainFirst);
+      const suffixes = [
+        ...userCustomDomains.flatMap((cd) => [
+          signed(`@${cd.domain}`, true),
+          signed(`.${randomAliasSuffixFor(user)}@${cd.domain}`, true),
+        ]),
+        ...domains.map((domain) => signed(`.${randomAliasSuffixFor(user)}@${domain}`, false)),
+      ];
 
       // The latest alias already created for this hostname (AliasUsedOn).
       let recommendation: { alias: string; hostname: string } | undefined;
@@ -290,12 +307,30 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       }
       const aliasSuffix = verdict.suffix;
 
-      // verify_prefix_suffix: `.something@one-of-our-domains`.
+      // verify_prefix_suffix: `.something@one-of-our-domains`, or on the
+      // user's OWN verified custom domain also the empty suffix `@domain`.
+      // The suffix signature is not user-bound, so ownership is checked here.
       const at = aliasSuffix.lastIndexOf("@");
       const suffixDomain = at === -1 ? "" : aliasSuffix.slice(at + 1);
       const suffixLocal = at === -1 ? aliasSuffix : aliasSuffix.slice(0, at);
-      if (!ALIAS_DOMAINS.includes(suffixDomain) || !suffixLocal.startsWith(".")) {
-        throw new HttpError(400, "wrong alias prefix or suffix");
+      let customDomainId: number | null = null;
+      if (ALIAS_DOMAINS.includes(suffixDomain)) {
+        if (!suffixLocal.startsWith(".")) {
+          throw new HttpError(400, "wrong alias prefix or suffix");
+        }
+      } else {
+        const cd = (
+          await db
+            .select()
+            .from(customDomains)
+            .where(eq(customDomains.domain, suffixDomain))
+            .limit(1)
+        )[0];
+        const ownedVerified = cd !== undefined && cd.userId === user.id && cd.verified;
+        if (!ownedVerified || (suffixLocal !== "" && !suffixLocal.startsWith("."))) {
+          throw new HttpError(400, "wrong alias prefix or suffix");
+        }
+        customDomainId = cd.id;
       }
 
       const fullAlias = (aliasPrefix + aliasSuffix).toLowerCase();
@@ -319,6 +354,7 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
               email: fullAlias,
               note,
               name,
+              customDomainId,
               // First mailbox is the primary; the rest go to alias_mailboxes.
               mailboxId: mailboxIds[0]!,
             })

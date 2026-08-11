@@ -18,21 +18,26 @@ import { config } from "../config";
 
 const AliasEnvSchema = z.object({
   // Comma-separated list of domains we create aliases on. The first entry is
-  // the default (used for reverse aliases and random aliases).
-  aliasDomains: z.string().default("virtu.email"),
+  // the default (used for reverse aliases and random aliases). Empty =>
+  // [MAIL_DOMAIN] — the domain aliases live on is ONE fact; set this only to
+  // offer extra domains beyond it.
+  aliasDomains: z.string().default(""),
   aliasSigningSecret: z.string().optional(),
 });
 
 const aliasEnv = loadConfigFromEnv(AliasEnvSchema);
 
-/** Domains available for alias creation ("SL domains" in SimpleLogin terms). */
-export const ALIAS_DOMAINS: readonly string[] = aliasEnv.aliasDomains
+const parsedAliasDomains: readonly string[] = aliasEnv.aliasDomains
   .split(",")
   .map((d) => d.trim().toLowerCase())
   .filter((d) => d.length > 0);
 
+/** Domains available for alias creation ("SL domains" in SimpleLogin terms). */
+export const ALIAS_DOMAINS: readonly string[] =
+  parsedAliasDomains.length > 0 ? parsedAliasDomains : [config.mailDomain];
+
 /** The default alias domain (SimpleLogin FIRST_ALIAS_DOMAIN / EMAIL_DOMAIN). */
-export const FIRST_ALIAS_DOMAIN = ALIAS_DOMAINS[0] ?? "virtu.email";
+export const FIRST_ALIAS_DOMAIN = ALIAS_DOMAINS[0] ?? config.mailDomain;
 
 /** HMAC key for signed suffixes — see the module doc for the derivation. */
 export const SUFFIX_SIGNING_SECRET: string =

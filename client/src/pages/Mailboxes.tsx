@@ -1,9 +1,9 @@
 // Mailboxes ("/mailboxes") — the destination manager: every mailbox mail can
 // be delivered to, with verification (emailed 6-digit code), the default
 // mailbox for new aliases, the trash inbox (where mail for OFF aliases
-// lands), and deletion with an alias-transfer choice. Full-width like the
-// alias index (addresses are long); rows link to the detail page, which owns
-// the controls on small screens.
+// lands), and deletion with an alias-transfer choice. Narrow/left-aligned
+// like the domains index; rows link to the detail page, which owns the
+// controls on small screens.
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -19,7 +19,6 @@ import {
   EntityRow,
   Field,
   FieldRow,
-  Hero,
   Section,
   ui,
 } from "src/ui";
@@ -72,20 +71,21 @@ export function MailboxesPage() {
   };
 
   return (
-    <Section>
-      <Hero title="Your mailboxes.">
-        <p className={ui.lead}>Choose where your mail is delivered.</p>
-        <Checklist
-          items={[
-            "Deliver an alias to several inboxes at once.",
-            "New aliases go to your default mailbox.",
-            <span key="trash">
-              Pick a <strong>trash inbox</strong>: mail for aliases you turned off lands there
-              instead of disappearing.
-            </span>,
-          ]}
-        />
-      </Hero>
+    <Section narrow>
+      <header className={css({ marginBottom: "2.11rem" })}>
+        <h1 className={ui.h1}>Your mailboxes.</h1>
+      </header>
+      <p className={ui.lead}>Choose where your mail is delivered.</p>
+      <Checklist
+        items={[
+          "Deliver an alias to several inboxes at once.",
+          "New aliases go to your default mailbox.",
+          <span key="trash">
+            Pick a <strong>trash inbox</strong>: mail for aliases you turned off lands there instead
+            of disappearing.
+          </span>,
+        ]}
+      />
 
       <form
         onSubmit={(e) => {
@@ -94,7 +94,7 @@ export function MailboxesPage() {
           if (!trimmed) return;
           create.mutate({ data: { email: trimmed } });
         }}
-        className={css({ maxWidth: "29.5rem", margin: "0 auto" })}
+        className={css({ marginTop: "2rem" })}
       >
         {create.isError && <Alert>{apiErrorMessage(create.error)}</Alert>}
         <FieldRow

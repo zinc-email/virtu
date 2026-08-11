@@ -26,6 +26,8 @@ const ICON_PATHS = {
     "M1664 896v128q0 53-32.5 90.5t-84.5 37.5h-704l293 294q38 36 38 90t-38 90l-75 76q-37 37-90 37-52 0-91-37l-651-652q-37-37-37-90 0-52 37-91l651-650q38-38 91-38 52 0 90 38l75 74q38 38 38 91t-38 91l-293 293h704q52 0 84.5 37.5t32.5 90.5z",
   x: "M1490 1322q0 40-28 68l-136 136q-28 28-68 28t-68-28l-294-294-294 294q-28 28-68 28t-68-28l-136-136q-28-28-28-68t28-68l294-294-294-294q-28-28-28-68t28-68l136-136q28-28 68-28t68 28l294 294 294-294q28-28 68-28t68 28l136 136q28 28 28 68t-28 68l-294 294 294 294q28 28 28 68z",
   bars: "M1664 1344v128q0 26-19 45t-45 19h-1408q-26 0-45-19t-19-45v-128q0-26 19-45t45-19h1408q26 0 45 19t19 45zm0-512v128q0 26-19 45t-45 19h-1408q-26 0-45-19t-19-45v-128q0-26 19-45t45-19h1408q26 0 45 19t19 45zm0-512v128q0 26-19 45t-45 19h-1408q-26 0-45-19t-19-45v-128q0-26 19-45t45-19h1408q26 0 45 19t19 45z",
+  "chevron-down":
+    "M1395 736q0 13-10 23l-466 466q-10 10-23 10t-23-10l-466-466q-10-10-10-23t10-23l50-50q10-10 23-10t23 10l393 393 393-393q10-10 23-10t23 10l50 50q10 10 10 23z",
 } as const;
 
 export function Icon({ name, size = "1em" }: { name: keyof typeof ICON_PATHS; size?: string }) {
@@ -220,29 +222,47 @@ export function SelectField({ label, hint, options, id, className, ...props }: S
       <label className={fieldLabel} htmlFor={selectId}>
         {label}
       </label>
-      <select
-        id={selectId}
-        className={cx(
-          controlCss,
-          // The native option popup takes its chrome from color-scheme and its
-          // rows from option{} — without these the browser paints a light
-          // popup against the dark theme.
-          css({
-            cursor: "pointer",
-            colorScheme: "dark",
-            _light: { colorScheme: "light" },
-            "& option": { backgroundColor: "bg", color: "text" },
-          }),
-          className,
-        )}
-        {...props}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+      <div className={css({ position: "relative" })}>
+        <select
+          id={selectId}
+          className={cx(
+            controlCss,
+            // The native option popup takes its chrome from color-scheme and
+            // its rows from option{} — without these the browser paints a
+            // light popup against the dark theme. The native arrow sits flush
+            // against the border, so it's replaced with our own chevron at the
+            // control's 1.1rem inset.
+            css({
+              cursor: "pointer",
+              appearance: "none",
+              paddingRight: "2.8rem",
+              colorScheme: "dark",
+              _light: { colorScheme: "light" },
+              "& option": { backgroundColor: "bg", color: "text" },
+            }),
+            className,
+          )}
+          {...props}
+        >
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <span
+          className={css({
+            position: "absolute",
+            right: "1.1rem",
+            top: "50%",
+            transform: "translateY(-50%)",
+            pointerEvents: "none",
+            color: "control",
+          })}
+        >
+          <Icon name="chevron-down" size="0.9rem" />
+        </span>
+      </div>
       {hint && <div className={fieldHint}>{hint}</div>}
     </div>
   );

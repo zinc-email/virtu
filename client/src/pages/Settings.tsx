@@ -47,12 +47,15 @@ const SUFFIX_OPTIONS = [
   { value: "word", label: "Random word (.cedar381)" },
 ];
 
-// SimpleLogin's sender_format variants, illustrated with its docs' example.
+// SimpleLogin's sender_format variants. The example shows only the display
+// name of the rewritten From header — the address part is always the
+// contact's reverse alias (so replies route back through us and DMARC
+// passes), which is also why the sender's real "@" is spelled out.
 const SENDER_FORMAT_OPTIONS = [
-  { value: "AT", label: "John Wick - john at wick.com" },
-  { value: "A", label: "John Wick - john(a)wick.com" },
-  { value: "NAME_ONLY", label: "John Wick" },
-  { value: "AT_ONLY", label: "john at wick.com" },
+  { value: "AT", label: "Alan Watts - alan.watts at sjsu.edu" },
+  { value: "A", label: "Alan Watts - alan.watts(a)sjsu.edu" },
+  { value: "NAME_ONLY", label: "Alan Watts" },
+  { value: "AT_ONLY", label: "alan.watts at sjsu.edu" },
   { value: "NO_NAME", label: "No name" },
 ];
 
@@ -247,7 +250,7 @@ export function SettingsPage() {
           />
           <SelectField
             label="Sender address format"
-            hint="How the original sender appears on emails forwarded to you"
+            hint="How the original sender appears in the From name — the address itself is always the reverse alias you reply to"
             options={SENDER_FORMAT_OPTIONS}
             value={setting.data.sender_format}
             onChange={(e) => save({ sender_format: e.currentTarget.value })}

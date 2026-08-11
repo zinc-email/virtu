@@ -39,7 +39,7 @@ const NAV_ITEMS = [
   { to: "/mailboxes", label: "Mailboxes" },
   { to: "/domains", label: "Domains" },
   { to: "/settings", label: "Settings" },
-  { to: "/billing", label: "Billing" },
+  { to: "/billing", label: "Account" },
 ];
 
 const navList = css({

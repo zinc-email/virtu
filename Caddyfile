@@ -69,3 +69,15 @@ https://{$VIRTU_HOST:dummy.localhost} {
 		{$VIRTU_TLS_RESOLVERS:}
 	}
 }
+
+# The MX hostname. Exists so Caddy obtains + renews the mail.{host} cert,
+# which the SMTP listeners reuse (the mail-certs one-shot copies it into the
+# mail_certs volume — see docker-compose.serve.yml). Browsers land at the
+# apex.
+https://mail.{$VIRTU_HOST:dummy.localhost} {
+	redir https://{$VIRTU_HOST:dummy.localhost}{uri} 308
+	tls {$VIRTU_TLS_MODE:internal} {
+		{$VIRTU_TLS_CHALLENGE:}
+		{$VIRTU_TLS_RESOLVERS:}
+	}
+}

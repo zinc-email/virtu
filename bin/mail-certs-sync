@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# mail-certs-sync — copy the MAIL_HOSTNAME TLS cert from Caddy's storage into
+# the mail_certs volume and bounce maild so it picks the cert up (the SMTP
+# listeners read cert files once at startup — see server/src/pipeline/tls.ts).
+#
+# Run on a deploy box after the first `up` (once Caddy has obtained the cert)
+# and from a weekly cron for renewals. Idempotent; restarts maild every run,
+# which drops SMTP for ~2s (peers retry, that's SMTP's job).
+#
+# Usage (repo root): bin/mail-certs-sync
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+bin/compose -f docker-compose.serve.yml run --rm mail-certs
+bin/compose -f docker-compose.serve.yml restart maild

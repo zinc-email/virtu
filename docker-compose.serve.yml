@@ -11,14 +11,17 @@
 #   VIRTU_HOST=zinc.email HTTP_PUBLISH=0.0.0.0:80 HTTPS_PUBLISH=0.0.0.0:443 \
 #     bin/compose -f docker-compose.serve.yml up --build -d
 #
-# NOTE: this is the WEB stack (db, api, built frontends, proxy). The mail
-# processes (mx/submission/deliverd) and host provisioning are the rest of the
-# deploy lane, not yet wired here.
+# The full stack: db, api, built frontends behind Caddy, and maild (all three
+# mail processes in one). Mail listeners publish on loopback high ports by
+# default so the local preview never squats 25/587/465; a real box sets
+# MX_PUBLISH etc. (see README "Deploy"). Per-box mail config + secrets live in
+# server/.env (bind-mounted with the repo), NOT here.
 
 services:
   db:
     image: "postgres:17-alpine"
     shm_size: 128mb
+    restart: unless-stopped
     environment:
       POSTGRES_USER: virtu
       POSTGRES_PASSWORD: virtu
@@ -29,6 +32,18 @@ services:
       interval: 5s
     volumes:
       - "serve_pg_data:/var/lib/postgresql/data:rw"
+
+  # One-shot: install server deps into the bind mount ONCE, so api and maild
+  # don't race two concurrent `bun install`s over the same node_modules.
+  server-deps:
+    image: "oven/bun:1.3"
+    working_dir: /app/server
+    command: ["bun", "install"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      HOME: /tmp
+    volumes:
+      - ".:/app"
 
   # One-shot: build the client SDK + bundle and the homepage into dist/.
   build:
@@ -50,8 +65,9 @@ services:
   api:
     image: "oven/bun:1.3"
     working_dir: /app/server
-    command: ["sh", "-c", "bun install && bun src/api.ts"]
+    command: ["bun", "src/api.ts"]
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    restart: unless-stopped
     environment:
       DATABASE_URL: "postgres://virtu:virtu@db:5432/virtu"
       HOME: /tmp
@@ -59,12 +75,75 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      server-deps:
+        condition: service_completed_successfully
     volumes:
       - ".:/app"
+
+  # All three mail processes (mx :25, submission :587/:465, deliverd) in one
+  # Bun process — right-sized for a single-box deploy (see server/src/maild.ts).
+  # MAIL_DOMAIN/MAIL_HOSTNAME/VERP_SECRET/SMTP_TLS_* come from server/.env;
+  # the TLS cert is Caddy's, copied into the mail_certs volume by the
+  # mail-certs one-shot (bin/mail-certs-sync reruns it after renewals).
+  maild:
+    image: "oven/bun:1.3"
+    working_dir: /app/server
+    command: ["bun", "src/maild.ts"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://virtu:virtu@db:5432/virtu"
+      HOME: /tmp
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+      server-deps:
+        condition: service_completed_successfully
+    ports:
+      - "${MX_PUBLISH:-127.0.0.1:8025}:25"
+      - "${SUBMISSION_PUBLISH:-127.0.0.1:8587}:587"
+      - "${SUBMISSION_TLS_PUBLISH:-127.0.0.1:8465}:465"
+    volumes:
+      - ".:/app"
+      - "mail_certs:/mail-certs:ro"
+
+  # One-shot: copy MAIL_HOSTNAME's cert out of Caddy's storage into the
+  # mail_certs volume as fullchain.pem/privkey.pem readable by maild's
+  # unprivileged user. Runs as root (Caddy's keys are 0600). Waits up to
+  # 2 minutes for the cert (first boot: Caddy is still doing ACME), then
+  # exits 0 either way — bin/mail-certs-sync is the blocking front door.
+  mail-certs:
+    image: "alpine:3"
+    command:
+      - "sh"
+      - "-c"
+      - |
+        for i in $$(seq 1 24); do
+          src=$$(find /caddy/caddy/certificates -type d -name "$$MAIL_CERT_HOST" 2>/dev/null | head -1)
+          [ -n "$$src" ] && break
+          echo "mail-certs: waiting for Caddy to obtain the $$MAIL_CERT_HOST cert ($$i/24)"
+          sleep 5
+        done
+        if [ -z "$$src" ]; then
+          echo "mail-certs: no cert for $$MAIL_CERT_HOST in Caddy storage - skipping"
+          exit 0
+        fi
+        install -m 644 -o "$$APP_UID" -g "$$APP_GID" "$$src/$$MAIL_CERT_HOST.crt" /out/fullchain.pem
+        install -m 600 -o "$$APP_UID" -g "$$APP_GID" "$$src/$$MAIL_CERT_HOST.key" /out/privkey.pem
+        echo "mail-certs: synced $$MAIL_CERT_HOST -> mail_certs volume"
+    environment:
+      MAIL_CERT_HOST: "mail.${VIRTU_HOST:-dummy.localhost}"
+      APP_UID: "${APP_UID:-1000}"
+      APP_GID: "${APP_GID:-1000}"
+    volumes:
+      - "serve_caddy_data:/caddy:ro"
+      - "mail_certs:/out"
 
   # The universal reverse proxy — serves the built dists, terminates TLS.
   proxy:
     image: "caddy:2-alpine"
+    restart: unless-stopped
     ports:
       - "${HTTP_PUBLISH:-127.0.0.1:8081}:80"
       - "${HTTPS_PUBLISH:-127.0.0.1:8443}:443"
@@ -87,3 +166,4 @@ services:
 volumes:
   serve_pg_data:
   serve_caddy_data:
+  mail_certs:

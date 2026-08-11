@@ -122,22 +122,27 @@ reverse path by design (PLAN #11), so nothing bumps its nb_failed_checks.)
 
 ## Not started
 
-- **Production/deploy story** — mail ports 25/465/587 in the serve stack,
-  outbound deliverability setup (rDNS, SPF record, DKIM key publication,
-  DMARC), backups, host provisioning docs, a deploy trigger. _Web serving is
-  built and verified:_ the SPA is served under `/app` (rsbuild base + router
-  basepath); a **universal `Caddyfile`** (host + TLS from env, `VIRTU_HOST`)
-  serves the built `www/dist` + `client/dist` and proxies `/api`, run by
-  `docker-compose.serve.yml` — one config for local prod-like preview, **zinc**
-  (prod), and **lmnop** (staging). Verified end-to-end against real builds at
-  `https://localhost:8443` (homepage, SPA deep links + hashed assets under
-  `/app/static`, `/api`). Dev uses `Caddyfile.dev` (HMR proxy) via `just up`.
-  What remains: fold the mail processes into the serve stack, per-box TLS/DNS,
-  host provisioning, and the deploy trigger.
+- **Production/deploy story** — _mostly built (2026-08-10), first target
+  each.email:_ the serve stack (`docker-compose.serve.yml`) now runs the whole
+  app — db, api, built frontends behind the **universal `Caddyfile`**, and
+  `maild` (25/587/465, restart policies, a `server-deps` one-shot so api +
+  maild don't race `bun install`). Mail TLS reuses Caddy's cert: a
+  `mail.{VIRTU_HOST}` site exists for issuance, the `mail-certs` one-shot
+  copies it into the `mail_certs` volume, `bin/mail-certs-sync` re-syncs +
+  bounces maild after renewals (listeners read certs once at startup — weekly
+  cron on the box). Provisioning + deploy are `bin/host-provision` (swap,
+  docker, virtu user) and `bin/host-deploy` (pull, build, up, drizzle push,
+  cert sync); `bin/dkim-ensure` mints/prints the service-domain DKIM key.
+  Runbook: README "Deploy"; annotated DNS record set: `each.email.zone`.
+  Each-box facts (2026-08-10): each.email rDNS → mail.each.email, outbound 25
+  open at Linode, Cloudflare DNS-only records live.
+  What remains: backups, a deploy trigger (CI), Linode Cloud Firewall, the
+  zinc/lmnop boxes themselves.
   **Secrets management**: `server/.env` is gitignored, so nothing sensitive is
   in git — CI and any deploy must provide the production secrets out-of-band
   (`VERP_SECRET`, TLS cert/key paths, and the Stripe keys if billing is on).
-  `server/.env.example` is the checklist of what to inject.
+  `server/.env.example` is the checklist of what to inject; on a box the
+  compose-interpolation vars live in `/opt/virtu/.env` (also gitignored).
 - **Mobile shells** — post-MVP by decision #7 (native Swift/Kotlin over the
   web client; share-extension is the flagship feature + App Store 4.2 answer).
 

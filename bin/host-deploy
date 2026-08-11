@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# host-deploy — update a deploy box to the current origin/main: pull, rebuild,
+# restart the serve stack, push the schema, sync mail certs. Idempotent; run
+# it for every deploy after the one-time setup in README "Deploy" (host
+# provisioned, /opt/virtu cloned, .env files written).
+#
+# Run on the box, from the repo root, as the app user: bin/host-deploy
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+git pull --ff-only
+
+# Build the frontends + (re)start everything. --build re-runs the one-shots
+# (frontend build, server deps, mail-certs) against the pulled tree.
+bin/compose -f docker-compose.serve.yml up --build -d
+
+# Push-based migrations (PLAN: no migration files) — apply schema.ts to the
+# live DB. --force: non-interactive.
+bin/compose -f docker-compose.serve.yml exec -T api bun drizzle-kit push --force
+
+# Pick up the (possibly fresh) mail cert and restart maild on top of it.
+bin/mail-certs-sync

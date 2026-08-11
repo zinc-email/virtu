@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# dkim-ensure — find-or-create the service domain's DKIM signing key in the
+# dkim_keys table (domain MAIL_DOMAIN, selector DKIM_SELECTOR from
+# server/.env) and print the TXT record to publish. Idempotent.
+#
+# Runs inside the serve stack's api container (the stack must be up):
+#   bin/dkim-ensure
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+bin/compose -f docker-compose.serve.yml exec -T api bun run src/scripts/dkimEnsure.ts

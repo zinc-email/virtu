@@ -118,26 +118,72 @@ Environments are named **zinc** (prod, `zinc.email`) and **lmnop** (staging,
 `lmnop.email`) — never "prod"/"staging". The plan is a single box per
 environment, vertically scaled, running the whole stack via docker compose.
 
-`docker-compose.serve.yml` builds the frontends and runs the universal proxy:
+`docker-compose.serve.yml` runs the whole stack — db, api, built frontends
+behind Caddy, and `maild` (mx + submission + deliverd in one process, ports
+25/587/465):
 
 ```sh
-# Local prod-like preview (own project, self-signed cert; won't touch dev):
+# Local prod-like preview (own project, self-signed cert; won't touch dev;
+# mail listeners on loopback high ports):
 bin/compose -p virtu-serve -f docker-compose.serve.yml up --build -d
 #   -> https://localhost:8443   (curl -k)
-
-# A box (zinc shown; use lmnop.email for staging):
-VIRTU_HOST=zinc.email HTTP_PUBLISH=0.0.0.0:80 HTTPS_PUBLISH=0.0.0.0:443 \
-  bin/compose -f docker-compose.serve.yml up --build -d
 ```
 
 Deploy env vars (all optional; sensible defaults): `VIRTU_HOST` (the box's
-hostname), `VIRTU_TLS_MODE` (default `internal` self-signed; set for ACME),
-`VIRTU_TLS_CHALLENGE` / `VIRTU_TLS_RESOLVERS` (DNS-challenge providers).
-`Caddyfile.dev` is the dev-only variant (proxies the HMR dev servers).
+hostname), `VIRTU_TLS_MODE` (default `internal` self-signed; set `acme`),
+`VIRTU_TLS_CHALLENGE` / `VIRTU_TLS_RESOLVERS` (DNS-challenge providers),
+`HTTP_PUBLISH`/`HTTPS_PUBLISH`/`MX_PUBLISH`/`SUBMISSION_PUBLISH`/
+`SUBMISSION_TLS_PUBLISH` (host port bindings). `Caddyfile.dev` is the
+dev-only variant (proxies the HMR dev servers).
 
-> Web serving is wired; the rest of the deploy lane — the mail processes
-> (mx/submission/deliverd) in the serve stack, host provisioning, and per-box
-> TLS/DNS — is still open. See STATE.md.
+### Mail TLS
+
+Caddy owns TLS for the box, including the MX hostname: the `Caddyfile` has a
+`mail.{VIRTU_HOST}` site purely so Caddy obtains + renews that cert, and the
+`mail-certs` one-shot copies it into the `mail_certs` volume as
+`/mail-certs/fullchain.pem` + `privkey.pem`, which `server/.env` points the
+SMTP listeners at. The listeners read cert files **once at startup**, so
+renewals need `bin/mail-certs-sync` (sync + maild restart) — run it from a
+weekly root cron on the box:
+
+```sh
+printf '#!/bin/sh\ncd /opt/virtu && runuser -u virtu -- bin/mail-certs-sync\n' \
+  > /etc/cron.weekly/virtu-mail-certs && chmod +x /etc/cron.weekly/virtu-mail-certs
+```
+
+### A new box, start to finish
+
+DNS first (see `each.email.zone` for the full annotated record set): apex A +
+`mail` A → the box IP (**DNS-only** if Cloudflare — the orange cloud breaks
+both SMTP and ACME), `MX 10 mail.{domain}`, SPF, DMARC. Then rDNS — outbound
+IP must reverse-resolve to the MX hostname (Linode:
+`linode-cli networking ip-update <ip> --rdns mail.{domain}`) — and verify
+outbound port 25 isn't blocked by the host
+(`ssh root@box 'bash -c "exec 3<>/dev/tcp/gmail-smtp-in.l.google.com/25 && head -1 <&3"'`).
+
+```sh
+# 1. Provision (root): swap, docker, git, the virtu app user (uid 1000).
+ssh root@box 'bash -s' < bin/host-provision
+
+# 2. Clone as virtu, then write the two env files (both gitignored):
+ssh root@box 'runuser -u virtu -- git clone https://github.com/zinc-email/virtu.git /opt/virtu'
+#    /opt/virtu/.env          — compose interpolation: VIRTU_HOST=each.email,
+#                               VIRTU_TLS_MODE=acme, and the five *_PUBLISH
+#                               vars bound to 0.0.0.0 (80/443/25/587/465).
+#    /opt/virtu/server/.env   — MAIL_DOMAIN, MAIL_HOSTNAME, a real VERP_SECRET,
+#                               SMTP_TLS_CERT_FILE=/mail-certs/fullchain.pem,
+#                               SMTP_TLS_KEY_FILE=/mail-certs/privkey.pem.
+#                               See server/.env.example.
+
+# 3. Deploy (as virtu, from /opt/virtu) — build, up, schema push, cert sync:
+bin/host-deploy
+
+# 4. Once per domain: mint the DKIM key and publish the TXT it prints:
+bin/dkim-ensure
+```
+
+Redeploys are step 3 alone. `bin/host-deploy` is idempotent: pull, rebuild,
+`up -d`, `drizzle-kit push`, cert sync.
 
 ## License
 

@@ -6,7 +6,7 @@
 // password is shown exactly once at creation).
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import {
@@ -29,6 +29,7 @@ import {
   CopyButton,
   Field,
   FieldRow,
+  Icon,
   KV,
   KeyValue,
   Section,
@@ -195,10 +196,24 @@ export function SettingsPage() {
   const setting = useGetSetting();
   const domains = useGetV2SettingDomains();
 
+  // "Just saved" feedback: remember which setting the last successful PATCH
+  // carried and show a transient check on that control (a "Saved." note at
+  // the bottom of the page is invisible once you've scrolled). A fresh
+  // object per save restarts the timer even for a re-save of the same key.
+  const [savedField, setSavedField] = useState<{ key: string } | null>(null);
+  useEffect(() => {
+    if (savedField === null) return;
+    const id = setTimeout(() => setSavedField(null), 2000);
+    return () => clearTimeout(id);
+  }, [savedField]);
+  const justSaved = (key: keyof UpdateSettingRequest) => savedField?.key === key;
+
   const update = usePatchSetting({
     mutation: {
-      onSuccess: (data) => {
+      onSuccess: (data, vars) => {
         queryClient.setQueryData(getSettingQueryKey(), data);
+        const key = Object.keys(vars.data ?? {})[0];
+        if (key !== undefined) setSavedField({ key });
       },
     },
   });
@@ -231,6 +246,7 @@ export function SettingsPage() {
             value={setting.data.alias_generator}
             onChange={(e) => save({ alias_generator: e.currentTarget.value })}
             disabled={update.isPending}
+            saved={justSaved("alias_generator")}
           />
           <SelectField
             label="Default domain"
@@ -239,6 +255,7 @@ export function SettingsPage() {
             value={setting.data.random_alias_default_domain}
             onChange={(e) => save({ random_alias_default_domain: e.currentTarget.value })}
             disabled={update.isPending || domains.isPending}
+            saved={justSaved("random_alias_default_domain")}
           />
           <SelectField
             label="Custom-alias suffix"
@@ -247,6 +264,7 @@ export function SettingsPage() {
             value={setting.data.random_alias_suffix}
             onChange={(e) => save({ random_alias_suffix: e.currentTarget.value })}
             disabled={update.isPending}
+            saved={justSaved("random_alias_suffix")}
           />
           <SelectField
             label="Sender address format"
@@ -255,6 +273,7 @@ export function SettingsPage() {
             value={setting.data.sender_format}
             onChange={(e) => save({ sender_format: e.currentTarget.value })}
             disabled={update.isPending}
+            saved={justSaved("sender_format")}
           />
 
           <div
@@ -272,16 +291,20 @@ export function SettingsPage() {
               label="Email notifications"
             />
             <div>
-              <div>Email notifications</div>
+              <div className={css({ display: "flex", alignItems: "center", gap: "0.5rem" })}>
+                Email notifications
+                {/* Always in the flow (opacity-toggled) so appearing never shifts widths. */}
+                <span
+                  aria-hidden="true"
+                  className={css({ color: "primary", transition: "opacity 0.3s" })}
+                  style={{ opacity: justSaved("notification") ? 1 : 0 }}
+                >
+                  <Icon name="check" size="0.8rem" />
+                </span>
+              </div>
               <div className={ui.finePrint}>Bounce alerts and account notices</div>
             </div>
           </div>
-
-          {update.isSuccess && !update.isPending && (
-            <p className={css({ marginTop: "1.5rem", color: "primary", fontSize: "0.9rem" })}>
-              Saved.
-            </p>
-          )}
         </div>
       )}
 

@@ -213,9 +213,23 @@ interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label: string;
   hint?: string;
   options: { value: string; label: string }[];
+  /**
+   * Transient "just saved" feedback: while true the chevron slot shows a
+   * check instead. The icon lives in the absolutely-positioned overlay, so
+   * toggling it never shifts layout.
+   */
+  saved?: boolean;
 }
 
-export function SelectField({ label, hint, options, id, className, ...props }: SelectFieldProps) {
+export function SelectField({
+  label,
+  hint,
+  options,
+  saved,
+  id,
+  className,
+  ...props
+}: SelectFieldProps) {
   const selectId = id ?? props.name ?? label.toLowerCase();
   return (
     <div className={fieldWrap}>
@@ -258,9 +272,11 @@ export function SelectField({ label, hint, options, id, className, ...props }: S
             transform: "translateY(-50%)",
             pointerEvents: "none",
             color: "control",
+            "&[data-saved]": { color: "primary" },
           })}
+          data-saved={saved ? "" : undefined}
         >
-          <Icon name="chevron-down" size="0.9rem" />
+          <Icon name={saved ? "check" : "chevron-down"} size="0.9rem" />
         </span>
       </div>
       {hint && <div className={fieldHint}>{hint}</div>}

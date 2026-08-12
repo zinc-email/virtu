@@ -950,12 +950,16 @@ export function EntityRow({
   );
 }
 
-// ── Alerts (legacy: amber fill = error, teal fill = success) ─────────────────
+// ── Alerts (outline in the alert color; page bg + normal text inside) ────────
 
 const alertBase = css({
   padding: "1.4rem",
   margin: "2rem 0",
-  borderRadius: "0.25rem",
+  borderRadius: "0.5rem",
+  borderWidth: "0.2rem",
+  borderStyle: "solid",
+  backgroundColor: "transparent",
+  color: "text",
   fontSize: "0.94rem",
   lineHeight: "1.4rem",
 });
@@ -974,9 +978,7 @@ export function Alert({
       role="alert"
       className={cx(
         alertBase,
-        kind === "error"
-          ? css({ backgroundColor: "accent", color: "onAccent" })
-          : css({ backgroundColor: "primary", color: "onPrimary" }),
+        kind === "error" ? css({ borderColor: "accent" }) : css({ borderColor: "primary" }),
         className,
       )}
     >

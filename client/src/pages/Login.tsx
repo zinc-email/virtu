@@ -22,6 +22,11 @@ function looksLikeEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+// Resend cooldown, purely a UX affordance: the server enforces the real
+// budget (3 login emails per address per hour → 429). This just spaces the
+// clicks and makes "you can't resend yet" visible instead of surprising.
+const RESEND_COOLDOWN_S = 60;
+
 export function LoginPage() {
   const navigate = useNavigate();
   const search = useSearch({ from: "/login" });
@@ -29,9 +34,21 @@ export function LoginPage() {
   // The homepage CTA (www CtaForm) submits GET /app/login?email=…; prefill it.
   const [email, setEmail] = useState(search.email ?? "");
   const [code, setCode] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown === 0) return;
+    const id = setTimeout(() => setCooldown(cooldown - 1), 1000);
+    return () => clearTimeout(id);
+  }, [cooldown]);
 
   const request = usePostAuthLogin({
-    mutation: { onSuccess: () => setPhase("code") },
+    mutation: {
+      onSuccess: () => {
+        setPhase("code");
+        setCooldown(RESEND_COOLDOWN_S);
+      },
+    },
   });
 
   const verify = usePostAuthVerify({
@@ -209,11 +226,15 @@ export function LoginPage() {
             </button>
             <button
               type="button"
-              className={ui.link}
+              className={cx(ui.link, css({ _disabled: { color: "textDim", cursor: "default" } }))}
               onClick={() => submitEmail()}
-              aria-disabled={request.isPending}
+              disabled={request.isPending || cooldown > 0}
             >
-              {request.isPending ? "Resending…" : "Resend code"}
+              {request.isPending
+                ? "Resending…"
+                : cooldown > 0
+                  ? `Resend code (${cooldown}s)`
+                  : "Resend code"}
             </button>
           </div>
         </div>

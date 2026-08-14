@@ -21,8 +21,12 @@ git checkout --detach "${1:-origin/main}"
 bin/compose -f docker-compose.serve.yml up --build -d
 
 # Push-based migrations (PLAN: no migration files) — apply schema.ts to the
-# live DB. --force: non-interactive.
-bin/compose -f docker-compose.serve.yml exec -T api bun drizzle-kit push --force
+# live DB. --force auto-accepts data-loss statements, but drizzle-kit's
+# renderer still hard-requires a TTY — and *exits 0* on that error, silently
+# skipping the push (bit us on the first SSH deploy). script(1) lends it a
+# PTY; -e propagates drizzle's real exit code.
+bin/compose -f docker-compose.serve.yml exec -T api \
+  script -qec "bun drizzle-kit push --force" /dev/null
 
 # Pick up the (possibly fresh) mail cert and restart maild on top of it.
 bin/mail-certs-sync

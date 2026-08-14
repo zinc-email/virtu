@@ -7,6 +7,7 @@
       "devDependencies": {
         "@biomejs/biome": "^2.4.15",
         "lefthook": "^2.1.8",
+        "paraspace": "^0.4.2",
       },
     },
   },
@@ -50,5 +51,7 @@
     "lefthook-windows-arm64": ["lefthook-windows-arm64@2.1.10", "", { "os": "win32", "cpu": "arm64" }, "sha512-5Q6etF0Fla2DDA4ilDySrdNgiR5+W7cJZwnZ69Je3kvWCaWm4wnkuc8FEdjp3kiL2x3ZXipdI00f5vpO8aWmog=="],
 
     "lefthook-windows-x64": ["lefthook-windows-x64@2.1.10", "", { "os": "win32", "cpu": "x64" }, "sha512-c/XH8YZtylG4XaxzqFfXluvq2LXq2W/p54Bnzn3+Z7E5X2Fk3JlFJAibulMbIt2+w8T7UI/r97ok5GqE4kGaeA=="],
+
+    "paraspace": ["paraspace@0.4.2", "", { "os": [ "linux", "darwin", ], "bin": { "para": "bin/para" } }, "sha512-OdP0rlOJw3X+mJP7V2ZE6u7D4GLImjOOKh/+yNpk6Rll8u4xI7CEt0+mSlzh23GRDXk40i2ctM1jAV060kJetA=="],
   }
 }

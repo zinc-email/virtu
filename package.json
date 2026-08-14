@@ -4,6 +4,7 @@
   "description": "Repo-root manifest for cross-workspace tooling (Biome formatter, lefthook). Not a runtime package — server/ and client/ each own their own package.json.",
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
-    "lefthook": "^2.1.8"
+    "lefthook": "^2.1.8",
+    "paraspace": "^0.4.2"
   }
 }

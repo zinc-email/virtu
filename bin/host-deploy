@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # host-deploy — update a deploy box to a ref (default origin/main): fetch +
-# checkout, rebuild, restart the serve stack, push the schema, sync mail
-# certs. Idempotent; run it for every deploy after the one-time setup in
-# README "Deploy" (host provisioned, /opt/virtu cloned, .env files written).
+# checkout, rebuild, restart the serve stack, sync mail certs. Idempotent;
+# run it for every deploy after the one-time setup in README "Deploy" (host
+# provisioned, /opt/virtu cloned, .env files written).
+#
+# Deliberately does NOT touch the DB schema — unattended `drizzle-kit push
+# --force` auto-accepts data-loss statements. Schema changes are applied
+# manually via bin/host-db-push (interactive, reviews lossy SQL).
 #
 # Run on the box, from the repo root, as the app user:
 #   bin/host-deploy [ref]     # ref: a v* tag (what the deploy workflow
@@ -20,13 +24,12 @@ git checkout --detach "${1:-origin/main}"
 # (frontend build, server deps, mail-certs) against the pulled tree.
 bin/compose -f docker-compose.serve.yml up --build -d
 
-# Push-based migrations (PLAN: no migration files) — apply schema.ts to the
-# live DB. --force auto-accepts data-loss statements, but drizzle-kit's
-# renderer still hard-requires a TTY — and *exits 0* on that error, silently
-# skipping the push (bit us on the first SSH deploy). script(1) lends it a
-# PTY; -e propagates drizzle's real exit code.
-bin/compose -f docker-compose.serve.yml exec -T api \
-  script -qec "bun drizzle-kit push --force" /dev/null
-
 # Pick up the (possibly fresh) mail cert and restart maild on top of it.
 bin/mail-certs-sync
+
+cat <<'EOF'
+
+host-deploy: done — schema NOT pushed.
+  If this release changes server/src/db/schema.ts, apply it now:
+    ssh -t <box>  ->  cd /opt/virtu && bin/host-db-push
+EOF

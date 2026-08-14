@@ -232,8 +232,12 @@ for the next controller).
   copies it into the `mail_certs` volume, `bin/mail-certs-sync` re-syncs +
   bounces maild after renewals (listeners read certs once at startup — weekly
   cron on the box). Provisioning + deploy are `bin/host-provision` (swap,
-  docker, virtu user) and `bin/host-deploy` (pull, build, up, drizzle push,
-  cert sync — takes an optional ref, defaults origin/main); `bin/dkim-ensure`
+  docker, virtu user) and `bin/host-deploy` (fetch + checkout, build, up,
+  cert sync — takes an optional ref, defaults origin/main; **never pushes
+  the schema** — unattended `push --force` auto-accepts data-loss SQL, and
+  drizzle-kit without a TTY errors yet exits 0, a silent skip). Schema
+  changes are manual: `bin/host-db-push` (interactive drizzle push, no
+  --force, prompts on lossy statements); `bin/dkim-ensure`
   mints/prints the service-domain DKIM key.
   Runbook: README "Deploy"; annotated DNS record set: `each.email.zone`.
   Each-box facts (2026-08-10): each.email rDNS → mail.each.email, outbound 25

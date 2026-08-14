@@ -178,16 +178,23 @@ ssh root@box 'runuser -u virtu -- git clone https://github.com/zinc-email/virtu.
 #                               SMTP_TLS_KEY_FILE=/mail-certs/privkey.pem.
 #                               See server/.env.example.
 
-# 3. Deploy (as virtu, from /opt/virtu) — build, up, schema push, cert sync:
+# 3. Deploy (as virtu, from /opt/virtu) — build, up, cert sync:
 bin/host-deploy
+
+# 3b. Apply the DB schema (interactive — reviews data-loss statements; run
+#     it whenever a release changes server/src/db/schema.ts):
+bin/host-db-push
 
 # 4. Once per domain: mint the DKIM key and publish the TXT it prints:
 bin/dkim-ensure
 ```
 
-Redeploys are step 3 alone. `bin/host-deploy` is idempotent: fetch + checkout
-(an optional ref argument — a `v*` tag or sha; default `origin/main`),
-rebuild, `up -d`, `drizzle-kit push`, cert sync.
+Redeploys are step 3 alone (+ 3b when the schema changed). `bin/host-deploy`
+is idempotent: fetch + checkout (an optional ref argument — a `v*` tag or
+sha; default `origin/main`), rebuild, `up -d`, cert sync. It deliberately
+never pushes the schema: unattended `drizzle-kit push --force` auto-accepts
+data-loss statements, so that review stays human — `bin/host-db-push` is
+interactive and prompts on lossy SQL.
 
 ### Automatic deploys (tag push)
 
@@ -197,6 +204,9 @@ repo secret and runs `bin/host-deploy <tag>`. The box side is locked down in
 `~virtu/.ssh/authorized_keys`: a `restrict,command=` forced command pins the
 key to `bin/host-deploy "$SSH_ORIGINAL_COMMAND"`, so leaking the secret leaks
 "can redeploy" and nothing else; the workflow pins the box's host keys.
+Schema changes are **not** part of the automatic deploy — run
+`bin/host-db-push` yourself when a tagged release touches
+`server/src/db/schema.ts` (the deploy output reminds you).
 
 ```sh
 git tag v0.2.0 && git push origin v0.2.0

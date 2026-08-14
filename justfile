@@ -36,6 +36,24 @@ logs *args="-f":
   bin/compose logs {{args}}
 
 # ----------------------------------------------------------------------------
+# Serve preview — local prod-like stack (docker-compose.serve.yml under its
+# own compose project: self-signed cert, won't touch dev, mail listeners on
+# loopback high ports)
+# ----------------------------------------------------------------------------
+
+# Build + start the prod-like preview -> https://localhost:8443 (curl -k)
+preview *args="--build -d":
+  bin/compose -p virtu-serve -f docker-compose.serve.yml up {{args}}
+
+# Tear down the preview stack
+preview-down *args="":
+  bin/compose -p virtu-serve -f docker-compose.serve.yml down {{args}}
+
+# Preview stack logs
+preview-logs *args="-f":
+  bin/compose -p virtu-serve -f docker-compose.serve.yml logs {{args}}
+
+# ----------------------------------------------------------------------------
 # Database — Drizzle Kit (push-based migrations)
 # ----------------------------------------------------------------------------
 

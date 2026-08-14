@@ -125,8 +125,9 @@ behind Caddy, and `maild` (mx + submission + deliverd in one process, ports
 ```sh
 # Local prod-like preview (own project, self-signed cert; won't touch dev;
 # mail listeners on loopback high ports):
-bin/compose -p virtu-serve -f docker-compose.serve.yml up --build -d
+just preview   # = bin/compose -p virtu-serve -f docker-compose.serve.yml up --build -d
 #   -> https://localhost:8443   (curl -k)
+# `just preview-down` tears it down, `just preview-logs` follows logs.
 ```
 
 Deploy env vars (all optional; sensible defaults): `VIRTU_HOST` (the box's

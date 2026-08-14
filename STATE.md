@@ -233,12 +233,18 @@ for the next controller).
   bounces maild after renewals (listeners read certs once at startup — weekly
   cron on the box). Provisioning + deploy are `bin/host-provision` (swap,
   docker, virtu user) and `bin/host-deploy` (pull, build, up, drizzle push,
-  cert sync); `bin/dkim-ensure` mints/prints the service-domain DKIM key.
+  cert sync — takes an optional ref, defaults origin/main); `bin/dkim-ensure`
+  mints/prints the service-domain DKIM key.
   Runbook: README "Deploy"; annotated DNS record set: `each.email.zone`.
   Each-box facts (2026-08-10): each.email rDNS → mail.each.email, outbound 25
   open at Linode, Cloudflare DNS-only records live.
-  What remains: backups, a deploy trigger (CI), Linode Cloud Firewall, the
-  zinc/lmnop boxes themselves.
+  **Deploy trigger (2026-08-13)**: `.github/workflows/deploy.yml` — every
+  `v*` tag push SSHes to each.email as `virtu` with the `EACH_SSH_KEY` repo
+  secret; an authorized_keys forced command (`restrict,command=`) pins that
+  key to `bin/host-deploy "$SSH_ORIGINAL_COMMAND"`, host keys pinned in the
+  workflow.
+  What remains: backups, Linode Cloud Firewall, the zinc/lmnop boxes
+  themselves.
   **Secrets management**: `server/.env` is gitignored, so nothing sensitive is
   in git — CI and any deploy must provide the production secrets out-of-band
   (`VERP_SECRET`, TLS cert/key paths, and the Stripe keys if billing is on).

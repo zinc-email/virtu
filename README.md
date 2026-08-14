@@ -185,8 +185,22 @@ bin/host-deploy
 bin/dkim-ensure
 ```
 
-Redeploys are step 3 alone. `bin/host-deploy` is idempotent: pull, rebuild,
-`up -d`, `drizzle-kit push`, cert sync.
+Redeploys are step 3 alone. `bin/host-deploy` is idempotent: fetch + checkout
+(an optional ref argument — a `v*` tag or sha; default `origin/main`),
+rebuild, `up -d`, `drizzle-kit push`, cert sync.
+
+### Automatic deploys (tag push)
+
+Pushing a `v*` tag deploys that tag to each.email:
+`.github/workflows/deploy.yml` SSHes in as `virtu` using the `EACH_SSH_KEY`
+repo secret and runs `bin/host-deploy <tag>`. The box side is locked down in
+`~virtu/.ssh/authorized_keys`: a `restrict,command=` forced command pins the
+key to `bin/host-deploy "$SSH_ORIGINAL_COMMAND"`, so leaking the secret leaks
+"can redeploy" and nothing else; the workflow pins the box's host keys.
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
 
 ## License
 

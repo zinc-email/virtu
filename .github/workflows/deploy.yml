@@ -1,0 +1,33 @@
+# Deploy — every v* tag push deploys that tag to each.email over SSH.
+#
+# The box side is bin/host-deploy, invoked through a forced command in
+# virtu@each.email's authorized_keys, so the EACH_SSH_KEY secret can run the
+# deploy and nothing else (the tag arrives as SSH_ORIGINAL_COMMAND). Host
+# keys are pinned below — public info, and pinning beats TOFU in CI.
+name: deploy
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: deploy-each
+  cancel-in-progress: false
+
+jobs:
+  each:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy ${{ github.ref_name }} to each.email
+        env:
+          SSH_KEY: ${{ secrets.EACH_SSH_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" >~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >>~/.ssh/known_hosts <<'EOF'
+          each.email ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1VdCOthPAvnRgpP46KQkWGLhAYXFQFzX4VuvKp0+iO
+          each.email ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBNlvZYJNHDxm2+Qkj+WxsB53A+93eZEQ74L1Wgj96AVghidc1eSnHNY0meW8JciKsTtnkoKdR5GJdipKfJUfCSA=
+          EOF
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes virtu@each.email "$TAG"

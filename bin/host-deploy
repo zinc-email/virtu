@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# host-deploy — update a deploy box to the current origin/main: pull, rebuild,
-# restart the serve stack, push the schema, sync mail certs. Idempotent; run
-# it for every deploy after the one-time setup in README "Deploy" (host
-# provisioned, /opt/virtu cloned, .env files written).
+# host-deploy — update a deploy box to a ref (default origin/main): fetch +
+# checkout, rebuild, restart the serve stack, push the schema, sync mail
+# certs. Idempotent; run it for every deploy after the one-time setup in
+# README "Deploy" (host provisioned, /opt/virtu cloned, .env files written).
 #
-# Run on the box, from the repo root, as the app user: bin/host-deploy
+# Run on the box, from the repo root, as the app user:
+#   bin/host-deploy [ref]     # ref: a v* tag (what the deploy workflow
+#                             # passes), a sha, or nothing for origin/main
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-git pull --ff-only
+git fetch --tags --prune origin
+# Detached checkout: the box tracks whatever ref was last deployed, never a
+# local branch that could diverge.
+git checkout --detach "${1:-origin/main}"
 
 # Build the frontends + (re)start everything. --build re-runs the one-shots
 # (frontend build, server deps, mail-certs) against the pulled tree.

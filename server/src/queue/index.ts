@@ -4,8 +4,17 @@
  * LOCKED, delivers over SMTP and classifies failures.
  */
 
-export { BASE_DELAY_MS, JITTER, MAX_DELAY_MS, backoffDelayMs } from "./backoff.ts";
+export { DROPPED_BY_OPERATOR, deleteMessages, dropMessages, requeueMessages } from "./admin.ts";
+export {
+  BASE_DELAY_MS,
+  type BackoffOptions,
+  backoffDelayMs,
+  JITTER,
+  MAX_DELAY_MS,
+} from "./backoff.ts";
 export { DEFAULT_MAX_RAW_BYTES, enqueue, type EnqueueInput } from "./enqueue.ts";
+export { type ReapOptions, reapStuckSending } from "./reaper.ts";
+export { type RetentionOptions, runRetentionOnce } from "./retention.ts";
 export {
   classifySendResult,
   type DeliverFn,
@@ -13,6 +22,7 @@ export {
   type DeliveryOutcome,
   type MxTarget,
   processQueueOnce,
+  type QueueHygieneOptions,
   type QueueWorker,
   type QueueWorkerOptions,
   resolveMxTargets,

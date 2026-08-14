@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# queue-stats — outbound_messages counts by status + oldest pending age
+# (break-glass; direct DB, works with the API down).
+#
+# Usage: bin/queue-stats
+
+set -euo pipefail
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/queueStats.ts "$@"

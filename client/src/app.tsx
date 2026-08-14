@@ -3,6 +3,7 @@
 // links with the teal active underline, a centered 58rem main column, and a
 // footer holding logout + the color-scheme toggle.
 
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   Outlet,
@@ -19,7 +20,10 @@ import { useState } from "react";
 import { css, cx } from "styled-system/css";
 import { clearApiKey, getApiKey } from "src/auth";
 import { getColorScheme, setColorScheme } from "src/colorScheme";
-import { getLogout } from "src/gen";
+import { getLogout, useGetUserInfo } from "src/gen";
+import { AdminOverviewPage } from "src/pages/AdminOverview";
+import { AdminQueuePage } from "src/pages/AdminQueue";
+import { AdminQueueMessagePage } from "src/pages/AdminQueueMessage";
 import { AliasDetailPage } from "src/pages/AliasDetail";
 import { AliasesPage } from "src/pages/Aliases";
 import { AliasNewPage } from "src/pages/AliasNew";
@@ -29,6 +33,7 @@ import { DomainsPage } from "src/pages/Domains";
 import { LoginPage } from "src/pages/Login";
 import { MailboxDetailPage } from "src/pages/MailboxDetail";
 import { MailboxesPage } from "src/pages/Mailboxes";
+import { NotFoundPage } from "src/pages/NotFound";
 import { SettingsPage } from "src/pages/Settings";
 import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
@@ -44,6 +49,10 @@ const NAV_ITEMS = [
   { to: "/settings", label: "Settings" },
   { to: "/billing", label: "Account" },
 ];
+
+// Appended for operators only (user_info.is_admin — the server enforces
+// regardless; hiding it is cosmetics, not security).
+const ADMIN_NAV_ITEM = { to: "/admin", label: "Admin" };
 
 const navList = css({
   display: "flex",
@@ -88,6 +97,7 @@ function activeNavItem(path: string): string {
   if (path.startsWith("/domains")) return "/domains";
   if (path.startsWith("/settings")) return "/settings";
   if (path.startsWith("/billing")) return "/billing";
+  if (path.startsWith("/admin")) return "/admin";
   return "";
 }
 
@@ -98,11 +108,13 @@ function MobileMenu({
   opened,
   onClose,
   path,
+  items,
   onLogout,
 }: {
   opened: boolean;
   onClose: () => void;
   path: string;
+  items: typeof NAV_ITEMS;
   onLogout: () => void;
 }) {
   const active = activeNavItem(path);
@@ -134,7 +146,7 @@ function MobileMenu({
       >
         <nav>
           <ul className={css({ listStyle: "none", margin: 0, padding: 0 })}>
-            {NAV_ITEMS.map((item) => (
+            {items.map((item) => (
               <li key={item.to}>
                 <Link
                   to={item.to}
@@ -227,6 +239,7 @@ function Shell() {
   const routerInstance = useRouter();
   const canGoBack = useCanGoBack();
   const { location } = useRouterState();
+  const queryClient = useQueryClient();
   const [menuOpen, setMenuOpen] = useState(false);
   // location.pathname includes the /app basepath; compare against app paths.
   const path = location.pathname.replace(/^\/app(?=\/|$)/, "") || "/";
@@ -235,16 +248,26 @@ function Shell() {
   const isAliasDetail = path.startsWith("/aliases/");
   const isDomainDetail = path.startsWith("/domains/");
   const isMailboxDetail = path.startsWith("/mailboxes/");
-  // Detail pages swap the logo for the big back arrow.
+  const isAdminQueueDetail = path.startsWith("/admin/queue/");
+  // Detail pages swap the logo for the big back arrow. Admin pages chain:
+  // message -> queue -> overview.
   const backTo = isAliasDetail
     ? "/"
     : isDomainDetail
       ? "/domains"
       : isMailboxDetail
         ? "/mailboxes"
-        : null;
+        : isAdminQueueDetail
+          ? "/admin/queue"
+          : path === "/admin/queue"
+            ? "/admin"
+            : null;
   const authed = Boolean(getApiKey());
   const active = activeNavItem(path);
+  // The Admin nav item exists only for operators. One cached fetch per
+  // session; while it loads (or for everyone else) the nav is the plain set.
+  const userInfo = useGetUserInfo({ query: { enabled: authed && !isAuthPage } });
+  const navItems = userInfo.data?.is_admin ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
 
   const logout = async () => {
     try {
@@ -253,6 +276,10 @@ function Shell() {
       // key may already be dead — local logout proceeds regardless
     }
     clearApiKey();
+    // The cache is the previous account's data (user_info incl. is_admin,
+    // aliases, settings …) — without this, whoever logs in next on this tab
+    // briefly renders it before their own refetches land.
+    queryClient.clear();
     void navigate({ to: "/login" });
   };
 
@@ -326,7 +353,7 @@ function Shell() {
               <ul
                 className={cx(navList, css({ "@media (max-width: 1000px)": { display: "none" } }))}
               >
-                {NAV_ITEMS.map((item) => (
+                {navItems.map((item) => (
                   <NavItem key={item.to} to={item.to} active={item.to === active}>
                     {item.label}
                   </NavItem>
@@ -360,6 +387,7 @@ function Shell() {
         opened={menuOpen}
         onClose={() => setMenuOpen(false)}
         path={path}
+        items={navItems}
         onLogout={() => void logout()}
       />
 
@@ -478,6 +506,36 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+// Admin section (operators only). requireAuth guards key presence like every
+// page; the admin check itself is server-side — each page renders the 403 as
+// a not-authorized state, so deep-linking non-admins leaks nothing.
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  beforeLoad: requireAuth,
+  component: AdminOverviewPage,
+});
+
+const QUEUE_STATUSES = ["pending", "sending", "sent", "failed"] as const;
+export type QueueStatusFilter = (typeof QUEUE_STATUSES)[number];
+
+const adminQueueRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/queue",
+  beforeLoad: requireAuth,
+  validateSearch: (search: Record<string, unknown>): { status?: QueueStatusFilter } => ({
+    status: QUEUE_STATUSES.find((s) => s === search.status),
+  }),
+  component: AdminQueuePage,
+});
+
+const adminQueueMessageRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/queue/$messageId",
+  beforeLoad: requireAuth,
+  component: AdminQueueMessagePage,
+});
+
 interface LoginSearch {
   /** Prefill from the www homepage CTA (GET /app/login?email=…). */
   email?: string;
@@ -536,6 +594,10 @@ export const router = createRouter({
   basepath: "/app",
   // Going back to an index page lands where you left off, not at the top.
   scrollRestoration: true,
+  // Styled 404 — and the admin pages render this same component on a 403,
+  // so a non-admin deep-linking /admin can't distinguish it from a bogus
+  // URL (see pages/NotFound.tsx).
+  defaultNotFoundComponent: NotFoundPage,
   routeTree: rootRoute.addChildren([
     indexRoute,
     aliasNewRoute,
@@ -546,6 +608,9 @@ export const router = createRouter({
     domainDetailRoute,
     billingRoute,
     settingsRoute,
+    adminRoute,
+    adminQueueRoute,
+    adminQueueMessageRoute,
     loginRoute,
     registerRoute,
   ]),

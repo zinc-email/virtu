@@ -1,0 +1,86 @@
+// Grafana Alloy config for the serve stack (PLAN decision #15).
+//
+// Two pipelines, both remote-writing to Grafana Cloud:
+//   metrics: scrape api:3000/meta/metrics + maild:9100/metrics every 60s
+//            (free-tier-friendly; the collect-callback gauges hit Postgres
+//            once per scrape, so slower is kinder anyway)
+//   logs:    discover this compose project's containers over the docker
+//            socket and tail their stdout. Daemon lines are JSON
+//            (server/src/log.ts) and parse at query time in Loki (`| json`).
+//
+// Credentials + the env label come from the alloy service's environment
+// (docker-compose.serve.yml), which reads /opt/virtu/.env on a real box.
+
+// ── Metrics ─────────────────────────────────────────────────────────────────
+
+prometheus.scrape "virtu_api" {
+  targets = [{ __address__ = "api:3000", __metrics_path__ = "/meta/metrics" }]
+  job_name        = "virtu-api"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+prometheus.scrape "virtu_maild" {
+  targets = [{ __address__ = "maild:9100", __metrics_path__ = "/metrics" }]
+  job_name        = "virtu-maild"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_PROM_URL")
+
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_PROM_USERNAME")
+      password = sys.env("GRAFANA_CLOUD_API_KEY")
+    }
+  }
+
+  external_labels = {
+    env = sys.env("ALLOY_ENV_LABEL"),
+  }
+}
+
+// ── Logs ────────────────────────────────────────────────────────────────────
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "compose" {
+  targets = discovery.docker.containers.targets
+
+  // Only this stack's containers (the serve compose project).
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "virtu.*"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.compose.output
+  forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+loki.write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_LOKI_URL")
+
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_LOKI_USERNAME")
+      password = sys.env("GRAFANA_CLOUD_API_KEY")
+    }
+  }
+
+  external_labels = {
+    env = sys.env("ALLOY_ENV_LABEL"),
+  }
+}

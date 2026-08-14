@@ -55,11 +55,19 @@ the outbound queue. Two shortcuts:
 ```sh
 just user-create                 # log in wes@qmail.com through the code flow
                                  #   (prints the API key; idempotent; takes [email])
+just operator-create             # same, for ops@qmail.com + the admin flag —
+                                 #   the standard dev operator (takes [email])
 just login-code <email>          # print the newest emailed code for an address
 ```
 
 Then sign in at http://localhost:8080/app/login with the email + the code
-from `just login-code`.
+from `just login-code`. An operator (admin flag) additionally gets the
+**Admin** nav section — queue overview at `/app/admin`; inspect, drop
+(silent kill), bounce (kill + failure notice to the sender), requeue, and
+delete at `/app/admin/queue`. The same controls exist headless: `just
+queue-stats`, `just queue-list [status]`, `just queue-drop <id...>`,
+`just queue-bounce <id...>`, `just queue-requeue <id...>`,
+`just queue-delete <id...>`.
 
 ## Billing (optional, Stripe)
 
@@ -188,6 +196,11 @@ bin/host-db-push
 
 # 4. Once per domain: mint the DKIM key and publish the TXT it prints:
 bin/dkim-ensure
+
+# 5. Mint the first admin (the flag gates /api/admin and the SPA's Admin
+#    section; no admin exists yet, so this is direct-DB by design):
+docker compose -f docker-compose.serve.yml exec api \
+  bun run src/scripts/adminGrant.ts you@example.com
 ```
 
 Redeploys are step 3 alone (+ 3b when the schema changed). `bin/host-deploy`
@@ -212,6 +225,37 @@ Schema changes are **not** part of the automatic deploy — run
 ```sh
 git tag v0.2.0 && git push origin v0.2.0
 ```
+
+### Observability (Grafana Cloud, optional)
+
+The mail daemons log JSON lines and every process exposes Prometheus
+metrics (api at `/meta/metrics`, maild on the unpublished `:9100`, which is
+also its container healthcheck). A box opts into shipping them by adding to
+`/opt/virtu/.env`:
+
+```sh
+COMPOSE_PROFILES=observe
+GRAFANA_CLOUD_PROM_URL=https://prometheus-xxx.grafana.net/api/prom/push
+GRAFANA_CLOUD_PROM_USERNAME=<prometheus instance id>
+GRAFANA_CLOUD_LOKI_URL=https://logs-xxx.grafana.net/loki/api/v1/push
+GRAFANA_CLOUD_LOKI_USERNAME=<loki instance id>
+GRAFANA_CLOUD_API_KEY=<cloud access policy token with metrics+logs write>
+```
+
+…then redeploying. That starts one Grafana Alloy container
+(`alloy/config.alloy`) which scrapes both metric endpoints every 60s and
+tails all of this stack's container logs into Grafana Cloud Loki (query
+JSON fields with `| json`). Every series/stream carries `env=$VIRTU_HOST`.
+Nothing else runs on the box — no local Prometheus/Grafana (PLAN decision
+#15). The local preview and dev stack skip the profile; curl the endpoints
+directly instead.
+
+Operator tooling without the dashboard: `just queue-stats`, `just
+queue-list failed`, `just queue-drop <id...>`, `just queue-bounce <id...>`,
+`just queue-requeue <id...>`, `just queue-delete <id...>`, `just
+admin-grant <email>` — all direct-DB break-glass that works when the API is
+down (on a box: `docker compose -f docker-compose.serve.yml exec api bun
+run src/scripts/<name>.ts …`).
 
 ## License
 

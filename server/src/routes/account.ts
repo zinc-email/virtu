@@ -33,8 +33,9 @@ import {
   sendWithRateLimit,
   sudoCodeEmail,
 } from "../pipeline/transactional";
-import { ALIAS_DOMAINS, FIRST_ALIAS_DOMAIN, SUDO_MODE_MINUTES_VALID } from "./aliasConfig";
+import { ALIAS_DOMAINS, FIRST_ALIAS_DOMAIN } from "./aliasConfig";
 import { HttpError } from "./httpError";
+import { assertSudoFresh } from "./sudoGuard";
 import { ErrorResponse, OkResponse } from "./schema";
 
 const StatsResponse = z
@@ -354,10 +355,7 @@ export async function withAccountRoutes(authed: FastifyInstance) {
       response: { 201: ApiKeyResponse, 401: ErrorResponse, 440: ErrorResponse },
     },
     handler: async (req, reply) => {
-      const sudoAt = req.apiKey.sudoModeAt;
-      const fresh =
-        sudoAt !== null && Date.now() - sudoAt.getTime() <= SUDO_MODE_MINUTES_VALID * 60_000;
-      if (!fresh) throw new HttpError(440, "Need sudo");
+      assertSudoFresh(req.apiKey);
 
       const code = generateApiKey();
       await db.insert(apiKeys).values({

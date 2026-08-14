@@ -424,10 +424,20 @@ export const outboundMessages = pgTable(
     status: varchar({ length: 16 }).$type<OutboundStatus>().default("pending").notNull(),
     tries: integer().default(0).notNull(),
     nextAttemptAt: timestamp({ withTimezone: true, mode: "date" }).defaultNow().notNull(),
+    // Lease stamp: set when a worker claims the row (status -> "sending"),
+    // cleared on every transition out. The claim transaction commits before
+    // delivery starts (that's what makes SKIP LOCKED scale), so a worker
+    // crash mid-delivery strands the row in "sending" — the reaper
+    // (queue/reaper.ts) returns rows whose lease is stale to "pending".
+    claimedAt: timestamp({ withTimezone: true, mode: "date" }),
     lastError: text(),
     ...timestamps,
   },
-  (t) => [index("outbound_messages_status_next_attempt_at_idx").on(t.status, t.nextAttemptAt)],
+  (t) => [
+    index("outbound_messages_status_next_attempt_at_idx").on(t.status, t.nextAttemptAt),
+    // Retention scans terminal rows by age (updatedAt = terminal-write time).
+    index("outbound_messages_status_updated_at_idx").on(t.status, t.updatedAt),
+  ],
 );
 
 // ---------------------------------------------------------------------------

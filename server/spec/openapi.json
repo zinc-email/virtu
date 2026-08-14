@@ -337,6 +337,33 @@
           "code": "662302"
         }
       },
+      "OutboundStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "sending",
+          "sent",
+          "failed"
+        ]
+      },
+      "AdminIdsBody": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ]
+      },
       "MsgResponse": {
         "type": "object",
         "properties": {
@@ -459,6 +486,9 @@
                 "type": "null"
               }
             ]
+          },
+          "is_admin": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -470,7 +500,8 @@
           "max_alias_free_plan",
           "connected_proton_address",
           "can_create_reverse_alias",
-          "profile_picture_url"
+          "profile_picture_url",
+          "is_admin"
         ],
         "additionalProperties": false
       },
@@ -1623,6 +1654,493 @@
         ],
         "additionalProperties": false,
         "description": "Stripe-hosted page to redirect to"
+      },
+      "AdminOverviewResponse": {
+        "type": "object",
+        "properties": {
+          "queue": {
+            "type": "object",
+            "properties": {
+              "pending": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "sending": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "sent_24h": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "oldest_pending_age_seconds": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "pending",
+              "sending",
+              "failed",
+              "sent_24h",
+              "oldest_pending_age_seconds"
+            ],
+            "additionalProperties": false
+          },
+          "activity_24h": {
+            "type": "object",
+            "properties": {
+              "forwards": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "replies": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "bounces": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "blocked": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "forwards",
+              "replies",
+              "bounces",
+              "blocked"
+            ],
+            "additionalProperties": false
+          },
+          "users": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "disabled": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "total",
+              "disabled"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "queue",
+          "activity_24h",
+          "users"
+        ],
+        "additionalProperties": false
+      },
+      "AdminQueueListResponse": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminQueueMessage"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "messages"
+        ],
+        "additionalProperties": false
+      },
+      "AdminQueueMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "$ref": "#/components/schemas/OutboundStatus"
+          },
+          "tries": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "envelope_from": {
+            "type": "string"
+          },
+          "envelope_to": {
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "type": "string"
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "verp_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerpType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "tries",
+          "envelope_from",
+          "envelope_to",
+          "next_attempt_at",
+          "claimed_at",
+          "last_error",
+          "created_at",
+          "size_bytes",
+          "verp_type"
+        ],
+        "additionalProperties": false
+      },
+      "VerpType": {
+        "type": "string",
+        "enum": [
+          "bounce_forward",
+          "bounce_reply",
+          "transactional"
+        ]
+      },
+      "AdminQueueMessageDetailResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/AdminQueueMessage"
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMessageHeader"
+            }
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminQueueOwner"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "headers",
+          "owner"
+        ],
+        "additionalProperties": false
+      },
+      "AdminMessageHeader": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "AdminQueueOwner": {
+        "type": "object",
+        "properties": {
+          "verp_type": {
+            "$ref": "#/components/schemas/VerpType"
+          },
+          "verp_id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "email_log_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verification_code_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "email"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alias": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "email"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "verp_type",
+          "verp_id",
+          "email_log_id",
+          "verification_code_id",
+          "user",
+          "alias"
+        ],
+        "additionalProperties": false
+      },
+      "AdminDroppedResponse": {
+        "type": "object",
+        "properties": {
+          "dropped": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "required": [
+          "dropped",
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "AdminRequeuedResponse": {
+        "type": "object",
+        "properties": {
+          "requeued": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "required": [
+          "requeued",
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "AdminDeletedResponse": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "required": [
+          "deleted",
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "AdminBouncedResponse": {
+        "type": "object",
+        "properties": {
+          "bounced": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "reason": {
+                  "$ref": "#/components/schemas/AdminBounceSkipReason"
+                }
+              },
+              "required": [
+                "id",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "bounced",
+          "ids",
+          "skipped"
+        ],
+        "additionalProperties": false
+      },
+      "AdminBounceSkipReason": {
+        "type": "string",
+        "enum": [
+          "unknown_id",
+          "already_delivered",
+          "null_reverse_path",
+          "no_verp_mapping",
+          "transactional",
+          "raw_cleared",
+          "email_log_missing",
+          "originator_unresolvable",
+          "alias_unresolvable",
+          "in_flight"
+        ]
       }
     }
   },
@@ -4281,6 +4799,412 @@
           }
         }
       }
+    },
+    "/admin/overview": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Operator landing numbers: queue depth by status, oldest due pending row, 24h activity (forwards/replies/bounces/blocked), user counts.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOverviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/queue": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "List delivery-queue rows, newest first. Operator endpoint (admin flag required); unlike the SimpleLogin surface it returns a total and takes a limit. Raw message bytes are never returned — size_bytes only.",
+        "parameters": [
+          {
+            "schema": {
+              "$ref": "#/components/schemas/OutboundStatus"
+            },
+            "in": "query",
+            "name": "status"
+          },
+          {
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "page_id"
+          },
+          {
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit"
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminQueueListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/queue/{message_id}": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "One queue row: envelope, error state, an allowlisted set of ROUTING headers (never Subject, never the body — the message is the user's mail), and the owning user/alias decoded from the VERP return path (null for null-reverse-path rows and expired VERP).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "message_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminQueueMessageDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/queue/drop": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Drop queue rows: pending/sending become failed with last_error \"dropped by operator\". Terminal rows and unknown ids are skipped. No DSN is generated — an operator drop is not a delivery outcome.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminIdsBody"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDroppedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/queue/requeue": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Return failed rows to pending for immediate re-attempt (tries reset). Rows without raw bytes (cleared on successful delivery) are skipped.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminIdsBody"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRequeuedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/queue/delete": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Hard-delete terminal rows (failed/sent) now, ahead of retention. Pending/sending rows are skipped — drop (or bounce) them first.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminIdsBody"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/queue/bounce": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Bounce queue rows: send the originator the same RFC 3464 failure notice a permanent delivery failure would (deduped per originator per 24h), then mark the row failed ('bounced by operator'). Never advances the alias auto-disable ledger — an operator decision is not a mailbox-health signal. Skipped (with reasons): delivered rows, null-reverse-path rows (DSNs, trash copies), transactional system mail, and rows whose VERP no longer decodes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminIdsBody"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBouncedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "servers": [
@@ -4293,6 +5217,10 @@
     {
       "name": "Account",
       "description": "Registration, login, and account info"
+    },
+    {
+      "name": "Admin",
+      "description": "Operator endpoints (Virtu extension — not SimpleLogin wire). Require the admin flag; everyone else receives 403."
     }
   ]
 }

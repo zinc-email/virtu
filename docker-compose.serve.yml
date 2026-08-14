@@ -82,6 +82,19 @@ services:
         condition: service_healthy
       server-deps:
         condition: service_completed_successfully
+    healthcheck:
+      # /meta/health probes the DB; bun -e is the probe (no curl in oven/bun).
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r = await fetch('http://127.0.0.1:3000/meta/health'); process.exit(r.ok ? 0 : 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - ".:/app"
 
@@ -100,6 +113,9 @@ services:
       DATABASE_URL: "postgres://virtu:${POSTGRES_PASSWORD:-virtu}@db:5432/virtu"
       VIRTU_ENV: "${VIRTU_ENV:-}"
       HOME: /tmp
+      # Metrics/health listener on the compose network so the alloy service
+      # can scrape maild:9100. Deliberately NOT in `ports:` — never published.
+      METRICS_HOST: 0.0.0.0
     init: true
     depends_on:
       db:
@@ -110,6 +126,19 @@ services:
       - "${MX_PUBLISH:-127.0.0.1:8025}:25"
       - "${SUBMISSION_PUBLISH:-127.0.0.1:8587}:587"
       - "${SUBMISSION_TLS_PUBLISH:-127.0.0.1:8465}:465"
+    healthcheck:
+      # /health = listeners up + queue-worker heartbeat fresh (maild.ts).
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r = await fetch('http://127.0.0.1:9100/health'); process.exit(r.ok ? 0 : 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - ".:/app"
       - "mail_certs:/mail-certs:ro"
@@ -146,6 +175,37 @@ services:
       - "serve_caddy_data:/caddy:ro"
       - "mail_certs:/out"
 
+  # Observability shipper (PLAN decision #15): scrapes api + maild Prometheus
+  # endpoints and tails container logs, remote-writing both to Grafana Cloud.
+  # Off by default (profile `observe`); a box opts in via /opt/virtu/.env:
+  #   COMPOSE_PROFILES=observe  plus the GRAFANA_CLOUD_* credentials.
+  # The docker.sock mount (read-only, root) is the standard Alloy pattern for
+  # discovering compose containers and reading their stdout logs.
+  alloy:
+    image: "grafana/alloy:v1.10.2"
+    restart: unless-stopped
+    profiles: ["observe"]
+    command:
+      - "run"
+      - "/etc/alloy/config.alloy"
+      - "--storage.path=/var/lib/alloy/data"
+    environment:
+      GRAFANA_CLOUD_PROM_URL: "${GRAFANA_CLOUD_PROM_URL:-}"
+      GRAFANA_CLOUD_PROM_USERNAME: "${GRAFANA_CLOUD_PROM_USERNAME:-}"
+      GRAFANA_CLOUD_LOKI_URL: "${GRAFANA_CLOUD_LOKI_URL:-}"
+      GRAFANA_CLOUD_LOKI_USERNAME: "${GRAFANA_CLOUD_LOKI_USERNAME:-}"
+      GRAFANA_CLOUD_API_KEY: "${GRAFANA_CLOUD_API_KEY:-}"
+      ALLOY_ENV_LABEL: "${VIRTU_HOST:-local}"
+    volumes:
+      - "./alloy/config.alloy:/etc/alloy/config.alloy:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "alloy_data:/var/lib/alloy"
+    depends_on:
+      api:
+        condition: service_started
+      maild:
+        condition: service_started
+
   # The universal reverse proxy — serves the built dists, terminates TLS.
   proxy:
     image: "caddy:2-alpine"
@@ -173,3 +233,4 @@ volumes:
   serve_pg_data:
   serve_caddy_data:
   mail_certs:
+  alloy_data:

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# queue-requeue — return failed rows to pending for immediate re-attempt
+# (tries reset; refuses rows whose raw bytes were cleared by retention).
+# Same primitive as the admin API's requeue. Break-glass: direct DB.
+#
+# Usage: bin/queue-requeue <id...>
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: bin/queue-requeue <id...>" >&2
+  exit 2
+fi
+
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/queueRequeue.ts "$@"

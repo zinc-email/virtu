@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# queue-bounce — DSN the originator, then mark the row failed ("bounced by
+# operator"). The polite drop: the sender learns delivery won't happen.
+# Never advances the alias auto-disable ledger. Same function as the admin
+# API's bounce. Break-glass: direct DB.
+#
+# Usage: bin/queue-bounce <id...>
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: bin/queue-bounce <id...>" >&2
+  exit 2
+fi
+
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/queueBounce.ts "$@"

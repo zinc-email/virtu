@@ -6,6 +6,9 @@
 import rateLimit from "@fastify/rate-limit";
 import type { FastifyInstance } from "fastify";
 import { withAccountRoutes } from "./account";
+import { withAdminOverviewRoutes } from "./admin/overview";
+import { withAdminQueueRoutes } from "./admin/queue";
+import { requireAdmin } from "./adminAuth";
 import { withAliasNewRoutes } from "./aliasNew";
 import { withAliasRoutes } from "./aliases";
 import { requireApiAuth } from "./apiAuth";
@@ -44,6 +47,19 @@ export async function withApiRoutes(app: FastifyInstance) {
         await withSmtpCredentialRoutes(authed);
         await withAccountRoutes(authed);
         await withBillingRoutes(authed);
+
+        // Operator surface (PLAN decision #16): a nested child so
+        // requireAdmin layers on top of the parent's requireApiAuth (parent
+        // hooks run first). /api/admin/* rides the same spec + SDK pipeline
+        // as everything else, tagged Admin.
+        await authed.register(
+          async (admin) => {
+            admin.addHook("onRequest", requireAdmin);
+            await withAdminOverviewRoutes(admin);
+            await withAdminQueueRoutes(admin);
+          },
+          { prefix: "/admin" },
+        );
       });
     },
     { prefix: "/api" },

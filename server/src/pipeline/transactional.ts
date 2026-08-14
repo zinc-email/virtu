@@ -36,11 +36,12 @@ import {
   HeaderBlock,
   serializeMessage,
 } from "../mail/index.ts";
+import { createLogger } from "../log.ts";
 import { signOutbound } from "../mailauth/index.ts";
 import { enqueue } from "../queue/index.ts";
 import { loadDkimKey } from "./dkim.ts";
 
-const log = (m: string) => console.warn(`transactional: ${m}`);
+const log = createLogger("transactional");
 
 // ---------------------------------------------------------------------------
 // Message building + sending
@@ -140,12 +141,16 @@ export async function sendTransactional(
     let raw: Uint8Array;
     const dkimKey = await loadDkimKey(db, config.mailDomain, config.dkimSelector);
     if (dkimKey === null) {
-      log(`no active DKIM key for ${config.mailDomain}; sending ${messageId} unsigned`);
+      log.warn("dkim_key_missing", { domain: config.mailDomain, messageId });
       raw = serializeMessage(headers, body);
     } else {
       const signed = await signOutbound(headers, body, { dkimKeys: [dkimKey] });
       for (const err of signed.errors) {
-        log(`DKIM signing error (${err.signingDomain}/${err.selector}): ${err.err.message}`);
+        log.error("dkim_sign_error", {
+          domain: err.signingDomain,
+          selector: err.selector,
+          error: err.err.message,
+        });
       }
       raw = signed.message;
     }
@@ -166,7 +171,7 @@ export async function sendTransactional(
     return { queued: true, queueId, messageId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`could not queue ${messageId} to ${opts.to}: ${message}`);
+    log.error("enqueue_failed", { messageId, to: opts.to, error: message });
     return { queued: false, messageId, error: message };
   }
 }
@@ -232,7 +237,7 @@ export async function sendWithRateLimit(
 ): Promise<SendWithRateLimitResult> {
   const scope: RateLimitScope = { ...opts, toEmail: opts.to };
   if (await isRateLimited(db, scope)) {
-    log(`rate limited: ${opts.alertType} to ${opts.to} (user ${opts.userId})`);
+    log.info("rate_limited", { alertType: opts.alertType, to: opts.to, userId: opts.userId });
     return { queued: false, messageId: "", rateLimited: true, error: "rate limited" };
   }
   await db.insert(sentAlerts).values({

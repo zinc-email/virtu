@@ -5,6 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { MAX_ALIAS_FREE_PLAN } from "../config";
+import { isAdmin } from "../auth/userFlags";
 import { hasActiveSubscription, trialActive } from "../billing/premium";
 import type { User } from "../db/schema";
 import { requireApiAuth } from "./apiAuth";
@@ -26,6 +27,7 @@ export async function userToDict(user: User): Promise<UserInfo> {
     can_create_reverse_alias: true,
     // TODO: profile pictures are not implemented.
     profile_picture_url: null,
+    is_admin: isAdmin(user),
   };
 }
 

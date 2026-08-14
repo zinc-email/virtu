@@ -1,10 +1,10 @@
 # STATE — progress against PLAN.md
 
-Last updated: 2026-08-10 (outbound wave: SMTP send/reply modes + cold email,
-per-device SMTP passwords, trash inbox, multi-mailbox delivery, mailboxes
-client page, transactional bounce intake — PLAN decisions #9–#12). Companion
-to `PLAN.md` (the design doc); this file tracks what is built, how it was
-verified, and what remains.
+Last updated: 2026-08-14 (observability + admin wave: Lane J foundation +
+Lane K P1 — structured logs, Prometheus metrics + Grafana Cloud shipping,
+queue reaper/retention/drop, the admin flag + `/api/admin` surface + first
+admin pages — PLAN decisions #15/#16). Companion to `PLAN.md` (the design
+doc); this file tracks what is built, how it was verified, and what remains.
 
 ## TL;DR
 
@@ -24,12 +24,21 @@ and the entire production/deploy story, which has not been started.
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~417 tests / 28 files | `just test-unit` | green |
-| CI gauntlet | format + 2× tsc + SDK gen + unit | `just check` | green |
-| Integration (API vs real Postgres) | 112 tests / 8 files | `just up && just db push && just test-int` | green |
-| Client DOM (real React vs running stack) | 8 tests / 3 files | `just up && just db push && just test-client` | green |
-| Stories (simulated internet) | 24 stories / 13 files | `just test-net-up && just test-story` | green ×2 against dirty state |
+| Unit | ~462 tests / 33 files | `just test-unit` | green |
+| Contract (bridge protocol) | 14 tests / 2 files | `just test-contract` | green |
+| CI gauntlet | format + 2× tsc + SDK gen + unit + contract | `just check` | green |
+| Integration (API vs real Postgres) | 136 tests / 10 files | `just up && just db push && just test-int` | green |
+| Client DOM (real React vs running stack) | 14 tests / 5 files | `just up && just db push && just test-client` | green |
+| Stories (simulated internet) | 24 stories / 13 files | `just test-net-up && just test-story` | green ×2 (2026-08-14, incl. the maild metrics assertion) |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
+
+Test-net gotcha found 2026-08-14: the `pg_test` volume had survived since
+before the `domains` rename, and the mail container's boot-time
+`drizzle-kit push --force` silently skipped the interactive rename question
+(the same no-TTY exit-0 pitfall the deploy lane documents), so every story
+failed on `column "domain_id" does not exist`. After a schema **rename**
+(not additive changes), run `just test-net-down` (wipes volumes) before
+`test-net-up`.
 
 Story coverage: forward with `dkim=pass` at the receiving peer (M1), authed
 reply with threading and zero real-address leakage (M2), bounce → auto-disable
@@ -70,6 +79,8 @@ with a regression test encoding the observed sequence).
 | G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Served at `/` behind the Caddy proxy; SPA under `/app`, API under `/api` — one origin, same topology dev and prod (dev proxy built; see below) |
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |
+| J — Observability & queue hygiene | ✅ done | 2026-08-14, decision #15. First-party structured logger (`src/log.ts`, all 6 daemon files migrated off console.log) + Prometheus registry (`src/metrics/`, `virtu_*` set) — api at `/meta/metrics`, maild on `:9100` (also its liveness: listeners + worker heartbeat); `/meta/health` now probes the DB; compose healthchecks on api+maild. Queue: `claimed_at` lease + reaper, retention (raw cleared on sent; 7d/30d windows), status-guarded terminal writes, `dropMessages`/`requeueMessages`, retry horizon 6→25 tries (~4 days, 6h cap; test net pins fast values). Alloy → Grafana Cloud under compose profile `observe` (`alloy/config.alloy`); creds go in `/opt/virtu/.env`. **Not yet verified against a real Grafana Cloud stack** — needs the account + creds on lmnop first |
+| K — Admin & abuse | P1 ✅ | 2026-08-14, decision #16. `USER_FLAGS.admin` bit + `requireAdmin` nested `/api/admin` scope; endpoints: overview, queue list (status filter + limit + total), detail (allowlisted routing headers — never Subject/body — + VERP-decoded owner), drop, requeue, delete (terminal rows only, ahead of retention), bounce (operator DSN via the shared `pipeline/dsnDelivery.ts` — extracted from deliverd — then failed "bounced by operator"; NO recordBounce, so the auto-disable ledger never moves on an operator action; forward diagnostics sanitized as always); `is_admin` on user_info. Client: Admin nav item (admins only), AdminOverview/AdminQueue/AdminQueueMessage pages, in-kit, screenshot-verified 360/700/1100/1440. Break-glass CLI: `bin/admin-{grant,revoke}`, `bin/queue-{list,stats,drop,requeue}` + just recipes (verified live against the dev DB). `sudoGuard.ts` seam extracted (POST /api_key refactored onto it); admin ops NOT sudo-gated until P2. Roadmap P2–P4 in PLAN Lane K |
 
 Milestones M1–M4 (PLAN sequencing diagram): all reached.
 
@@ -87,6 +98,18 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
    alias search, multi-window rate limits collapsed to single-window,
    150-word wordlist, mailbox email-change returns 400.
 5. **PGP** — fields accepted/serialized as unsupported (`support_pgp:false`).
+6. **Admin ops not sudo-gated** (Lane K P1) — drop/requeue sit behind the
+   admin flag + a confirm dialog only; the `sudoGuard.ts` seam exists and
+   P2 flips it on together with the SudoDialog the user-facing destructive
+   deletes also need.
+7. **Queue ownership is VERP-only** — admin detail decodes the return path
+   (5-day validity; retention keeps rows younger), so trash copies and DSNs
+   show no owner. Durable `outbound_messages.user_id` attribution is the
+   Lane K P2 schema decision.
+8. **Grafana Cloud shipping unverified** — the Alloy service + config are
+   in the serve stack behind `COMPOSE_PROFILES=observe`, but no Grafana
+   Cloud stack/credentials exist yet; first real scrape should happen on
+   lmnop. The metrics endpoints themselves are int-tested and curl-able.
 
 (Resolved 2026-08-10: custom-domain suffixes — `/v5/alias/options` now offers
 each verified custom domain as `is_custom` suffixes: the EMPTY suffix

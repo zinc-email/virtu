@@ -21,6 +21,13 @@
 import { config } from "./config.ts";
 import { db } from "./db/index.ts";
 import type { Db } from "./db/index.ts";
+import { createLogger, type Logger } from "./log.ts";
+import {
+  mxAuthVerdictsTotal,
+  mxMessagesTotal,
+  mxRcptTotal,
+  smtpConnectionsTotal,
+} from "./metrics/index.ts";
 import {
   type Address,
   buildVerp,
@@ -77,12 +84,19 @@ export interface MxOptions {
    * the wire-format client (Bun's builtin TXT API loses record grouping).
    */
   resolver?: DnsResolver;
-  log?: (message: string) => void;
+  logger?: Logger;
+}
+
+// Lazy so tests that inject their own logger never construct the default.
+let mxLogger: Logger | null = null;
+function defaultMxLogger(): Logger {
+  mxLogger ??= createLogger("mx");
+  return mxLogger;
 }
 
 /** Handle the completed DATA for one inbound message. */
 async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise<SmtpHookResult> {
-  const log = opts.log ?? ((m: string) => console.log(m));
+  const log = opts.logger ?? defaultMxLogger();
   const { envelope, session } = event;
 
   // Policy re-evaluation per recipient (RCPT accepted them; rows may have
@@ -117,23 +131,26 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       body: new TextDecoder().decode(parsed.body),
     });
     if (!dsnish) {
-      log(`mx: ignored non-DSN mail to ${info.type} VERP (ref ${info.id})`);
+      mxMessagesTotal.inc({ outcome: "verp_ignored" });
+      log.info("verp_non_dsn_ignored", { verpType: info.type, verpId: info.id });
       continue;
     }
+    mxMessagesTotal.inc({ outcome: "verp_bounce" });
     if (info.type === "transactional") {
       const result = await recordTransactionalBounce(opts.db, info.id);
-      log(
-        `mx: transactional bounce (ref ${info.id})` +
-          (result.code !== null ? ` — code ${result.code.id} invalidated` : "") +
-          (result.mailboxFlagged ? ", mailbox flagged" : ""),
-      );
+      log.info("transactional_bounce", {
+        verpId: info.id,
+        codeInvalidated: result.code?.id ?? null,
+        mailboxFlagged: result.mailboxFlagged,
+      });
       continue;
     }
     const result = await recordBounce(opts.db, info.id);
-    log(
-      `mx: bounce for email_log ${info.id} (${info.type})` +
-        (result.aliasDisabled ? " — alias auto-disabled" : ""),
-    );
+    log.info("bounce_recorded", {
+      verpType: info.type,
+      emailLogId: info.id,
+      aliasDisabled: result.aliasDisabled,
+    });
   }
 
   const deliverable = evaluated.filter((r) => r.decision.kind === "deliver");
@@ -153,9 +170,16 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     event.raw,
     { resolver: opts.resolver ?? defaultResolver() },
   );
+  mxAuthVerdictsTotal.inc({ verdict: verification.verdict.action });
   if (verification.verdict.action === "reject") {
     const v = verification.verdict;
-    log(`mx: rejected inbound from ${envelope.mailFrom || "<>"}: ${v.reason}`);
+    mxMessagesTotal.inc({ outcome: "rejected" });
+    log.info("inbound_rejected", {
+      from: envelope.mailFrom || "<>",
+      remote: session.remoteAddress,
+      reason: v.reason,
+      smtpCode: v.code,
+    });
     return rejectWith(v.code, v.enhanced, v.message);
   }
 
@@ -170,7 +194,7 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   const dkimKey =
     deliverable.length > 0 ? await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector) : null;
   if (deliverable.length > 0 && dkimKey === null) {
-    log(`mx: WARNING no active DKIM key for ${opts.mailDomain} — forwarding unsigned`);
+    log.warn("dkim_key_missing", { domain: opts.mailDomain, consequence: "forwarding unsigned" });
   }
 
   // 3. Accept-and-drop recipients: blocked log, nothing queued.
@@ -189,7 +213,11 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       mailboxId: drop.facts.mailbox?.id ?? null,
       messageId: originalMessageId,
     });
-    log(`mx: dropped mail for ${drop.address} (${(drop.decision as { reason: string }).reason})`);
+    mxMessagesTotal.inc({ outcome: "dropped" });
+    log.info("inbound_dropped", {
+      to: drop.address,
+      reason: (drop.decision as { reason: string }).reason,
+    });
   }
 
   // Trace header for the hop we handled (RFC 5321 §4.4): topmost on every
@@ -261,7 +289,11 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
                 },
         });
         for (const err of signed.errors) {
-          log(`mx: DKIM signing error (${err.signingDomain}/${err.selector}): ${err.err.message}`);
+          log.error("dkim_sign_error", {
+            domain: err.signingDomain,
+            selector: err.selector,
+            error: err.err.message,
+          });
         }
         message = signed.message;
       }
@@ -285,10 +317,14 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
         envelopeTo: mailbox.email,
         maxRawBytes: opts.maxMessageSize,
       });
-      log(
-        `mx: queued #${queueId} for ${rcpt.address} -> ${mailbox.email}` +
-          `${isTrash ? " (trash)" : ""} (log ${emailLog.id})`,
-      );
+      mxMessagesTotal.inc({ outcome: isTrash ? "trash" : "forwarded" });
+      log.info("forward_queued", {
+        queueId,
+        alias: rcpt.address,
+        to: mailbox.email,
+        trash: isTrash,
+        emailLogId: emailLog.id,
+      });
     }
   }
 
@@ -335,11 +371,16 @@ export function createMxServer(opts: MxOptions): SmtpServer {
     banner: "virtu mx",
     tls: opts.tls,
     maxMessageSize: opts.maxMessageSize,
+    onConnect: () => {
+      smtpConnectionsTotal.inc({ listener: "mx" });
+      return { accept: true };
+    },
     onRcptTo: async (event) => {
       const { decision } = await evaluateRcpt(opts.db, event.address, {
         verpSecret: opts.verpSecret,
         mailDomain: opts.mailDomain,
       });
+      mxRcptTotal.inc({ decision: decision.kind });
       if (decision.kind === "reject") {
         return rejectWith(decision.code, decision.enhanced, decision.message);
       }
@@ -366,7 +407,7 @@ export function mxOptionsFromConfig(): MxOptions {
 export async function startMx(): Promise<SmtpServer> {
   const server = createMxServer(mxOptionsFromConfig());
   const bound = await server.listen(config.mxPort, config.smtpHost);
-  console.log(`mx: listening on ${bound.host}:${bound.port}`);
+  defaultMxLogger().info("listening", { host: bound.host, port: bound.port });
   return server;
 }
 

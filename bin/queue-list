@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# queue-list — list outbound_messages rows, newest first (break-glass; direct
+# DB, works with the API down).
+#
+# Usage: bin/queue-list [pending|sending|sent|failed] [--limit n]
+
+set -euo pipefail
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/queueList.ts "$@"

@@ -25,6 +25,10 @@ export const UserInfoResponse = z
     connected_proton_address: z.string().nullable(),
     can_create_reverse_alias: z.boolean(),
     profile_picture_url: z.string().nullable(),
+    // Virtu extension (not in SimpleLogin — their clients ignore unknown
+    // fields): true when the user carries the admin flag. The SPA uses it to
+    // show the Admin section; the server enforces regardless (adminAuth.ts).
+    is_admin: z.boolean(),
   })
   .meta({ id: "UserInfoResponse" });
 

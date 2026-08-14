@@ -129,9 +129,49 @@ test-net-ps:
 user-create email="wes@qmail.com":
   bin/user-create {{email}}
 
+# Seed a dev OPERATOR: user-create + the admin flag (default ops@qmail.com).
+operator-create email="ops@qmail.com":
+  bin/operator-create {{email}}
+
 # Print the newest emailed verification code for an address (from the queue).
 login-code email:
   bin/login-code {{email}}
+
+# ----------------------------------------------------------------------------
+# Ops — queue + admin break-glass (direct DB; work with the API down)
+# ----------------------------------------------------------------------------
+
+# Grant the admin flag to a user (mints the FIRST admin — see PLAN Lane K).
+admin-grant email:
+  bin/admin-grant {{email}}
+
+# Clear the admin flag on a user.
+admin-revoke email:
+  bin/admin-revoke {{email}}
+
+# DSN the originator, then fail the row ("bounced by operator") — polite drop.
+queue-bounce +ids:
+  bin/queue-bounce {{ids}}
+
+# Hard-delete terminal rows (failed/sent) ahead of retention.
+queue-delete +ids:
+  bin/queue-delete {{ids}}
+
+# Drop queue rows: pending/sending -> failed ("dropped by operator"). Silent.
+queue-drop +ids:
+  bin/queue-drop {{ids}}
+
+# List outbound_messages rows, newest first (optional status filter).
+queue-list *args="":
+  bin/queue-list {{args}}
+
+# Requeue failed rows for immediate re-attempt (tries reset).
+queue-requeue +ids:
+  bin/queue-requeue {{ids}}
+
+# Queue counts by status + oldest pending age.
+queue-stats:
+  bin/queue-stats
 
 # ----------------------------------------------------------------------------
 # Homepage — static marketing site (Astro, www/)

@@ -293,6 +293,80 @@ No prices, invoices, or payment state in our DB.
 
 ---
 
+### Lane J — Observability & queue hygiene (`server/src/{log.ts,metrics/}`, `alloy/`)
+
+Visibility into maild (decision #15). Structured JSON logs from a thin
+first-party logger (`log.ts` — component/event/fields, `LOG_FORMAT=pretty`
+for humans; the test network sets it so `just test-net-logs` stays readable);
+the API keeps Fastify's pino. First-party Prometheus registry
+(`metrics/registry.ts` — counters/gauges-with-collect/histograms + text
+exposition; provider buckets in `metrics/provider.ts` keep label cardinality
+bounded). Exposition: api at `GET /meta/metrics`, maild on an unpublished
+`METRICS_HOST:METRICS_PORT` listener (`metrics/httpServer.ts`) that doubles
+as its liveness probe (listeners up + queue-worker heartbeat). A Grafana
+Alloy container (compose profile `observe`, `alloy/config.alloy`) scrapes
+both and tails container logs, remote-writing to Grafana Cloud.
+
+Queue hygiene, same lane: `claimed_at` lease on `outbound_messages` + a
+reaper returning stale `sending` rows to `pending` (worker terminal writes
+are status-guarded, so a reaped/dropped row can't be stomped — at-least-once
+delivery); retention (raw cleared on the `sent` terminal write; sent rows
+deleted after `QUEUE_RETAIN_SENT_DAYS`, failed after
+`QUEUE_RETAIN_FAILED_DAYS`), both piggybacking time-gated on the worker
+loop; retry horizon extended to RFC-customary ~4 days
+(`QUEUE_MAX_TRIES=25`, `QUEUE_BACKOFF_MAX_MS=6h` — the test network pins
+fast values); operator primitives `dropMessages`/`requeueMessages`
+(`queue/admin.ts`) — the ONLY sanctioned queue writers besides enqueue and
+the worker, shared by the admin API and the `bin/queue-*` CLI.
+
+**Contract:** the `virtu_*` metric names; `Logger`/`createLogger`;
+`queue/admin.ts` primitives; the `observe` compose profile.
+
+### Lane K — Admin & abuse (`server/src/routes/admin/`, `client/src/pages/Admin*`)
+
+Operator surface + the abuse/reputation program. Admin = the `users.flags`
+admin bit (`auth/userFlags.ts`) + a `requireAdmin` hook on a nested
+`/api/admin` scope inside the authed context (decision #16) — same spec,
+same Kubb SDK, tagged `Admin` (escape hatch if the public spec must ever be
+SL-clean: split by tag at emission in `openapiEmit.ts`, madi's two-spec
+shape). First admin is minted by `bin/admin-grant` (direct DB,
+break-glass); `bin/queue-{list,stats,drop,requeue}` mirror the API's queue
+primitives so CLI and API can never diverge. Privacy stance: admins see
+envelope + an allowlisted routing-header set
+(`routes/admin/headerAllowlist.ts`), never Subject or body, no raw
+download. Destructive admin ops gate behind sudo from P2
+(`routes/sudoGuard.ts` seam is in place).
+
+Phases: **P1** (landed) admin bit + queue inspect/drop/requeue/delete/bounce
++ overview + first admin pages + `is_admin` on user_info. The operator
+bounce (`pipeline/operatorBounce.ts`) sends the standard failure DSN via the
+shared `pipeline/dsnDelivery.ts` (also deliverd's DSN path) and then
+terminal-marks the row — WITHOUT recordBounce: an operator decision is not a
+mailbox-health signal, so it never advances the auto-disable ledger. Delete
+is terminal-rows-only (drop or bounce first), ahead of retention. **P2** queue attribution
+columns (`outbound_messages.user_id`/`email_log_id` — needs a decision:
+durable ownership beyond VERP's 5-day window), per-user outbound send
+quotas at submission pre-enqueue (closes the compromised-SMTP-cred hole),
+an `smtp_rejections` table (RCPT/DATA rejects currently write nothing),
+notifications routes + bell UI, admin user views with sudo-gated
+disable/enable. **P3** per-IP mx throttling (authThrottle-shaped, fed by
+smtp_rejections), spam hook wiring per decision #4 — in-process cheap
+checks first (DNSBL via the wire-format TXT client, rDNS/HELO sanity)
+writing the never-yet-written `email_logs.isSpam/spamScore/spamStatus`;
+rspamd deferred until a bigger box (200–400MB against a 1GB nanode). No
+greylisting (latency for weak returns). **P4** `domain_delivery_stats`
+daily aggregates tapped from `classifySendResult`, DMARC rua ingestion (we
+run the MX — point `rua=` at ourselves and parse our own reports in a
+contained ingest worker), Google Postmaster Tools pull, admin abuse views
+(top bouncing aliases, threshold-disabled list, per-domain deliverability);
+automated reputation responses (per-domain slow-start) are their own
+decision when they come up.
+
+**Contract:** `requireAdmin` + the `/api/admin/*` spec paths; `USER_FLAGS`
+registry in `auth/userFlags.ts`; the header allowlist.
+
+---
+
 ## Sequencing
 
 ```
@@ -407,5 +481,43 @@ Settled (2026-08-08):
     by the mail path and surfaced as `can_receive`/`can_send` API fields; the
     DNS re-check writes only the base `verified_*` flags and everything else
     derives. Internal rename only — the SimpleLogin wire is unchanged.
+
+15. **Observability: structured logs + Prometheus metrics, shipped by Alloy
+    to Grafana Cloud; Postgres remains the only database on the box**
+    (2026-08-14). The mail daemons log JSON lines through a thin first-party
+    logger (`server/src/log.ts` — pino-pretty's worker-thread transport is
+    the same Bun surface the don't-break list already documents twice); the
+    API keeps Fastify's pino. Every process exposes Prometheus text-format
+    metrics from a first-party registry (`server/src/metrics/` — prom-client
+    rejected: its default collectors lean on perf_hooks Bun doesn't fully
+    support) — the API at `/meta/metrics`, maild on an unpublished
+    `METRICS_PORT` listener that doubles as its health endpoint. One Grafana
+    Alloy container in the serve stack (compose profile `observe`,
+    credentials in `/opt/virtu/.env`) scrapes both and tails container logs,
+    remote-writing to Grafana Cloud (free tier). No self-hosted
+    Prometheus/Grafana/Loki, no TSDB on the box — queue observability
+    (depth gauges, `claimed_at` reaper, retention, operator drop/requeue)
+    stays in the one Postgres queue table, and the queue remains the only
+    writer of "sent". In-app admin dashboards ride Postgres aggregates;
+    Grafana owns time series and alerting. See Lane J.
+
+16. **Admin is a `users.flags` bit behind a nested `/api/admin` scope, in
+    the one public spec** (2026-08-14). No role column, no second auth
+    system: `USER_FLAGS.admin` (bit 0 — the flags bigint never crosses the
+    SL wire, so the bits are ours), a `requireAdmin` onRequest hook layered
+    inside the authed context, and `is_admin` added to `user_info` (additive;
+    SL clients ignore unknown fields). Admin routes ride the same committed
+    spec + Kubb SDK, tagged `Admin` — the two-spec split (madi's shape)
+    stays available by tag-filtering at emission if the public spec must
+    ever be SL-clean. First admin is minted by `bin/admin-grant`, direct DB
+    (no admin exists to call an API). The API answers a 403 (the routes are
+    in the committed public spec — nothing to hide server-side), but the
+    SPA renders that 403 as the same not-found page any bogus URL gets
+    (`pages/NotFound.tsx`, also the router's defaultNotFoundComponent) —
+    the browser surface never advertises an operator area. Privacy:
+    operators see envelope + allowlisted routing headers, never Subject or
+    body — the raw bytea is users' mail. Sudo-gating of destructive admin
+    ops is deferred to Lane K P2 with the `sudoGuard.ts` seam extracted
+    now. See Lane K.
 
 Open: none.

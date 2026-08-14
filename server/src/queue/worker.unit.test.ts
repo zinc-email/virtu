@@ -129,6 +129,7 @@ function outboundRow(over: Partial<OutboundMessage>): OutboundMessage {
     status: "sending",
     tries: 1,
     nextAttemptAt: new Date("2026-08-11T00:00:00Z"),
+    claimedAt: null,
     lastError: null,
     createdAt: new Date("2026-08-11T00:00:00Z"),
     updatedAt: new Date("2026-08-11T00:00:00Z"),

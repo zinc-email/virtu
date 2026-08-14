@@ -388,6 +388,15 @@ table {
 }
 
 @mixin button {
+  // iOS Safari renders native-appearance buttons with its own metrics: it
+  // overrides the vertical padding and centres the label in the border box,
+  // so the asymmetric padding below is ignored and the text sits off-centre.
+  // Same reason the form mixin unsets appearance on inputs. Every visual is
+  // declared here, so there's nothing left for the native theme to supply.
+  // (prefixed only, as in the form mixin — lightningcss collapses the pair to
+  // the unprefixed property, which is Safari 15.4+.)
+  -webkit-appearance: none;
+  box-sizing: border-box;
   text-align: center;
   font-family: $f1;
   font-size: 1rem;

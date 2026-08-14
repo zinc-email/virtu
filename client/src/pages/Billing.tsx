@@ -11,6 +11,7 @@ import {
   usePostBillingCheckout,
   usePostBillingPortal,
 } from "src/gen";
+import { isShell, shellPlatform } from "src/shell";
 import { Alert, KV, KVAction, KeyValue, Section, ui } from "src/ui";
 
 function isNotConfigured(err: unknown): boolean {
@@ -91,7 +92,19 @@ export function BillingPage() {
             )}
           </KeyValue>
 
-          {!data.configured ? (
+          {isShell() ? (
+            // Store rule (plans/mobile.md): consumption-only — no purchase UI
+            // in the mobile apps. Google explicitly permits the plain-text
+            // "visit our website" wording; Apple's anti-steering rule outside
+            // the US storefront has caught even non-tappable versions of that
+            // sentence, so iOS shows subscription status only.
+            shellPlatform() === "android" ? (
+              <p className={ui.finePrint}>
+                To upgrade or manage your subscription, visit {window.location.host} in your web
+                browser.
+              </p>
+            ) : null
+          ) : !data.configured ? (
             <p className={ui.finePrint}>Billing is not configured on this server.</p>
           ) : (
             <KeyValue>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon-only works because minSdk is 26; no raster fallbacks
+     needed. Placeholder mark until branding is settled. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@color/ic_launcher_background" />
+  <foreground android:drawable="@drawable/ic_launcher_fg" />
+</adaptive-icon>

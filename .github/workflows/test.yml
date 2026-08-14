@@ -36,3 +36,6 @@ jobs:
       - name: Unit tests
         run: bun test unit.test
         working-directory: server
+
+      - name: Bridge contract tests (client shell seam ↔ each shell's shim)
+        run: bun test mobile

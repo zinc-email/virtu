@@ -334,7 +334,9 @@ Settled (2026-08-08):
    rejected from experience (upgrade treadmill, RNW jank). Implication for
    Lane F **now**: the client stays webview-friendly — safe-area CSS, `100dvh`,
    touch targets, no hover-only affordances, and a platform seam for
-   shell detection.
+   shell detection. Execution plan: **`plans/mobile.md`** (2026-08-12) —
+   verified store-policy findings, the enumerable bridge vocabulary, autofill
+   strategy per platform, and the parallel workstream map.
 8. **No milters.** All verification is in-process via `mailauth.authenticate()`
    (SPF/DKIM/DMARC/ARC in one call, custom DNS resolver, results in the shape the
    ARC sealer consumes). Drops the milter protocol client and both milter

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Autofill service metadata: the gear next to virtu in the system's
+     autofill-service picker opens our onboarding screen. -->
+<autofill-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="email.zinc.virtu.AutofillSetupActivity" />

@@ -1,0 +1,64 @@
+# XcodeGen spec — the committed source of truth for the Xcode project.
+# On a Mac: `brew install xcodegen && xcodegen generate` (the .xcodeproj is
+# gitignored, like client/src/gen). Submissions must be built with the
+# current-year Xcode/SDK (plans/mobile.md, platform gotchas).
+name: Virtu
+options:
+  bundleIdPrefix: email.zinc
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+
+targets:
+  Virtu:
+    type: application
+    platform: iOS
+    sources:
+      - path: Virtu
+        excludes: ["Resources/**"]
+      - path: Virtu/Resources
+        buildPhase: resources
+    settings:
+      base:
+        # PERMANENT once the first build is uploaded to App Store Connect —
+        # settle store branding first (plans/mobile.md, open questions).
+        PRODUCT_BUNDLE_IDENTIFIER: email.zinc.virtu
+        CODE_SIGN_ENTITLEMENTS: Virtu/Virtu.entitlements
+      configs:
+        # Which deployment the shell fronts (the simulator reaches the host's
+        # `just up` stack as plain localhost). Staging: point at lmnop.
+        Debug:
+          VIRTU_WEB_ORIGIN: http://localhost:8080
+        Release:
+          VIRTU_WEB_ORIGIN: https://zinc.email
+    info:
+      path: Virtu/Info.plist
+      properties:
+        CFBundleDisplayName: virtu # placeholder — branding open question
+        VirtuWebOrigin: $(VIRTU_WEB_ORIGIN)
+        UILaunchScreen: {} # system launch screen; native splash equivalent
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Local-networking ATS relaxation only — lets Debug builds reach the
+        # cleartext dev stack; remote hosts still require TLS everywhere.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+
+  VirtuTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [VirtuTests]
+    dependencies:
+      - target: Virtu

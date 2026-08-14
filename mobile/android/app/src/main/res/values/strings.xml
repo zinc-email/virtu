@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Placeholder: the store name/branding is an open question in
+       plans/mobile.md. Settle it before the Play listing. -->
+  <string name="app_name">virtu</string>
+
+  <string name="offline_title">You\'re offline</string>
+  <string name="offline_body">virtu needs a connection.\nCheck your network and try again.</string>
+  <string name="offline_retry">Retry</string>
+  <string name="child_window_close">Close</string>
+
+  <!-- Share target (Track E) -->
+  <string name="share_target_label">New alias</string>
+  <string name="share_shortcut_label">New alias</string>
+  <string name="share_title">virtu alias</string>
+  <string name="share_minting">Minting…</string>
+  <string name="share_reused">Your existing alias for %1$s:</string>
+  <string name="share_fresh">A fresh alias for %1$s:</string>
+  <string name="share_fresh_no_site">A fresh alias:</string>
+  <string name="share_limit_reached">Alias limit reached for this account.</string>
+  <string name="share_logged_out">Open virtu and log in first.</string>
+  <string name="share_failed">Couldn\'t reach virtu. Check your connection and try again.</string>
+  <string name="share_copy">Copy</string>
+  <string name="share_copied">Copied</string>
+  <string name="share_done">Done</string>
+  <string name="share_open_app">Open virtu</string>
+
+  <!-- Autofill service (Track F) -->
+  <string name="autofill_fill">New virtu alias</string>
+  <string name="autofill_fill_site">virtu alias for %1$s</string>
+  <string name="autofill_shortcut_label">Set up autofill</string>
+  <string name="autofill_setup_title">Autofill aliases</string>
+  <string name="autofill_setup_body">Tap an email field in any app and virtu suggests an alias for that site — reusing the one you already minted, or minting a fresh one on the spot.</string>
+  <string name="autofill_status_on">virtu is your autofill service.</string>
+  <string name="autofill_status_off">virtu isn\'t your autofill service yet.</string>
+  <string name="autofill_enable">Enable autofill</string>
+  <string name="autofill_chrome_title">Using Chrome?</string>
+  <string name="autofill_chrome_body">Chrome keeps its own autofill unless you flip one switch: Chrome menu → Settings → Autofill services → “Autofill using another service”. (Android 14 or newer.)</string>
+</resources>

@@ -94,6 +94,10 @@ prod/staging.
   `just test-story`; `just test-net-logs` to watch the mail pipeline,
   `just test-net-down` to tear down. Messages are located by an
   `X-Virtu-Test-Id` header in Maildir — no resets, run in any order.
+- `*.contract.test.ts` (`mobile/*/contract/`) — the bridge-protocol pin: the
+  real client shell seam (`client/src/shell.ts`) driven through each shell's
+  real shim against a fake native side. Pure bun — no JDK/Xcode/SDK/docker.
+  `just test-contract`; also runs in `just check` and CI.
 - `*.dom.test.tsx` (client) — real React pages rendered in happy-dom, driving
   the **running stack over real HTTP** (transport is *not* mocked; happy-dom's
   document origin is the API). `just up && just db push`, then
@@ -104,8 +108,8 @@ prod/staging.
   client→server code import or a client DB reach-in. Harness:
   `client/test/{happydom,setup,render,tooling}.ts` + `client/bunfig.toml`.
 
-`just check` = format + both typechecks (regenerates the SDK) + unit tests;
-green here means CI passes. The int/story/dom tiers need docker and run
+`just check` = format + both typechecks (regenerates the SDK) + unit tests +
+bridge contract tests; green here means CI passes. The int/story/dom tiers need docker and run
 separately (like `just test-int`), so they're **not** in `just check` or CI.
 
 ## Code-gen pipeline (one direction) — the type-safety spine

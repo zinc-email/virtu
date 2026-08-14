@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <style name="Theme.Virtu" parent="android:Theme.Material.Light.NoActionBar">
+    <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+  </style>
+
+  <style name="Theme.Virtu.Share" parent="android:Theme.Material.Light.Dialog.NoActionBar">
+    <item name="android:windowCloseOnTouchOutside">true</item>
+  </style>
+
+  <!-- The autofill mint activity: invisible — the autofill UI stays on screen
+       underneath while the one network call runs. -->
+  <style name="Theme.Virtu.Translucent" parent="android:Theme.Material.NoActionBar">
+    <item name="android:windowIsTranslucent">true</item>
+    <item name="android:windowBackground">@android:color/transparent</item>
+    <item name="android:backgroundDimEnabled">false</item>
+    <item name="android:windowAnimationStyle">@null</item>
+  </style>
+
+  <style name="Theme.Virtu.Splash" parent="Theme.SplashScreen">
+    <item name="windowSplashScreenBackground">@color/splash_background</item>
+    <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_fg</item>
+    <item name="postSplashScreenTheme">@style/Theme.Virtu</item>
+  </style>
+</resources>

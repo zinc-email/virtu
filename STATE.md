@@ -246,6 +246,105 @@ for the next controller).
   compose-interpolation vars live in `/opt/virtu/.env` (also gitignored).
 - **Mobile shells** — post-MVP by decision #7 (native Swift/Kotlin over the
   web client; share-extension is the flagship feature + App Store 4.2 answer).
+  Execution plan drafted 2026-08-12 in **`plans/mobile.md`**: store-policy
+  research findings, the bridge protocol contract, and nine workstreams (six
+  parallelizable). Apple dev account + D-U-N-S already in hand; Play org
+  account is the remaining paperwork.
+  **Track A landed (2026-08-12):** bridge protocol v1 spec
+  (`client/src/shell.md`) + shell seam (`client/src/shell.ts` —
+  `window.virtuShell` detection, `apiKey.store/clear`, `share`,
+  `external.open`, web fallbacks). Wired: login/logout mirror the API key over
+  the bridge (`auth.ts`), Billing hides all purchase UI in-shell
+  (consumption-only posture). Verified: `just check` + full dom tier green,
+  incl. new shell-stub tests (Login bridge handoff, `Billing.dom.test.tsx`).
+  Track A remainder: safe-area/touch/hover audit of the SPA in a real
+  WebView; the blob-URL zone-file viewer needs shell-side handling (noted in
+  shell.md).
+  **Track C scaffolded (2026-08-13):** complete Android shell project in
+  `mobile/android/` (Gradle/Kotlin, not a Bun package). Bridge protocol v1
+  native side: `ShellProtocol.kt` (pure-JVM message layer + JUnit conformance
+  tests), `ShellBridge.kt` (origin-allowlisted WebMessageListener +
+  document-start shim, never `addJavascriptInterface`), `ApiKeyStore.kt`
+  (Keystore AES-GCM at rest — the storage Tracks E/F will read), plus a
+  localStorage healing script re-seeding `virtu.apiKey` from Keystore.
+  `MainActivity` covers the plan's platform gotchas: native inset padding
+  (edge-to-edge/targetSdk 36), native offline screen + retry, external links
+  to the system browser, window.open/blob URLs in an in-app child WebView
+  (the shell.md known gap), splash, rotation without SPA reload. Debug builds
+  front the local dev stack (`10.0.2.2:8080`), release fronts zinc
+  (`-PvirtuWebOrigin=https://lmnop.email` for staging). Verified on this
+  box (no JDK/SDK locally): the shim + real `client/src/shell.ts` seam pass
+  the bun contract suite `mobile/android/contract/shim.contract.test.ts`
+  (id correlation, error slugs, key round-trip — runnable with bare bun);
+  Kotlin compile + `./gradlew test` + the on-device checklist in
+  `mobile/android/README.md` await a machine with Android Studio.
+  `applicationId` (`email.zinc.virtu`) is placeholder-permanent — settle
+  branding before the first Play upload.
+  **Review pass (2026-08-13):** subagent direction review found no blockers;
+  hardening applied: seam reply-timeout (10s) + `openExternal` http/https
+  guard with error-reply fallback (`shell.ts`/`shell.md`); Billing's
+  visit-the-web line is now **Android-only** (Apple anti-steering — decided
+  in plans/mobile.md, enforced by a new iOS dom test); Android shell got a
+  `restoreState`-empty fallback, an external-scheme allowlist for link
+  navigations (http/https/mailto/tel — bridge parity), connectivity-only
+  offline-screen triggers, error replies instead of silent drops for
+  subframe bridge requests, gesture-only popups, and origin compare
+  normalization. The contract tier is now official: `just test-contract`,
+  wired into `bin/check` + CI + CLAUDE.md's tier list. Left alone
+  deliberately: the paraspace root-package changes (user tooling, just keep
+  them out of the mobile commit).
+  **Track E scaffolded (2026-08-13):** Android share target — `ShareActivity`
+  (dialog-themed mini-activity: options → reuse the server's per-site
+  recommendation or mint random, copy, done — never launches the main app),
+  `SharedHostname.kt` (pure-JVM hostname extraction from shared text, JUnit
+  suite), `VirtuApi.kt` (the two-endpoint native API slice,
+  `Authentication` header), sharing-shortcut plumbing (`shortcuts.xml` +
+  dynamic "New alias" shortcut published from MainActivity). The API flow
+  the native code bakes in was verified live against the dev stack via curl:
+  options?hostname → mint random?hostname → options returns the minted alias
+  as `recommendation`. Zero server changes, as the plan promised. On-device
+  checklist items 11–12 added to mobile/android/README.md.
+  **Track B scaffolded (2026-08-13):** complete iOS shell in `mobile/ios/` —
+  XcodeGen `project.yml` is the committed project definition (the .xcodeproj
+  is generated on the Mac, gitignored). Protocol v1 native side:
+  `ShellProtocol.swift` (pure message layer + XCTest conformance suite
+  mirroring the Kotlin one), `ShellBridge.swift`
+  (`WKScriptMessageHandlerWithReply` in the page world — the reply promise
+  replaces Android's id envelope — plus the document-start shim and the
+  Keychain-backed localStorage healing script), `KeychainStore.swift`
+  (shared access group `…virtu.shared`, entitlements committed, ready for
+  Tracks D/G), `ShellViewController` (offline screen filtered to
+  connectivity URLErrors, external-scheme allowlist matching Android,
+  window.open/blob child WKWebView sharing the parent's browsing context,
+  login kept in-webview, iPad share-sheet popover anchor),
+  `PrivacyInfo.xcprivacy`. Verified on this box (no Mac): the iOS shim +
+  real seam pass their own bun contract suite; `just test-contract` (and
+  bin/check + CI) now runs `bun test mobile` — 14/14 across both platforms
+  in one process (suites scrub each other's globals). Xcode compile +
+  simulator checklist (mobile/ios/README.md) await a Mac;
+  `PRODUCT_BUNDLE_IDENTIFIER` is placeholder-permanent like the Android
+  applicationId.
+  **Track F scaffolded (2026-08-13):** Android autofill — the plan's open
+  competitive lane (SimpleLogin ships none). `VirtuAutofillService` walks the
+  AssistStructure with `EmailField.kt` (pure-JVM heuristics, JUnit-tested:
+  autofill/autocomplete hints → InputType variations → HTML input type →
+  name fallback, password fields excluded at every layer) and answers email
+  fields with ONE dataset — dropdown RemoteViews + inline keyboard chip
+  (InlineSuggestionUi, API 30+, androidx.autofill) — whose value comes from
+  **dataset authentication**: no network in `onFillRequest`; tapping the chip
+  launches the translucent `AutofillMintActivity`, which runs the same
+  options→reuse-recommendation-or-mint flow as the share target (`VirtuApi` +
+  `ApiKeyStore`, the building blocks Tracks C/E laid) and returns the filled
+  dataset via `EXTRA_AUTHENTICATION_RESULT`. Site context = browser
+  `webDomain` (normalized by `SharedHostname.normalize`, now public); native
+  apps mint hostname-less. Logged out → the service stays silent. Onboarding:
+  `AutofillSetupActivity` (deep-link to the system autofill picker, live
+  status via `hasEnabledAutofillServices`, Chrome's "Autofill using another
+  service" walkthrough), reachable via a static long-press shortcut, as the
+  service's `settingsActivity` gear, and as the inline chip's attribution
+  target. Verified on this box: JUnit heuristics suite authored (runs with
+  `./gradlew test` on a JDK machine); on-device checklist items 13–15 added
+  to mobile/android/README.md. No client or server changes.
 
 ## Upstream workarounds to revisit
 

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?android:attr/colorBackground">
+
+  <WebView
+      android:id="@+id/webView"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent" />
+
+  <!-- The native offline/error screen (the airplane-mode case; also the
+       store-review answer to "it's just a website"). -->
+  <LinearLayout
+      android:id="@+id/errorScreen"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:background="?android:attr/colorBackground"
+      android:orientation="vertical"
+      android:gravity="center"
+      android:padding="32dp"
+      android:visibility="gone">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/offline_title"
+        android:textAppearance="?android:attr/textAppearanceLarge" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:text="@string/offline_body"
+        android:textAppearance="?android:attr/textAppearanceMedium" />
+
+    <Button
+        android:id="@+id/retry"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:minWidth="120dp"
+        android:text="@string/offline_retry" />
+  </LinearLayout>
+</FrameLayout>

@@ -74,6 +74,12 @@ test-int *args="":
 test-client *args="":
   bin/test-client {{args}}
 
+# Bridge contract tests (*.contract.test.ts): the real client shell seam
+# driven through each shell's real shim (mobile/*/contract/). Pure bun — no
+# JDK, Xcode, SDK, docker, or device. Also part of `just check`.
+test-contract *args="":
+  bun test mobile {{args}}
+
 # Start the simulated internet (fake DNS, peer MTAs, test-runner).
 # Fully isolated from the dev stack; no published host ports.
 test-net-up:

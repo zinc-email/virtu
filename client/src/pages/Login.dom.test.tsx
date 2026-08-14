@@ -9,10 +9,11 @@
 // matter. The emailed login code is fetched over a process boundary
 // (test/tooling.ts → bin/login-code), never a DB reach-in from the client.
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LoginPage } from "src/pages/Login";
+import type { VirtuShell } from "src/shell";
 import { HOME_MARKER, renderPage } from "../../test/render";
 import { latestLoginCode } from "../../test/tooling";
 
@@ -47,6 +48,10 @@ describe("LoginPage — real transport against the running stack", () => {
     localStorage.clear();
   });
 
+  afterEach(() => {
+    delete window.virtuShell;
+  });
+
   test("fresh email → emailed code → lands in the app (signup path)", async () => {
     const user = userEvent.setup();
     const email = uniqueEmail();
@@ -76,6 +81,36 @@ describe("LoginPage — real transport against the running stack", () => {
     await fillCode(user, code);
     await screen.findByText(HOME_MARKER);
     expect(localStorage.getItem("virtu.apiKey")).toBeTruthy();
+  });
+
+  test("inside a mobile shell, login hands the key over the bridge (apiKey.store)", async () => {
+    // A fake window.virtuShell standing in for the native side (src/shell.md):
+    // record every message, reply ok to all of them.
+    const received: unknown[] = [];
+    const fakeShell: VirtuShell = {
+      platform: "ios",
+      shellVersion: "0.0.0-test",
+      protocol: 1,
+      request: (message) => {
+        const parsed: unknown = JSON.parse(message);
+        received.push(parsed);
+        return Promise.resolve(JSON.stringify({ ok: true }));
+      },
+    };
+    window.virtuShell = fakeShell;
+
+    const user = userEvent.setup();
+    const email = uniqueEmail();
+    renderPage(LoginPage, "/login");
+
+    await submitEmail(user, email);
+    const code = await latestLoginCode(email);
+    await fillCode(user, code);
+    await screen.findByText(HOME_MARKER);
+
+    const key = localStorage.getItem("virtu.apiKey");
+    expect(key).toBeTruthy();
+    expect(received).toContainEqual({ type: "apiKey.store", key });
   });
 
   test("a wrong code surfaces the API error and stays on the code step", async () => {

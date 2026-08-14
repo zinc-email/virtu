@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # check — run every check CI runs, so a green run here means CI will pass.
-# Mirrors .github/workflows/test.yml: format-check, typecheck, unit tests.
+# Mirrors .github/workflows/test.yml: format-check, typecheck, unit tests,
+# bridge contract tests.
 #
 # Cheapest checks first so it fails fast. Only the unit tier runs here — it
 # needs no docker. The int tier (routes against the dockerized postgres) has
@@ -22,6 +23,9 @@ bin/typecheck
 
 echo "- unit tests" >&2
 (cd server && bun test unit.test "$@")
+
+echo "- bridge contract tests" >&2
+bun test mobile
 
 echo >&2
 echo "all checks passed" >&2

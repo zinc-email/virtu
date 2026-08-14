@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sharing-shortcut declaration: lets the dynamic "New alias" shortcut
+     (published in MainActivity) rank as a direct-share row in the sheet.
+     Plus the static "Set up autofill" long-press shortcut (Track F's
+     onboarding entry point). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+  <share-target android:targetClass="email.zinc.virtu.ShareActivity">
+    <data android:mimeType="text/plain" />
+    <category android:name="email.zinc.virtu.category.NEW_ALIAS" />
+  </share-target>
+  <shortcut
+      android:shortcutId="autofill-setup"
+      android:enabled="true"
+      android:icon="@drawable/ic_launcher_fg"
+      android:shortcutShortLabel="@string/autofill_shortcut_label">
+    <intent
+        android:action="android.intent.action.VIEW"
+        android:targetPackage="email.zinc.virtu"
+        android:targetClass="email.zinc.virtu.AutofillSetupActivity" />
+  </shortcut>
+</shortcuts>

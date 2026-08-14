@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+
+  <!-- allowBackup=false: the stored API key is ciphertext under a Keystore
+       key that never leaves the device, so a restored backup could not be
+       decrypted anyway — better to restore to a clean logged-out state. -->
+  <application
+      android:label="@string/app_name"
+      android:icon="@mipmap/ic_launcher"
+      android:theme="@style/Theme.Virtu.Splash"
+      android:supportsRtl="true"
+      android:allowBackup="false">
+
+    <!-- configChanges keeps the WebView alive across rotation/resize instead
+         of recreating it (standard for webview shells: a recreate would
+         reload the SPA). -->
+    <activity
+        android:name=".MainActivity"
+        android:exported="true"
+        android:launchMode="singleTask"
+        android:windowSoftInputMode="adjustResize"
+        android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|uiMode">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+      <meta-data
+          android:name="android.app.shortcuts"
+          android:resource="@xml/shortcuts" />
+    </activity>
+
+    <!-- Track F: the autofill service — the "virtu alias" chip in other
+         apps' email fields. BIND_AUTOFILL_SERVICE restricts binding to the
+         system. -->
+    <service
+        android:name=".VirtuAutofillService"
+        android:exported="true"
+        android:label="@string/app_name"
+        android:permission="android.permission.BIND_AUTOFILL_SERVICE">
+      <intent-filter>
+        <action android:name="android.service.autofill.AutofillService" />
+      </intent-filter>
+      <meta-data
+          android:name="android.autofill"
+          android:resource="@xml/autofill_service" />
+    </service>
+
+    <!-- Dataset authentication target: launched by the system on chip tap
+         via our own PendingIntent, so not exported. Invisible; returns the
+         filled dataset. -->
+    <activity
+        android:name=".AutofillMintActivity"
+        android:exported="false"
+        android:theme="@style/Theme.Virtu.Translucent"
+        android:excludeFromRecents="true"
+        android:noHistory="true" />
+
+    <!-- Autofill onboarding: the long-press "Set up autofill" shortcut (so it
+         must be exported — the launcher starts it) and the service's
+         settingsActivity both land here. -->
+    <activity
+        android:name=".AutofillSetupActivity"
+        android:exported="true"
+        android:label="@string/autofill_setup_title"
+        android:theme="@style/Theme.Virtu" />
+
+    <!-- Track E: the share target. A dialog-themed mini-activity — the whole
+         mint-and-copy flow completes here without launching MainActivity. -->
+    <activity
+        android:name=".ShareActivity"
+        android:exported="true"
+        android:label="@string/share_target_label"
+        android:theme="@style/Theme.Virtu.Share"
+        android:excludeFromRecents="true"
+        android:noHistory="true">
+      <intent-filter>
+        <action android:name="android.intent.action.SEND" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="text/plain" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

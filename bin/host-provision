@@ -80,26 +80,74 @@ usermod -aG docker virtu
 # bin/queue-* and bin/admin-* do `cd server && bun run src/scripts/…` directly
 # rather than `compose exec api`, precisely so they still work when the stack
 # is down — which is when you need them. That only holds if bun is on the box.
-# Both install into /usr/local/bin (already on everyone's PATH) instead of the
+# Both land in /usr/local/bin (already on everyone's PATH) instead of the
 # invoking user's ~/.bun, so `virtu` gets them without a login-shell dance.
+#
+# Deliberately NOT `curl https://…/install.sh | bash`: that runs whatever the
+# vendor serves today as root, unverified. We pin a version AND its published
+# SHA-256 and check it before anything executes — the same trust posture as the
+# Docker block above pinning a signing key. Bumping a version means updating
+# its checksum here; get them from the release's SHASUMS256.txt / SHA256SUMS.
+arch=$(dpkg --print-architecture)
 
-# Pinned to the same line as the compose images (oven/bun:1.3) — keep the two
-# in step, and re-run this script to apply a bump.
-BUN_VERSION="${BUN_VERSION:-1.3.14}"
+# Keep BUN_VERSION on the same line as the compose images (oven/bun:1.3).
+BUN_VERSION="1.3.14"
 if [[ "$(bun --version 2>/dev/null || true)" != "$BUN_VERSION" ]]; then
-  curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v$BUN_VERSION" >/dev/null
-  echo "bun: installed $BUN_VERSION"
+  case "$arch" in
+    # x64 non-baseline needs AVX2; the vendor installer sniffs the same flag.
+    amd64)
+      if grep -qm1 '\bavx2\b' /proc/cpuinfo; then
+        bun_target="bun-linux-x64"
+        bun_sha="951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f"
+      else
+        bun_target="bun-linux-x64-baseline"
+        bun_sha="a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7"
+      fi
+      ;;
+    arm64)
+      bun_target="bun-linux-aarch64"
+      bun_sha="a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b"
+      ;;
+    *) echo "host-provision: no pinned bun checksum for arch '$arch'" >&2; exit 1 ;;
+  esac
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/bun.zip" \
+    "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$bun_target.zip"
+  echo "$bun_sha  $tmp/bun.zip" | sha256sum -c --quiet -
+  unzip -qo "$tmp/bun.zip" -d "$tmp"
+  install -m 0755 "$tmp/$bun_target/bun" /usr/local/bin/bun
+  rm -rf "$tmp"
+  echo "bun: installed $BUN_VERSION ($bun_target)"
 else
   echo "bun: $BUN_VERSION already installed"
 fi
 
-# Unpinned: just is a convenience wrapper over bin/, never load-bearing (see
-# CLAUDE.md — "just is convenience, not authority"), so latest is fine.
-if ! command -v just >/dev/null; then
-  curl -fsSL https://just.systems/install.sh | bash -s -- --to /usr/local/bin >/dev/null
-  echo "just: installed"
+# just is a convenience wrapper over bin/, never load-bearing (CLAUDE.md —
+# "just is convenience, not authority"), but it gets the same treatment: an
+# unverified root install is an unverified root install.
+JUST_VERSION="1.58.0"
+if [[ "$(just --version 2>/dev/null | awk '{print $2}')" != "$JUST_VERSION" ]]; then
+  case "$arch" in
+    amd64)
+      just_target="x86_64-unknown-linux-musl"
+      just_sha="4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d"
+      ;;
+    arm64)
+      just_target="aarch64-unknown-linux-musl"
+      just_sha="748237128c4c40cbdabc65e841d05ceba13cc23a91eaba395495894c1d9764df"
+      ;;
+    *) echo "host-provision: no pinned just checksum for arch '$arch'" >&2; exit 1 ;;
+  esac
+  tmp=$(mktemp -d)
+  curl -fsSL -o "$tmp/just.tar.gz" \
+    "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-$just_target.tar.gz"
+  echo "$just_sha  $tmp/just.tar.gz" | sha256sum -c --quiet -
+  tar -xzf "$tmp/just.tar.gz" -C "$tmp" just
+  install -m 0755 "$tmp/just" /usr/local/bin/just
+  rm -rf "$tmp"
+  echo "just: installed $JUST_VERSION"
 else
-  echo "just: already installed"
+  echo "just: $JUST_VERSION already installed"
 fi
 
 echo

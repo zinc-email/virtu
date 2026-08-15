@@ -95,7 +95,15 @@ export async function registerOpenApi(app: FastifyInstance) {
         version: "0.1.0",
       },
       servers: [{ url: "/api", description: "API root" }],
-      tags: [{ name: "Account", description: "Registration, login, and account info" }],
+      tags: [
+        { name: "Account", description: "Registration, login, and account info" },
+        {
+          name: "Admin",
+          description:
+            "Operator endpoints (Virtu extension — not SimpleLogin wire). " +
+            "Require the admin flag; everyone else receives 403.",
+        },
+      ],
       components: {
         securitySchemes: {
           apiKeyAuth: {

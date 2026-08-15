@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#
+# admin-revoke — clear the admin flag on a user (see bin/admin-grant).
+#
+# Usage: bin/admin-revoke <email>
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: bin/admin-revoke <email>" >&2
+  exit 2
+fi
+
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/adminGrant.ts --revoke "$1"

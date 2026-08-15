@@ -122,6 +122,14 @@ services:
       SMTP_TLS_CERT_FILE: /repo/server/docker/test/mkcert/virtu.email.pem
       SMTP_TLS_KEY_FILE: /repo/server/docker/test/mkcert/virtu.email-key.pem
       QUEUE_POLL_MS: "500"
+      # Fast retry horizon: production defaults to 25 tries / 6h cap (~4
+      # days); retry-path stories need seconds, not days.
+      QUEUE_MAX_TRIES: "6"
+      QUEUE_BACKOFF_MAX_MS: "60000"
+      # Humans read these logs (`just test-net-logs`); prod ships JSON.
+      LOG_FORMAT: pretty
+      # Reachable from the test-runner (stories assert delivery counters).
+      METRICS_HOST: 0.0.0.0
       # The simulated internet's peer MTAs live on 192.168.x — deliverd's
       # production SSRF egress guard would refuse them, so bypass it here.
       SMTP_ALLOW_PRIVATE_TARGETS: "true"

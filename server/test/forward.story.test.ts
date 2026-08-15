@@ -100,5 +100,13 @@ describe("M1: forward", () => {
     // qmail stamped its own Received hop. (Upstream Received headers were
     // dropped by the forward whitelist; our mx adds none for MVP.)
     expect(getHeaders(raw, "Received").length).toBeGreaterThanOrEqual(1);
+
+    // Observability (Lane J): the delivery that just landed is on maild's
+    // metrics listener — the same endpoint Alloy scrapes in production.
+    const metrics = await fetch("http://mail.virtu.email:9100/metrics").then((r) => r.text());
+    const sent = /virtu_queue_deliveries_total\{result="sent"\} (\d+)/.exec(metrics);
+    expect(Number(sent?.[1] ?? 0)).toBeGreaterThanOrEqual(1);
+    expect(metrics).toContain('virtu_mx_messages_total{outcome="forwarded"}');
+    expect(metrics).toContain("virtu_queue_depth{");
   }, 120_000);
 });

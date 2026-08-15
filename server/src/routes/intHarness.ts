@@ -2,10 +2,11 @@
 // construction: every caller registers its own unique user; nothing here
 // truncates or shares state.
 
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { App } from "../app/server";
+import { USER_FLAGS } from "../auth/userFlags";
 import { db } from "../db";
-import { outboundMessages } from "../db/schema";
+import { outboundMessages, users } from "../db/schema";
 import { extractCodeFromBody } from "../pipeline/transactional";
 
 export const uniqueEmail = () => `it-${crypto.randomUUID()}@int.test`;
@@ -35,6 +36,14 @@ export async function latestEmailedCode(email: string): Promise<string> {
 export interface TestUser {
   email: string;
   apiKey: string;
+}
+
+/** Set the admin flag directly (the tests' form of bin/admin-grant). */
+export async function makeAdmin(email: string): Promise<void> {
+  await db
+    .update(users)
+    .set({ flags: sql`${users.flags} | ${USER_FLAGS.admin}` })
+    .where(eq(users.email, email));
 }
 
 /** A unique source IP per call, so the per-IP auth rate limit (10/minute)

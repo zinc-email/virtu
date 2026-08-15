@@ -9,6 +9,25 @@ const ConfigSchema = z.object({
   databaseUrl: z.string().default("postgres://virtu:virtu@localhost:5432/virtu"),
   apiHost: z.string().default("0.0.0.0"),
   apiPort: z.coerce.number().int().default(3000),
+
+  // ── Observability (PLAN decision #15) ────────────────────────────────────
+  // Daemon log lines: "json" for the deploy form, "pretty" for humans.
+  // (src/log.ts also reads these from env directly to stay cycle-free; these
+  // entries carry the same defaults and the .env.example documentation.)
+  //
+  // `.catch()`, not a hard parse error, on purpose: this schema is parsed at
+  // import by EVERY entrypoint, so a strict enum would turn a typo'd
+  // LOG_LEVEL into a boot crash for mx/submission/deliverd — exactly the
+  // failure src/log.ts goes out of its way to avoid ("a typo'd LOG_LEVEL must
+  // never take the mail path down"). A misconfigured logger degrades to the
+  // default; it never takes mail down.
+  logFormat: z.enum(["json", "pretty"]).default("json").catch("json"),
+  logLevel: z.enum(["debug", "info", "warn", "error"]).default("info").catch("info"),
+  // maild's metrics/health listener (Prometheus text format). Loopback by
+  // default; the serve compose sets METRICS_HOST=0.0.0.0 so Alloy can scrape
+  // maild:9100 on the compose network (the port is never published).
+  metricsHost: z.string().default("127.0.0.1"),
+  metricsPort: z.coerce.number().int().default(9100),
   // Requests/minute per IP across the auth routes (register/activate/login).
   // The dev compose raises it: the DOM test tier registers users freely.
   authRateLimitMax: z.coerce.number().int().default(10),
@@ -45,8 +64,29 @@ const ConfigSchema = z.object({
   // ── Delivery queue (deliverd) ────────────────────────────────────────────
   queuePollMs: z.coerce.number().int().default(1000),
   queueBatchSize: z.coerce.number().int().default(10),
-  // Max delivery attempts before a transient failure becomes permanent.
-  queueMaxTries: z.coerce.number().int().default(6),
+  // Max delivery attempts before a transient failure becomes permanent. With
+  // the 6h backoff cap below, 25 tries ≈ 4 days of retrying — RFC 5321's
+  // customary "4-5 days" horizon. (The test network pins the old fast values.)
+  queueMaxTries: z.coerce.number().int().default(25),
+  // Upper bound on any single retry delay (backoff.ts caps here).
+  queueBackoffMaxMs: z.coerce
+    .number()
+    .int()
+    .default(6 * 60 * 60_000),
+  // ── Queue hygiene (reaper + retention, run inside the worker loop) ───────
+  // A `sending` row whose claim is older than this is presumed orphaned by a
+  // crashed worker and returned to `pending` (at-least-once delivery).
+  queueStuckSendingMinutes: z.coerce.number().int().default(15),
+  queueReapIntervalMs: z.coerce.number().int().default(60_000),
+  // Terminal rows are eventually deleted: sent rows keep no raw (cleared on
+  // the terminal write) and age out fast; failed rows keep raw for requeue
+  // and stick around longer for forensics.
+  queueRetentionIntervalMs: z.coerce
+    .number()
+    .int()
+    .default(60 * 60_000),
+  queueRetainSentDays: z.coerce.number().int().default(7),
+  queueRetainFailedDays: z.coerce.number().int().default(30),
 });
 
 export const config = loadConfigFromEnv(ConfigSchema);

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# operator-create — seed a local dev OPERATOR: bin/user-create (passwordless
+# signup/login, prints the API key) + bin/admin-grant (the admin flag). The
+# standard dev operator is ops@qmail.com, so the everyday persona
+# (wes@qmail.com, `just user-create`) stays a plain user and the
+# no-Admin-nav experience remains visible in dev. Idempotent.
+#
+# Usage: bin/operator-create [email]
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+EMAIL="${1:-ops@qmail.com}"
+
+bin/user-create "$EMAIL"
+bin/admin-grant "$EMAIL"
+echo
+echo "Admin lives at http://localhost:8080/app/admin (log in as $EMAIL;"
+echo "code via \`just login-code $EMAIL\`)."

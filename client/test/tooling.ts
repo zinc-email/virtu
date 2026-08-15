@@ -60,3 +60,11 @@ export async function createUser(email: string): Promise<string> {
   if (!match?.[1]) throw new Error(`no api key in user-create output:\n${out}`);
   return match[1];
 }
+
+/**
+ * Set the admin flag via bin/admin-grant — the same break-glass mint an
+ * operator uses, over the process boundary (never a client DB reach-in).
+ */
+export function grantAdmin(email: string): Promise<string> {
+  return runTool([bin("admin-grant"), email]);
+}

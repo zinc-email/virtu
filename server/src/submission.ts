@@ -46,8 +46,15 @@ import {
   type User,
   users,
 } from "./db/schema.ts";
+import { createLogger, type Logger } from "./log.ts";
 import { buildVerp, parseMessage, rewriteReply, serializeMessage } from "./mail/index.ts";
 import { signOutbound } from "./mailauth/index.ts";
+import {
+  smtpConnectionsTotal,
+  submissionAuthTotal,
+  submissionEnqueuedTotal,
+  submissionRcptRefusedTotal,
+} from "./metrics/index.ts";
 import { mailboxMatchKey } from "./pipeline/addressMatch.ts";
 import { type AuthThrottle, authThrottleKey, createAuthThrottle } from "./pipeline/authThrottle.ts";
 import { findOrCreateContact, resolveReverseAlias } from "./pipeline/contacts.ts";
@@ -77,7 +84,14 @@ export interface SubmissionOptions {
   tls?: SmtpTlsConfig;
   /** Failed-AUTH throttle override for tests; default {@link createAuthThrottle}. */
   authThrottle?: AuthThrottle;
-  log?: (message: string) => void;
+  logger?: Logger;
+}
+
+// Lazy so tests that inject their own logger never construct the default.
+let submissionLogger: Logger | null = null;
+function defaultSubmissionLogger(): Logger {
+  submissionLogger ??= createLogger("submission");
+  return submissionLogger;
 }
 
 /**
@@ -238,7 +252,7 @@ async function resolveOutbound(
     }
   | { reject: SmtpHookResult }
 > {
-  const log = opts.log ?? ((m: string) => console.log(m));
+  const log = opts.logger ?? defaultSubmissionLogger();
   const ownership = await senderOwnership(opts.db, user.id, mailFrom);
 
   if (ownership.kind === "none") {
@@ -260,7 +274,8 @@ async function resolveOutbound(
     for (const rcpt of rcptAddresses) {
       const contact = await resolveReverseAlias(opts.db, rcpt);
       if (contact === null || contact.userId !== user.id) {
-        log(`submission: refused rcpt ${rcpt} for mailbox ${mailFrom}: not a reverse alias`);
+        submissionRcptRefusedTotal.inc({ reason: "not_reverse_alias" });
+        log.info("rcpt_refused", { rcpt, from: mailFrom, reason: "not_reverse_alias" });
         return { reject: NOT_REVERSE_ALIAS };
       }
       contacts.push(contact);
@@ -290,7 +305,8 @@ async function resolveOutbound(
     const reverse = await resolveReverseAlias(opts.db, rcpt);
     if (reverse !== null) {
       if (reverse.userId !== user.id || reverse.aliasId !== alias.id) {
-        log(`submission: refused rcpt ${rcpt} for ${alias.email}: another alias's reverse alias`);
+        submissionRcptRefusedTotal.inc({ reason: "cross_alias" });
+        log.info("rcpt_refused", { rcpt, from: alias.email, reason: "cross_alias" });
         return { reject: NOT_REVERSE_ALIAS };
       }
       plan.push({ kind: "reply", contact: reverse });
@@ -300,11 +316,13 @@ async function resolveOutbound(
     // own mailbox (e.g. a Bcc-self MUA) would otherwise be minted as a cold
     // contact and relayed back out — the same leak the To/Cc screen blocks.
     if (await isOwnMailboxAddress(opts.db, user.id, rcpt)) {
-      log(`submission: refused rcpt ${rcpt} for ${alias.email}: own mailbox address`);
+      submissionRcptRefusedTotal.inc({ reason: "own_mailbox" });
+      log.info("rcpt_refused", { rcpt, from: alias.email, reason: "own_mailbox" });
       return { reject: MAILBOX_LEAK };
     }
     if (await refusesLocalAddress(opts.db, opts.mailDomain, rcpt)) {
-      log(`submission: refused rcpt ${rcpt} for ${alias.email}: unknown local address`);
+      submissionRcptRefusedTotal.inc({ reason: "unknown_local" });
+      log.info("rcpt_refused", { rcpt, from: alias.email, reason: "unknown_local" });
       return { reject: NOT_REVERSE_ALIAS };
     }
     plan.push({ kind: "cold", address: rcpt });
@@ -318,14 +336,23 @@ async function handleSubmissionData(
   event: SmtpDataEvent,
   opts: SubmissionOptions,
 ): Promise<SmtpHookResult> {
-  const log = opts.log ?? ((m: string) => console.log(m));
-  const { envelope } = event;
+  const { envelope, session } = event;
+  // One submission fans out across recipients, refusals and enqueues. Bind
+  // the connection id (smtp/server.ts) and the authenticated user once so
+  // every line the message produces — here and inside resolveOutbound —
+  // shares one handle to filter on.
+  const log = (opts.logger ?? defaultSubmissionLogger()).child({
+    sessionId: session.id,
+    authUser: envelope.authUser ?? null,
+  });
 
   const user = await authedUser(opts.db, envelope.authUser);
   if (user === null) return envelope.authUser === undefined ? AUTH_REQUIRED : BAD_CREDENTIALS;
 
   const resolved = await resolveOutbound(
-    opts,
+    // The session-scoped logger, not the bare one: resolveOutbound's refusal
+    // lines belong to the same message as everything below.
+    { ...opts, logger: log },
     user,
     envelope.mailFrom,
     envelope.rcptTo.map((r) => r.address),
@@ -384,10 +411,15 @@ async function handleSubmissionData(
     },
   );
   if (!result.ok) {
-    log(
-      `submission: refused ${result.refusal.reason} from ${alias.email}: ` +
-        `${result.refusal.header} entry ${result.refusal.address}`,
-    );
+    submissionRcptRefusedTotal.inc({
+      reason: result.refusal.reason === "mailbox_address" ? "own_mailbox" : "cross_alias",
+    });
+    log.info("header_refused", {
+      from: alias.email,
+      reason: result.refusal.reason,
+      header: result.refusal.header,
+      entry: result.refusal.address,
+    });
     return result.refusal.reason === "mailbox_address" ? MAILBOX_LEAK : NOT_REVERSE_ALIAS;
   }
 
@@ -447,14 +479,16 @@ async function handleSubmissionData(
   });
   let message: Uint8Array;
   if (dkimKey === null) {
-    log(`submission: WARNING no active DKIM key for ${aliasDomain} — sending unsigned`);
+    log.warn("dkim_key_missing", { domain: aliasDomain, consequence: "sending unsigned" });
     message = serializeMessage(result.headers, parsed.body);
   } else {
     const signed = await signOutbound(result.headers, parsed.body, { dkimKeys: [dkimKey] });
     for (const err of signed.errors) {
-      log(
-        `submission: DKIM signing error (${err.signingDomain}/${err.selector}): ${err.err.message}`,
-      );
+      log.error("dkim_sign_error", {
+        domain: err.signingDomain,
+        selector: err.selector,
+        error: err.err.message,
+      });
     }
     message = signed.message;
   }
@@ -474,10 +508,14 @@ async function handleSubmissionData(
       envelopeTo: target.contact.websiteEmail,
       maxRawBytes: opts.maxMessageSize,
     });
-    log(
-      `submission: queued #${queueId} ${target.kind} from ${alias.email} -> ` +
-        `${target.contact.websiteEmail} (log ${emailLog.id})`,
-    );
+    submissionEnqueuedTotal.inc({ mode });
+    log.info("submission_queued", {
+      queueId,
+      kind: target.kind,
+      from: alias.email,
+      to: target.contact.websiteEmail,
+      emailLogId: emailLog.id,
+    });
   }
 
   return { accept: true, message: "Ok: queued" };
@@ -497,17 +535,29 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
     maxMessageSize: opts.maxMessageSize,
     // AUTH is refused (and unadvertised) before STARTTLS whenever TLS is
     // configured — the library's requireAuthTls default.
+    // session.tls is already true at connect time on the implicit-TLS
+    // listener (byte-0 TLS), still false on the STARTTLS one — that's the
+    // listener discriminator.
+    onConnect: (event) => {
+      smtpConnectionsTotal.inc({
+        listener: event.session.tls ? "submission_tls" : "submission",
+      });
+      return { accept: true };
+    },
     onAuth: async (event) => {
       const key = authThrottleKey(event.session.remoteAddress, event.username);
       if (throttle.isLimited(key)) {
+        submissionAuthTotal.inc({ result: "throttled" });
         return rejectWith(454, "4.7.0", "Too many failed authentication attempts; try again later");
       }
       const ok = await verifyCredentials(opts, event.username, event.password);
       if (!ok) {
         throttle.recordFailure(key);
+        submissionAuthTotal.inc({ result: "bad_credentials" });
         return BAD_CREDENTIALS;
       }
       throttle.clear(key);
+      submissionAuthTotal.inc({ result: "ok" });
       return { accept: true };
     },
     onMailFrom: async (event) => {
@@ -573,10 +623,13 @@ export function submissionOptionsFromConfig(): SubmissionOptions {
 export async function startSubmission(): Promise<SubmissionServers> {
   const servers = createSubmissionServers(submissionOptionsFromConfig());
   const bound = await servers.starttls.listen(config.submissionPort, config.smtpHost);
-  console.log(`submission: listening on ${bound.host}:${bound.port}`);
+  defaultSubmissionLogger().info("listening", { host: bound.host, port: bound.port });
   if (servers.implicitTls !== null) {
     const tlsBound = await servers.implicitTls.listen(config.submissionTlsPort, config.smtpHost);
-    console.log(`submission: implicit-TLS listening on ${tlsBound.host}:${tlsBound.port}`);
+    defaultSubmissionLogger().info("listening_implicit_tls", {
+      host: tlsBound.host,
+      port: tlsBound.port,
+    });
   }
   return servers;
 }

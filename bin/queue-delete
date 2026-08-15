@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#
+# queue-delete — hard-delete terminal rows (failed/sent) ahead of retention.
+# Same primitive as the admin API's delete. Break-glass: direct DB.
+#
+# Usage: bin/queue-delete <id...>
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: bin/queue-delete <id...>" >&2
+  exit 2
+fi
+
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/queueDelete.ts "$@"

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#
+# admin-grant — set the admin flag (users.flags bit 0) on a user.
+#
+# The break-glass mint: the first admin can't be created through the API
+# because no admin exists yet. Direct DB via the server's drizzle; works
+# with the API down (only Postgres must be up). See also bin/admin-revoke.
+#
+# Usage: bin/admin-grant <email>
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: bin/admin-grant <email>" >&2
+  exit 2
+fi
+
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/adminGrant.ts "$1"

@@ -12,10 +12,17 @@ const ConfigSchema = z.object({
 
   // ── Observability (PLAN decision #15) ────────────────────────────────────
   // Daemon log lines: "json" for the deploy form, "pretty" for humans.
-  // (src/log.ts also reads these from env directly to stay cycle-free; the
-  // schema entries exist for validation and .env.example documentation.)
-  logFormat: z.enum(["json", "pretty"]).default("json"),
-  logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  // (src/log.ts also reads these from env directly to stay cycle-free; these
+  // entries carry the same defaults and the .env.example documentation.)
+  //
+  // `.catch()`, not a hard parse error, on purpose: this schema is parsed at
+  // import by EVERY entrypoint, so a strict enum would turn a typo'd
+  // LOG_LEVEL into a boot crash for mx/submission/deliverd — exactly the
+  // failure src/log.ts goes out of its way to avoid ("a typo'd LOG_LEVEL must
+  // never take the mail path down"). A misconfigured logger degrades to the
+  // default; it never takes mail down.
+  logFormat: z.enum(["json", "pretty"]).default("json").catch("json"),
+  logLevel: z.enum(["debug", "info", "warn", "error"]).default("info").catch("info"),
   // maild's metrics/health listener (Prometheus text format). Loopback by
   // default; the serve compose sets METRICS_HOST=0.0.0.0 so Alloy can scrape
   // maild:9100 on the compose network (the port is never published).

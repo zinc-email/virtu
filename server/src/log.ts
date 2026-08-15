@@ -51,6 +51,14 @@ function prettyValue(value: string | number | boolean | null): string {
   return /^[\w@.:/#+-]*$/.test(value) ? value : JSON.stringify(value);
 }
 
+/**
+ * The four keys every line leads with. A field of the same name would
+ * silently overwrite the header slot (`log.info("x", { level: "critical" })`
+ * rewriting the real level), so they are reserved: a colliding field is
+ * dropped rather than allowed to falsify the record.
+ */
+const RESERVED_FIELDS = new Set(["ts", "level", "component", "event"]);
+
 function formatLine(
   format: "json" | "pretty",
   now: Date,
@@ -68,14 +76,16 @@ function formatLine(
       event,
     };
     for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined) entry[key] = value;
+      if (value !== undefined && !RESERVED_FIELDS.has(key)) entry[key] = value;
     }
     return JSON.stringify(entry);
   }
   const time = now.toISOString().slice(11, 19);
   const parts = [time, PRETTY_TAG[level], component, event];
   for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined) parts.push(`${key}=${prettyValue(value)}`);
+    if (value !== undefined && !RESERVED_FIELDS.has(key)) {
+      parts.push(`${key}=${prettyValue(value)}`);
+    }
   }
   return parts.join(" ");
 }

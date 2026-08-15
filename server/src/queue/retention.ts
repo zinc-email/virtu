@@ -21,8 +21,17 @@ import { type OutboundStatus, outboundMessages } from "../db/schema.ts";
 export interface RetentionOptions {
   retainSentDays: number;
   retainFailedDays: number;
-  /** Rows deleted per statement (each status loops until drained). */
+  /** Rows deleted per statement. */
   batchSize?: number;
+  /**
+   * Statements per status per pass. Retention runs INSIDE the delivery loop
+   * (worker.ts), so a pass that drained an unbounded backlog would hold the
+   * loop — and with it every outbound message — for as long as the backlog
+   * took: the first tick after a box has accumulated months of terminal rows
+   * is exactly that case. Capping the pass keeps each tick bounded; the
+   * remainder goes on the next tick.
+   */
+  maxBatchesPerPass?: number;
   now?: () => Date;
 }
 
@@ -31,9 +40,10 @@ async function deleteAged(
   status: OutboundStatus,
   cutoff: Date,
   batchSize: number,
+  maxBatches: number,
 ): Promise<number> {
   let total = 0;
-  for (;;) {
+  for (let pass = 0; pass < maxBatches; pass++) {
     const batch = db
       .select({ id: outboundMessages.id })
       .from(outboundMessages)
@@ -46,6 +56,7 @@ async function deleteAged(
     total += deleted.length;
     if (deleted.length < batchSize) return total;
   }
+  return total;
 }
 
 /** One retention pass. Returns rows deleted per status. */
@@ -55,11 +66,12 @@ export async function runRetentionOnce(
 ): Promise<{ sent: number; failed: number }> {
   const now = opts.now ?? (() => new Date());
   const batchSize = opts.batchSize ?? 500;
+  const maxBatches = opts.maxBatchesPerPass ?? 20;
   const dayMs = 86_400_000;
   const sentCutoff = new Date(now().getTime() - opts.retainSentDays * dayMs);
   const failedCutoff = new Date(now().getTime() - opts.retainFailedDays * dayMs);
   return {
-    sent: await deleteAged(db, "sent", sentCutoff, batchSize),
-    failed: await deleteAged(db, "failed", failedCutoff, batchSize),
+    sent: await deleteAged(db, "sent", sentCutoff, batchSize, maxBatches),
+    failed: await deleteAged(db, "failed", failedCutoff, batchSize, maxBatches),
   };
 }

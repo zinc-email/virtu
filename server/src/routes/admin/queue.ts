@@ -32,6 +32,13 @@ import {
 
 type QueueRow = Omit<OutboundMessage, "raw"> & { sizeBytes: number };
 
+/**
+ * How much of a row's raw bytes the detail endpoint reads. RFC 5322 caps a
+ * header line at 998 octets and real mail keeps the whole block far under
+ * this; anything past it is body, which no operator surface may show.
+ */
+const HEADER_SCAN_BYTES = 128 * 1024;
+
 const listColumns = {
   id: outboundMessages.id,
   status: outboundMessages.status,
@@ -122,8 +129,16 @@ export async function withAdminQueueRoutes(admin: FastifyInstance) {
       },
     },
     handler: async (req) => {
+      // Only the HEAD of the bytea: the allowlist reads headers, and a row can
+      // hold SMTP_MAX_MESSAGE_SIZE (25MB) of body the operator is never shown
+      // anyway. Selecting the whole column pulled all of it through Postgres,
+      // Bun and the parser to throw it away — `size_bytes` still reports the
+      // true length via octet_length.
       const rows = await db
-        .select()
+        .select({
+          ...listColumns,
+          rawHead: sql<Uint8Array>`substr(${outboundMessages.raw}, 1, ${HEADER_SCAN_BYTES})`,
+        })
         .from(outboundMessages)
         .where(eq(outboundMessages.id, req.params.message_id))
         .limit(1);
@@ -131,10 +146,10 @@ export async function withAdminQueueRoutes(admin: FastifyInstance) {
       if (row === undefined) throw new HttpError(404, "Unknown queue message");
 
       const headers =
-        row.raw.length === 0 ? [] : allowlistHeaders(parseMessage(row.raw).headers.fields);
+        row.rawHead.length === 0 ? [] : allowlistHeaders(parseMessage(row.rawHead).headers.fields);
       const owner = await resolveQueueOwner(db, row.envelopeFrom);
       return {
-        message: toDto({ ...row, sizeBytes: row.raw.length }),
+        message: toDto(row),
         headers,
         owner:
           owner === null

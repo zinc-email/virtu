@@ -96,8 +96,16 @@ function defaultMxLogger(): Logger {
 
 /** Handle the completed DATA for one inbound message. */
 async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise<SmtpHookResult> {
-  const log = opts.logger ?? defaultMxLogger();
   const { envelope, session } = event;
+  // One inbound message fans out: several RCPTs, several verdicts, several
+  // queued forwards, each its own line. Bind the connection id (minted by
+  // smtp/server.ts) and the peer once, so every line this DATA produces
+  // carries the same handle — `sessionId=…` in Loki returns the whole
+  // message's story instead of lines that have to be re-correlated by eye.
+  const log = (opts.logger ?? defaultMxLogger()).child({
+    sessionId: session.id,
+    remote: session.remoteAddress,
+  });
 
   // Policy re-evaluation per recipient (RCPT accepted them; rows may have
   // changed since — the DATA-time decision is authoritative).
@@ -176,7 +184,6 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     mxMessagesTotal.inc({ outcome: "rejected" });
     log.info("inbound_rejected", {
       from: envelope.mailFrom || "<>",
-      remote: session.remoteAddress,
       reason: v.reason,
       smtpCode: v.code,
     });

@@ -12,10 +12,12 @@
  * maild also owns the metrics/health listener (PLAN decision #15): the
  * three daemons expose no HTTP of their own, so this composite serves
  * GET /metrics + GET /health on METRICS_HOST:METRICS_PORT
- * (metrics/httpServer.ts). Liveness = listeners started + the queue
- * worker's heartbeat fresher than a generous multiple of the poll
- * interval (a full batch of slow deliveries can legitimately take
- * minutes; a wedged loop cannot).
+ * (metrics/httpServer.ts). Liveness = every listener still bound + the
+ * queue worker's heartbeat fresh. The worker stamps that heartbeat per
+ * ROW, not per batch (queue/worker.ts `onRowStart`), so the window below
+ * bounds "no delivery has even STARTED in this long" — a whole batch of
+ * tarpitting destinations is legitimate progress and stays healthy, while
+ * a wedged loop still trips.
  */
 
 import { config } from "./config.ts";
@@ -30,27 +32,50 @@ const WORKER_HEARTBEAT_MAX_MS = Math.max(5 * config.queuePollMs, 10 * 60_000);
 
 async function main(): Promise<void> {
   const logger = createLogger("maild");
-  await startMx();
-  await startSubmission();
+  const mx = await startMx();
+  const submission = await startSubmission();
   const worker = startDeliverd();
 
-  startMetricsServer({
-    host: config.metricsHost,
-    port: config.metricsPort,
-    registry,
-    health: () => {
-      const heartbeatAgeMs = Date.now() - worker.heartbeatAt().getTime();
-      return {
-        ok: heartbeatAgeMs < WORKER_HEARTBEAT_MAX_MS,
-        detail: { workerHeartbeatAgeMs: heartbeatAgeMs },
-      };
-    },
-  });
+  // Liveness, as documented above: LISTENERS UP *and* a fresh worker
+  // heartbeat. address() is null before listen() and after close(), so a
+  // listener that died under a running process is visible here — checking
+  // only the heartbeat would report a maild with no mx as healthy.
+  const listenersUp = (): boolean =>
+    mx.address() !== null &&
+    submission.starttls.address() !== null &&
+    (submission.implicitTls === null || submission.implicitTls.address() !== null);
 
-  logger.info("started", {
-    metricsHost: config.metricsHost,
-    metricsPort: config.metricsPort,
-  });
+  // The metrics/health listener is OBSERVABILITY: it must never be able to
+  // take down the thing it observes. Bun.serve throws on a bound port, and
+  // an unhandled rejection here would kill a process already running mx,
+  // submission and deliverd — mail down because a scrape endpoint could not
+  // start. Log it and keep delivering instead.
+  try {
+    startMetricsServer({
+      host: config.metricsHost,
+      port: config.metricsPort,
+      registry,
+      health: () => {
+        const heartbeatAgeMs = Date.now() - worker.heartbeatAt().getTime();
+        const listeners = listenersUp();
+        return {
+          ok: listeners && heartbeatAgeMs < WORKER_HEARTBEAT_MAX_MS,
+          detail: { listenersUp: listeners, workerHeartbeatAgeMs: heartbeatAgeMs },
+        };
+      },
+    });
+    logger.info("started", {
+      metricsHost: config.metricsHost,
+      metricsPort: config.metricsPort,
+    });
+  } catch (err) {
+    logger.error("metrics_server_failed", {
+      metricsHost: config.metricsHost,
+      metricsPort: config.metricsPort,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    logger.info("started", { metricsHost: config.metricsHost, metricsPort: null });
+  }
 }
 
 if (import.meta.main) {

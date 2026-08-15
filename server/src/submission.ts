@@ -336,14 +336,23 @@ async function handleSubmissionData(
   event: SmtpDataEvent,
   opts: SubmissionOptions,
 ): Promise<SmtpHookResult> {
-  const log = opts.logger ?? defaultSubmissionLogger();
-  const { envelope } = event;
+  const { envelope, session } = event;
+  // One submission fans out across recipients, refusals and enqueues. Bind
+  // the connection id (smtp/server.ts) and the authenticated user once so
+  // every line the message produces — here and inside resolveOutbound —
+  // shares one handle to filter on.
+  const log = (opts.logger ?? defaultSubmissionLogger()).child({
+    sessionId: session.id,
+    authUser: envelope.authUser ?? null,
+  });
 
   const user = await authedUser(opts.db, envelope.authUser);
   if (user === null) return envelope.authUser === undefined ? AUTH_REQUIRED : BAD_CREDENTIALS;
 
   const resolved = await resolveOutbound(
-    opts,
+    // The session-scoped logger, not the bare one: resolveOutbound's refusal
+    // lines belong to the same message as everything below.
+    { ...opts, logger: log },
     user,
     envelope.mailFrom,
     envelope.rcptTo.map((r) => r.address),

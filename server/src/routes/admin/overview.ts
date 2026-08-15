@@ -28,23 +28,6 @@ export async function withAdminOverviewRoutes(admin: FastifyInstance) {
     handler: async () => {
       const dayAgo = new Date(Date.now() - 24 * 60 * 60_000);
 
-      const byStatus = await db
-        .select({ status: outboundMessages.status, n: count() })
-        .from(outboundMessages)
-        .groupBy(outboundMessages.status);
-      const statusCount = (status: string) => byStatus.find((r) => r.status === status)?.n ?? 0;
-
-      const [sent24h] = await db
-        .select({ n: count() })
-        .from(outboundMessages)
-        .where(and(eq(outboundMessages.status, "sent"), gt(outboundMessages.updatedAt, dayAgo)));
-
-      const [oldestPending] = await db
-        .select({ oldest: min(outboundMessages.nextAttemptAt) })
-        .from(outboundMessages)
-        .where(eq(outboundMessages.status, "pending"));
-      const oldest = oldestPending?.oldest ?? null;
-
       const activityCount = (isReply: boolean) =>
         db
           .select({ n: count() })
@@ -56,23 +39,51 @@ export async function withAdminOverviewRoutes(admin: FastifyInstance) {
               eq(emailLogs.blocked, false),
             ),
           );
-      const [forwards] = await activityCount(false);
-      const [replies] = await activityCount(true);
-      // All blocked copies, whichever phase — forwards/replies exclude them.
-      const [blocked] = await db
-        .select({ n: count() })
-        .from(emailLogs)
-        .where(and(gt(emailLogs.createdAt, dayAgo), eq(emailLogs.blocked, true)));
-      const [bounces] = await db
-        .select({ n: count() })
-        .from(emailLogs)
-        .where(and(isNotNull(emailLogs.bouncedAt), gt(emailLogs.bouncedAt, dayAgo)));
 
-      const [userTotal] = await db.select({ n: count() }).from(users);
-      const [userDisabled] = await db
-        .select({ n: count() })
-        .from(users)
-        .where(eq(users.disabled, true));
+      // Nine independent aggregates over three tables. Run together: served
+      // sequentially this endpoint paid nine full round-trips end to end, and
+      // it is the operator's landing page — the one screen loaded while
+      // something is already on fire.
+      const [
+        byStatus,
+        [sent24h],
+        [oldestPending],
+        [forwards],
+        [replies],
+        [blocked],
+        [bounces],
+        [userTotal],
+        [userDisabled],
+      ] = await Promise.all([
+        db
+          .select({ status: outboundMessages.status, n: count() })
+          .from(outboundMessages)
+          .groupBy(outboundMessages.status),
+        db
+          .select({ n: count() })
+          .from(outboundMessages)
+          .where(and(eq(outboundMessages.status, "sent"), gt(outboundMessages.updatedAt, dayAgo))),
+        db
+          .select({ oldest: min(outboundMessages.nextAttemptAt) })
+          .from(outboundMessages)
+          .where(eq(outboundMessages.status, "pending")),
+        activityCount(false),
+        activityCount(true),
+        // All blocked copies, whichever phase — forwards/replies exclude them.
+        db
+          .select({ n: count() })
+          .from(emailLogs)
+          .where(and(gt(emailLogs.createdAt, dayAgo), eq(emailLogs.blocked, true))),
+        db
+          .select({ n: count() })
+          .from(emailLogs)
+          .where(and(isNotNull(emailLogs.bouncedAt), gt(emailLogs.bouncedAt, dayAgo))),
+        db.select({ n: count() }).from(users),
+        db.select({ n: count() }).from(users).where(eq(users.disabled, true)),
+      ]);
+
+      const statusCount = (status: string) => byStatus.find((r) => r.status === status)?.n ?? 0;
+      const oldest = oldestPending?.oldest ?? null;
 
       return {
         queue: {

@@ -310,6 +310,14 @@ export interface QueueWorkerOptions {
   now?: () => Date;
   random?: () => number;
   logger?: Logger;
+  /**
+   * Called as each claimed row starts. The worker loop uses it to advance
+   * its heartbeat per ROW rather than per batch: one batch of `batchSize`
+   * rows to tarpitting destinations legitimately outlives any sane liveness
+   * window, and a batch-granular heartbeat would report maild unhealthy for
+   * doing exactly what it is supposed to do.
+   */
+  onRowStart?: () => void;
 }
 
 /**
@@ -351,6 +359,12 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
   queueClaimedTotal.inc({}, claimed.length);
 
   for (const row of claimed) {
+    opts.onRowStart?.();
+    // Every line below is about THIS row: bind its id once instead of
+    // repeating `queueId` at each call site, so a grep/Loki filter on
+    // `queueId` returns the row's whole story (skip, retry, failure, the
+    // hook error) rather than the subset that remembered to pass it.
+    const rowLogger = logger.child({ queueId: row.id, to: row.envelopeTo });
     // Refresh the lease per ROW, immediately before its delivery starts. The
     // batch stamped one claimedAt for up to batchSize rows delivered
     // sequentially, so tail rows behind a tarpitting destination could blow
@@ -372,7 +386,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
       )
       .returning({ id: outboundMessages.id });
     if (refreshed.length === 0) {
-      logger.warn("delivery_skipped_row_taken_over", { queueId: row.id });
+      rowLogger.warn("delivery_skipped_row_taken_over");
       continue;
     }
 
@@ -420,7 +434,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
           .where(guard)
           .returning({ id: outboundMessages.id });
         if (updated.length > 0) {
-          logger.info("delivery_sent", { queueId: row.id, to: row.envelopeTo, tries, durationMs });
+          rowLogger.info("delivery_sent", { tries, durationMs });
         }
         break;
       }
@@ -437,9 +451,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
           .where(guard)
           .returning({ id: outboundMessages.id });
         if (updated.length > 0) {
-          logger.info("delivery_retry", {
-            queueId: row.id,
-            to: row.envelopeTo,
+          rowLogger.info("delivery_retry", {
             tries,
             maxTries: opts.maxTries,
             delaySeconds: Math.round(delay / 1000),
@@ -456,9 +468,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
           .where(guard)
           .returning({ id: outboundMessages.id });
         if (updated.length === 0) break; // row taken over: no bounce action
-        logger.warn("delivery_failed", {
-          queueId: row.id,
-          to: row.envelopeTo,
+        rowLogger.warn("delivery_failed", {
           tries,
           durationMs,
           error: outcome.error,
@@ -467,8 +477,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
           try {
             await opts.onPermanentFailure(row, outcome.error);
           } catch (err) {
-            logger.error("permanent_failure_hook_error", {
-              queueId: row.id,
+            rowLogger.error("permanent_failure_hook_error", {
               error: (err as Error).message,
             });
           }
@@ -558,9 +567,17 @@ export function startQueueWorker(
     while (!stopped) {
       heartbeat = now();
       let processed = 0;
+      // Hygiene gets its OWN try: a reaper/retention failure is housekeeping
+      // noise and must not cost the pass its delivery — sharing one try meant
+      // a single failing DELETE skipped every queued message that tick.
       try {
         await runHygiene();
-        processed = await processQueueOnce(db, opts);
+      } catch (err) {
+        logger.error("hygiene_pass_error", { error: (err as Error).message });
+      }
+      heartbeat = now();
+      try {
+        processed = await processQueueOnce(db, { ...opts, onRowStart: () => (heartbeat = now()) });
       } catch (err) {
         logger.error("worker_pass_error", { error: (err as Error).message });
       }

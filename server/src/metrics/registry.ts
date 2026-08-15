@@ -41,6 +41,25 @@ function assertLabels(
   return normalized;
 }
 
+/**
+ * Resolve the `(value)` / `(labels, value)` overload pair without a cast.
+ * The labelled form called with no value used to fall through as `undefined`
+ * and render `metric{…} undefined` — one bad call site poisoning the entire
+ * scrape for every metric. It now fails at the call site instead, the same
+ * way {@link assertLabels} does for a missing label.
+ */
+function splitLabelsAndValue(
+  metric: string,
+  labelsOrValue: LabelValues | number,
+  maybeValue: number | undefined,
+): { labels: LabelValues; value: number } {
+  if (typeof labelsOrValue === "number") return { labels: {}, value: labelsOrValue };
+  if (maybeValue === undefined) {
+    throw new Error(`metric ${metric}: labelled call is missing its value`);
+  }
+  return { labels: labelsOrValue, value: maybeValue };
+}
+
 export class Counter {
   private readonly values = new Map<string, { labels: LabelValues; value: number }>();
 
@@ -91,8 +110,7 @@ export class Gauge {
   set(labels: LabelValues, value: number): void;
   set(value: number): void;
   set(labelsOrValue: LabelValues | number, maybeValue?: number): void {
-    const labels = typeof labelsOrValue === "number" ? {} : labelsOrValue;
-    const value = typeof labelsOrValue === "number" ? labelsOrValue : (maybeValue as number);
+    const { labels, value } = splitLabelsAndValue(this.name, labelsOrValue, maybeValue);
     const normalized = assertLabels(this.name, this.labelNames, labels);
     this.values.set(labelKey(this.labelNames, normalized), { labels: normalized, value });
   }
@@ -127,8 +145,7 @@ export class Histogram {
   observe(labels: LabelValues, value: number): void;
   observe(value: number): void;
   observe(labelsOrValue: LabelValues | number, maybeValue?: number): void {
-    const labels = typeof labelsOrValue === "number" ? {} : labelsOrValue;
-    const value = typeof labelsOrValue === "number" ? labelsOrValue : (maybeValue as number);
+    const { labels, value } = splitLabelsAndValue(this.name, labelsOrValue, maybeValue);
     const normalized = assertLabels(this.name, this.labelNames, labels);
     const key = labelKey(this.labelNames, normalized);
     let entry = this.series.get(key);

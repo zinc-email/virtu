@@ -173,7 +173,8 @@ outbound port 25 isn't blocked by the host
 (`ssh root@box 'bash -c "exec 3<>/dev/tcp/gmail-smtp-in.l.google.com/25 && head -1 <&3"'`).
 
 ```sh
-# 1. Provision (root): swap, docker, git, the virtu app user (uid 1000).
+# 1. Provision (root): swap, docker, git, bun + just, the virtu app user
+#    (uid 1000). Re-runnable — that's also how you apply a bun version bump.
 ssh root@box 'bash -s' < bin/host-provision
 
 # 2. Clone as virtu, then write the two env files (both gitignored):
@@ -184,7 +185,11 @@ ssh root@box 'runuser -u virtu -- git clone https://github.com/zinc-email/virtu.
 #                               (80/443/25/587/465).
 #    /opt/virtu/server/.env   — MAIL_DOMAIN, MAIL_HOSTNAME, a real VERP_SECRET,
 #                               SMTP_TLS_CERT_FILE=/mail-certs/fullchain.pem,
-#                               SMTP_TLS_KEY_FILE=/mail-certs/privkey.pem.
+#                               SMTP_TLS_KEY_FILE=/mail-certs/privkey.pem, and
+#                               DATABASE_URL pointed at 127.0.0.1:5433 (the
+#                               host-published port) so the break-glass CLI
+#                               works; api/maild get @db:5432 from compose,
+#                               which wins over this file.
 #                               See server/.env.example.
 
 # 3. Deploy (as virtu, from /opt/virtu) — build, up, cert sync:

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # host-provision — one-time (idempotent) setup of a fresh Debian box for the
 # serve stack: swap (the nanodes have 1GB RAM and the frontend build needs
-# more), Docker CE + compose plugin, git, unattended security upgrades.
+# more), Docker CE + compose plugin, git, bun + just (the break-glass CLI runs
+# on the host, not in a container), unattended security upgrades.
 #
 # Run from a workstation:   ssh root@<box> 'bash -s' < bin/host-provision
 # Or on the box itself:     bash bin/host-provision
@@ -48,7 +49,8 @@ fi
 # ── Base packages ────────────────────────────────────────────────────────────
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl git unattended-upgrades >/dev/null
+# unzip is for the bun installer below.
+apt-get install -y -qq ca-certificates curl git unzip unattended-upgrades >/dev/null
 # Debian's unattended-upgrades defaults to security-only once this stamp
 # file enables the periodic run.
 cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
@@ -74,9 +76,37 @@ else
 fi
 usermod -aG docker virtu
 
+# ── Bun + just: the break-glass CLI runs on the HOST ─────────────────────────
+# bin/queue-* and bin/admin-* do `cd server && bun run src/scripts/…` directly
+# rather than `compose exec api`, precisely so they still work when the stack
+# is down — which is when you need them. That only holds if bun is on the box.
+# Both install into /usr/local/bin (already on everyone's PATH) instead of the
+# invoking user's ~/.bun, so `virtu` gets them without a login-shell dance.
+
+# Pinned to the same line as the compose images (oven/bun:1.3) — keep the two
+# in step, and re-run this script to apply a bump.
+BUN_VERSION="${BUN_VERSION:-1.3.14}"
+if [[ "$(bun --version 2>/dev/null || true)" != "$BUN_VERSION" ]]; then
+  curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v$BUN_VERSION" >/dev/null
+  echo "bun: installed $BUN_VERSION"
+else
+  echo "bun: $BUN_VERSION already installed"
+fi
+
+# Unpinned: just is a convenience wrapper over bin/, never load-bearing (see
+# CLAUDE.md — "just is convenience, not authority"), so latest is fine.
+if ! command -v just >/dev/null; then
+  curl -fsSL https://just.systems/install.sh | bash -s -- --to /usr/local/bin >/dev/null
+  echo "just: installed"
+else
+  echo "just: already installed"
+fi
+
 echo
 echo "host-provision: done"
 swapon --show
 docker --version
 docker compose version
 git --version
+bun --version
+just --version

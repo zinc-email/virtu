@@ -182,14 +182,20 @@ ssh root@box 'runuser -u virtu -- git clone https://github.com/zinc-email/virtu.
 #    /opt/virtu/.env          — compose interpolation: VIRTU_HOST=each.email,
 #                               VIRTU_TLS_MODE=<acme account email>, and the
 #                               five *_PUBLISH vars bound to 0.0.0.0
-#                               (80/443/25/587/465).
+#                               (80/443/25/587/465). Also point compose at
+#                               the serve stack, so every recipe and bin/
+#                               tool targets it without a -f flag:
+#                               COMPOSE_FILE=docker-compose.serve.yml
+#                               COMPOSE_PROJECT_NAME=virtu-serve
 #    /opt/virtu/server/.env   — MAIL_DOMAIN, MAIL_HOSTNAME, a real VERP_SECRET,
 #                               SMTP_TLS_CERT_FILE=/mail-certs/fullchain.pem,
 #                               SMTP_TLS_KEY_FILE=/mail-certs/privkey.pem, and
 #                               DATABASE_URL pointed at 127.0.0.1:5433 (the
-#                               host-published port) so the break-glass CLI
-#                               works; api/maild get @db:5432 from compose,
-#                               which wins over this file.
+#                               host-published port) for the host-side dev
+#                               tools (bin/login-code, bin/user-create); the
+#                               ops tools run in-stack and ignore it, and
+#                               api/maild get @db:5432 from compose, which
+#                               wins over this file.
 #                               See server/.env.example.
 
 # 3. Deploy (as virtu, from /opt/virtu) — build, up, cert sync:
@@ -197,22 +203,21 @@ bin/host-deploy
 
 # 3b. Apply the DB schema (interactive — reviews data-loss statements; run
 #     it whenever a release changes server/src/db/schema.ts):
-bin/host-db-push
+just db push
 
 # 4. Once per domain: mint the DKIM key and publish the TXT it prints:
 bin/dkim-ensure
 
 # 5. Mint the first admin (the flag gates /api/admin and the SPA's Admin
 #    section; no admin exists yet, so this is direct-DB by design):
-docker compose -f docker-compose.serve.yml exec api \
-  bun run src/scripts/adminGrant.ts you@example.com
+bin/admin-grant you@example.com
 ```
 
 Redeploys are step 3 alone (+ 3b when the schema changed). `bin/host-deploy`
 is idempotent: fetch + checkout (an optional ref argument — a `v*` tag or
 sha; default `origin/main`), rebuild, `up -d`, cert sync. It deliberately
 never pushes the schema: unattended `drizzle-kit push --force` auto-accepts
-data-loss statements, so that review stays human — `bin/host-db-push` is
+data-loss statements, so that review stays human — `just db push` is
 interactive and prompts on lossy SQL.
 
 ### Automatic deploys (tag push)
@@ -224,7 +229,7 @@ repo secret and runs `bin/host-deploy <tag>`. The box side is locked down in
 key to `bin/host-deploy "$SSH_ORIGINAL_COMMAND"`, so leaking the secret leaks
 "can redeploy" and nothing else; the workflow pins the box's host keys.
 Schema changes are **not** part of the automatic deploy — run
-`bin/host-db-push` yourself when a tagged release touches
+`just db push` yourself when a tagged release touches
 `server/src/db/schema.ts` (the deploy output reminds you).
 
 ```sh

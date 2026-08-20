@@ -57,10 +57,9 @@ preview-logs *args="-f":
 # Database — Drizzle Kit (push-based migrations)
 # ----------------------------------------------------------------------------
 
-# Drizzle Kit shortcut (e.g. `just db push`). Runs natively against the
-# compose db's published port (localhost:5432).
+# Drizzle Kit inside the stack (`just db push` — prompts on lossy SQL, wants a TTY).
 db *args="--help":
-  cd server && bun drizzle-kit "$@"
+  bin/server-run bun drizzle-kit {{args}}
 
 # ----------------------------------------------------------------------------
 # Build & code-gen — OpenAPI spec, generated client SDK

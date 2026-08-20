@@ -259,7 +259,7 @@ for the next controller).
   cert sync — takes an optional ref, defaults origin/main; **never pushes
   the schema** — unattended `push --force` auto-accepts data-loss SQL, and
   drizzle-kit without a TTY errors yet exits 0, a silent skip). Schema
-  changes are manual: `bin/host-db-push` (interactive drizzle push, no
+  changes are manual: `just db push` (interactive drizzle push, no
   --force, prompts on lossy statements); `bin/dkim-ensure`
   mints/prints the service-domain DKIM key.
   Runbook: README "Deploy"; annotated DNS record set: `each.email.zone`.

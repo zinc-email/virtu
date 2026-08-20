@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#
+# server-run — run a server/ command inside the stack's `api` service.
+#
+# The break-glass ops tools (bin/admin-*, bin/queue-*) and the `just db`
+# recipe go through here so they never depend on a host-reachable
+# DATABASE_URL: the container inherits DATABASE_URL=…@db:5432 from the
+# compose file — the exact value the api process itself uses — instead of
+# whatever someone last typed into server/.env. On a deploy box the published
+# port and password live in /opt/virtu/.env, and a stale server/.env used to
+# point these tools at a Postgres that wasn't there.
+#
+# `run --rm --no-deps`, never `exec`: these tools' contract is "works with the
+# API down — only Postgres must be up", and `exec` needs a running api
+# container. --no-deps also skips the server-deps one-shot, so it assumes
+# node_modules is already in the bind mount (true after any `up`).
+#
+# Which stack it targets is docker compose's own business, not a branch here:
+# set COMPOSE_FILE / COMPOSE_PROJECT_NAME in the project-directory .env — a
+# deploy box points them at docker-compose.serve.yml / virtu-serve, dev keeps
+# the default stack.
+#
+# Usage: bin/server-run <cmd...>     # runs with cwd /app/server in-container
+#   e.g. bin/server-run bun run src/scripts/queueList.ts
+#        bin/server-run bun drizzle-kit push
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [ $# -lt 1 ]; then
+  echo "usage: bin/server-run <cmd...>" >&2
+  exit 2
+fi
+
+if [ -z "$(bin/compose ps -q --status running db 2>/dev/null)" ]; then
+  echo "server-run: no running db service — is docker up, and the stack started (just up)?" >&2
+  exit 1
+fi
+
+# Interactive when we have a terminal (drizzle-kit's data-loss review, and
+# anything else that prompts); -T otherwise so piped/CI invocations don't
+# trip over "the input device is not a TTY".
+if [ -t 0 ] && [ -t 1 ]; then
+  exec bin/compose run --rm --no-deps api "$@"
+fi
+exec bin/compose run --rm --no-deps -T api "$@"

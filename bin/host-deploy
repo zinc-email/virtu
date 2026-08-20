@@ -6,7 +6,7 @@
 #
 # Deliberately does NOT touch the DB schema — unattended `drizzle-kit push
 # --force` auto-accepts data-loss statements. Schema changes are applied
-# manually via bin/host-db-push (interactive, reviews lossy SQL).
+# manually via `just db push` (interactive, reviews lossy SQL).
 #
 # Run on the box, from the repo root, as the app user:
 #   bin/host-deploy [ref]     # ref: a v* tag (what the deploy workflow
@@ -31,5 +31,5 @@ cat <<'EOF'
 
 host-deploy: done — schema NOT pushed.
   If this release changes server/src/db/schema.ts, apply it now:
-    ssh -t <box>  ->  cd /opt/virtu && bin/host-db-push
+    ssh -t <box>  ->  cd /opt/virtu && just db push
 EOF

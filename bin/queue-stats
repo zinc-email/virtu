@@ -6,5 +6,5 @@
 # Usage: bin/queue-stats
 
 set -euo pipefail
-cd "$(dirname "$0")/../server"
-exec bun run src/scripts/queueStats.ts "$@"
+cd "$(dirname "$0")/.."
+exec bin/server-run bun run src/scripts/queueStats.ts "$@"

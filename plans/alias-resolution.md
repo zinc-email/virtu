@@ -4,54 +4,98 @@
 plans the outbound side of PLAN Milestone 2: how `submission` picks which alias
 a message goes out as, when the user's MUA only knows their real mailbox.*
 
-## The problem
+## The one question
 
-`resolveOutbound` (`server/src/submission.ts:239`) picks a mode from MAIL FROM
-via `senderOwnership` (`server/src/pipeline/policy.ts:356`):
+Every message virtu sends on a user's behalf must present as exactly one
+alias, and the mail client cannot tell us which — it knows only the user's
+real mailbox.
 
-- **MAIL FROM = an alias** → *send mode*. Any outside recipient is a cold email;
-  a contact is minted, `From:` is rewritten to the alias. The alias was
-  declared, so nothing needs inferring.
-- **MAIL FROM = a mailbox** → *reply mode*. Every recipient must be a reverse
-  alias resolving to the same alias. A real outside address is refused at
-  `submission.ts:277`.
+**The alias is a function of the correspondent.** Everything below is
+machinery for evaluating that function:
 
-Send mode requires setting the envelope sender per-alias, which mutt does and
-roughly no other MUA does well. So in practice a stock client is stuck in reply
-mode, and reply mode can't start a conversation.
+| for a correspondent… | mechanism | form |
+|---|---|---|
+| who has written to us, or whom we have written to | **contact** | recorded — an exact, durable pairing |
+| we have never exchanged mail with | **scope** | derived — a rule over the recipient address |
+| being replied to from a client that may not route through us | **reverse alias** | the contact, made addressable |
 
-**Design position: reverse aliases are a maintenance burden and a cognitive
-tax, not a feature.** They stay in the product — they're how inbound replies
-work, they're the explicit escape hatch, and they're the fallback when
-resolution is ambiguous — but they must not be the price of sending a normal
-email to a new person.
+These are not three competing designs. They are one mechanism seen at three
+moments: a contact is the answer memoized when we first learn it, scope is the
+rule that computes an answer when no memo exists, and a reverse alias is that
+memo written into an address so it survives leaving our infrastructure.
 
-## Prior art: nobody does this
+Presenting them as separate features is what makes the system feel like an
+accumulation of half-solutions. It is one function, with a cache, a fallback,
+and a wire format.
+
+## Where each one fires
+
+Inbound mail to an alias hands us the pairing for free: we know the alias (it
+was addressed) and the correspondent (they sent it). Record it as a contact,
+and rewrite `From:` to its reverse alias so a reply carries the pairing back to
+us regardless of which client or server the user replies from.
+
+Outbound mail to someone who never wrote first has no such event. Nothing was
+recorded, so the pairing must be derived from the only thing available — the
+recipient address — and then recorded, so that it is derived exactly once.
+
+That asymmetry is the entire design. Contacts answer the common case exactly;
+scope answers the cold start. Today only the first half exists: with MAIL FROM
+set to a mailbox, `submission.ts:277` refuses any recipient that is not
+already a reverse alias, so a stock client can reply but can never start a
+conversation.
+
+## Why not the way legacy did it
+
+Legacy virtu answered the same question in the same place —
+`Outbound.php:188`, `findOrCreateAssociatedVirtual()`: the most recent message
+from this address wins its virtual; else a virtual with a matching
+`sourceDomain`; else mint one bound to that domain. `Inbound.php` left `From:`
+untouched unless DMARC forced a rewrite, so replies addressed the real
+correspondent and came back through submission to be resolved the same way.
+
+Same shape as what follows, and flawed in three ways this design exists to fix:
+
+1. **Fail-open.** With the real correspondent in `From:`, a reply stays private
+   only if it routes through our submission server. Point the client at Gmail's
+   SMTP instead and hitting reply mails the correspondent from the user's real
+   address, with no opportunity for us to intervene — we are not in the path. A
+   reverse alias makes that outcome unreachable: the address in `To:` is ours,
+   so the message cannot arrive any other way.
+2. **The memo was the message log.** Tier 1 resolved by scanning `messages` for
+   one from that address, coupling routing correctness to log retention — prune
+   old records and aliases silently start resolving differently. A contact is
+   that memo made explicit: a small durable row that outlives log pruning, and
+   that can be inspected, edited and blocked on its own.
+3. **Domain-only binding.** New correspondents always bound by domain, so
+   `joe@gmail.com` and `kat@gmail.com` resolve to the same alias and two
+   strangers can correlate the user. That is the failure the scope model exists
+   to prevent.
+
+## Prior art
 
 | | who picks the alias | cost |
 |---|---|---|
-| SimpleLogin | the user, via a reverse alias in `To:` | dashboard visit per cold contact |
+| SimpleLogin | the user, via a reverse alias in `To:` | a dashboard visit per cold contact |
 | Addy.io | the user, via an encoded recipient (`first+hello=example.com@…`) | no dashboard, still a hand-built address; paid tiers only |
 | Apple Hide My Email | the mail client | requires owning the client |
-| **this plan** | the server, from a recorded scope | the server has to be right |
+| **this plan** | the server, from a contact or a scope | the server has to be right |
 
-SimpleLogin's reverse alias is a clever dodge: it moves alias selection out of
-`From:` (which MUAs won't let you set) into `To:` (which they all will). The
-side effect is that the "which alias?" question never reaches the server — the
-user answers it by hand every time. [Discussion #1770](https://github.com/simple-login/app/discussions/1770)
-asked for exactly what this plan describes; the maintainers didn't take it up.
-
-Deleting the user-side step necessarily moves the decision server-side. That's
-the whole design problem below.
+SimpleLogin never answers the question server-side because it has nowhere to
+answer it: there is no submission server in its path, so the alias has to reach
+it inside the recipient address. [Discussion #1770](https://github.com/simple-login/app/discussions/1770)
+asked for exactly this and their SMTP work was abandoned. virtu has per-device
+SMTP credentials and a submission server, so the question is answerable where
+the user never has to see it.
 
 ## The scope model
 
 An alias binds to a **correspondent scope** — the unit of counterparty identity:
 
-| recipient | scope | why |
-|---|---|---|
-| `dev@facebook.com` | `domain:facebook.com` | the domain *is* the counterparty; everyone behind it is one relationship |
-| `kat@gmail.com` | `address:kat@gmail.com` | the domain is infrastructure; the counterparty is the person |
+| recipient | scope | recorded as | why |
+|---|---|---|---|
+| `dev@facebook.com` | the domain, `facebook.com` | an `alias_scopes` row | the domain *is* the counterparty; everyone behind it is one relationship |
+| `kat@gmail.com` | the address, `kat@gmail.com` | a `contacts` row | the domain is infrastructure; the counterparty is the person |
 
 Getting this wrong is asymmetric, which sets every default below:
 
@@ -72,137 +116,126 @@ signing up at `facebook.com` while their mail arrives from `facebookmail.com` �
 mostly doesn't bite, because you cold-email the human-facing domain, which is
 the one that got recorded.
 
-## Why not something simpler
+## Why the scope model is not just a provider list
 
-Legacy virtu's rule was one line — `findOrCreateBySourceDomainAndUser()`, one
-alias per correspondent domain, forever. No modes, no bindings, no lists. It
-worked for years, and any design that replaces it owes an explanation.
+The smallest thing that could work: scope is the recipient's registrable
+domain, unless that domain is a known shared-mailbox provider, in which case
+scope is the full address. One rule, one list, no `scope_mode`, no binding
+table. That covers both motivating examples above.
 
-It has exactly one hole, and it is the reason this plan exists: under pure
-domain scoping `joe@gmail.com` and `kat@gmail.com` share an alias, so two
-unrelated people can correlate you.
-
-The smallest possible fix is **a provider list and nothing else**. Scope is the
-registrable domain, unless that domain is a known shared-mailbox provider, in
-which case scope is the full address. One rule, one list, no `scopeMode`, no
-binding table — the scope is derived from the recipient at send time and kept
-as a single value on the alias. That covers both motivating examples above and
-it is genuinely simple.
-
-What the extra machinery buys:
+What the machinery below adds:
 
 - **Independence from list completeness, in the direction that matters.** If
   the list is the only mechanism, every domain *not* on it defaults to domain
   scope — so an unlisted provider (regional, new, small, self-hosted) silently
   shares one alias between strangers. That is the privacy failure, arriving by
-  omission, and omission is the failure mode a curated list is worst at. The
-  extension's "this is a signup form" signal is positive evidence that does not
-  degrade as the list goes stale.
+  omission, and omission is what a curated list is worst at. The extension's
+  "this is a signup form" signal is positive evidence that does not decay as
+  the list goes stale.
 - **Multi-binding** — `facebook.com` + `facebookmail.com` + `fb.com` as one
   scope. A convenience; see open question 4.
 - **Pinning** — two live aliases on one scope, deterministically ordered. Also
   a convenience.
 
-The honest accounting: the first bullet justifies the design, the other two are
-conveniences that ride along. If the extension signal proves unreliable in
-practice, or the provider list proves easy to keep complete, the simpler
-version is the better system and this plan should be cut back to it. Worth
-re-checking that judgement before any of this is built.
+Honest accounting: the first bullet carries the design, the other two ride
+along. If the extension signal proves unreliable, or the list proves easy to
+keep complete, cut back to the one-rule version.
 
-## Two facts, two homes
+## Where each mechanism lives
 
-**`aliases.scopeMode`** — enum `'address' | 'domain'`, default `'address'`.
-The granularity at which this alias acquires *new* bindings. Singular per
-alias, so it's a column. This is what makes a freshly created alias with no
-bindings still know what to do the first time it's used.
+**`contacts` is the address-level memo.** It already records exactly the
+pairing resolution needs — `(aliasId, websiteEmail)`, unique
+(`contacts_alias_id_website_email_uq`), minted by both the forward path and by
+cold sends via `findOrCreateContact`. There is no separate address-scope
+binding, because that would be the same fact stored twice.
 
-**`alias_scopes`** — the actual bindings that resolution looks up.
-Many-to-many in both directions (one alias covers several domains after manual
-additions; one domain can have several aliases after a revoke-and-replace), so
-it's a table.
+**`alias_scopes` is the domain-level binding**, and only that. Many-to-many in
+both directions — one alias covers several domains after manual additions, one
+domain carries several aliases after a revoke-and-replace — so it is a table.
 
 ```
 alias_scopes
   id
-  userId    integer  -> users.id   on delete cascade   (denormalized for the lookup index)
-  aliasId   integer  -> aliases.id on delete cascade
-  kind      varchar(8)   'domain' | 'address'
-  value     varchar(512) registrable domain (lowercased), or full address (lowercased)
-  source    varchar(16)  'extension' | 'mobile' | 'manual' | 'cold_send' | 'inbound' | 'import'
+  userId    integer -> users.id   on delete cascade   (denormalized for the lookup index)
+  aliasId   integer -> aliases.id on delete cascade
+  domain    varchar(255)  registrable domain, lowercased
+  source    varchar(16)   'extension' | 'mobile' | 'manual' | 'inbound' | 'import'
   pinned    boolean default false
   createdAt / updatedAt
 
-  unique (aliasId, kind, value)
-  index  (userId, kind, value)                        -- the resolution lookup
-  unique (userId, kind, value) where pinned           -- at most one pin per scope
+  unique (aliasId, domain)
+  index  (userId, domain)                   -- the resolution lookup
+  unique (userId, domain) where pinned      -- at most one pin per domain
 ```
 
-`userId` is denormalized so RCPT-time resolution is a single index hit with no
-join — same shape as `alias_used_on` (`server/src/db/schema.ts:269`), which
-carries both for the same reason.
+`userId` is denormalized so RCPT-time resolution is one index hit with no join
+— the same shape as `alias_used_on` (`server/src/db/schema.ts:269`), for the
+same reason. `source` drives the UI ("bound when you signed up at
+facebook.com") and distinguishes user-declared bindings from automatic ones
+during conflicts.
 
-`source` is for the UI ("bound when you signed up at facebook.com") and for
-telling user-declared bindings apart from automatic ones during conflicts.
+**`aliases.scopeMode`** — enum `'address' | 'domain'`, default `'address'`.
+Not a scope; a *binding policy*. It says what granularity this alias records at
+when it meets someone new: `address` writes only a contact, `domain` also
+writes an `alias_scopes` row. Singular per alias, so it is a column, and it is
+what lets a freshly minted alias with no bindings still know what to do the
+first time it is used.
 
-**`alias_used_on` stays as it is.** It's SimpleLogin wire-compat (it feeds the
-`recommendation` field, `routes/aliasNew.ts:227`) and its column is a *website
-hostname*. Populate both from the same signal at mint time; don't overload one
-table with two jobs.
+**`alias_used_on` stays as it is** — SimpleLogin wire-compat feeding the
+`recommendation` field (`routes/aliasNew.ts:227`), keyed on a *website
+hostname*. Populate it and `alias_scopes` from the same mint-time signal; do
+not overload one table with two jobs.
 
 Registrable domains come from `tldts`, already in the tree transitively via
-mailauth — promote to a direct dependency. `mail.facebook.com` and
-`facebook.com` collapse; `foo.co.uk` does not collapse to `co.uk`.
+mailauth — promote it to a direct dependency. `mail.facebook.com` collapses to
+`facebook.com`; `foo.co.uk` does not collapse to `co.uk`.
 
 ## The four minting paths
 
-| # | path | scopeMode | binding written |
+| # | path | scopeMode | recorded at mint |
 |---|---|---|---|
-| 1 | Browser extension filling an email field on `example.com` | `domain` | `domain:example.com` |
-| 2 | Mobile share sheet / password-manager / Android autofill on a known app or site | `domain` | `domain:example.com` |
-| 3 | Manual creation (dashboard, API, no hostname) | `address` (default) | none yet |
-| 4 | Cold send to an address with no resolving alias | `address` | `address:<recipient>` |
+| 1 | Browser extension filling an email field on `example.com` | `domain` | `alias_scopes` row for `example.com` |
+| 2 | Mobile share sheet / password-manager / Android autofill | `domain` | `alias_scopes` row for the site's domain |
+| 3 | Manual creation (dashboard, API, no hostname) | `address` (default) | nothing |
+| 4 | Cold send to an address that resolves to nothing | `address` | the contact minted by the send |
 
 Paths 1 and 2 are declarations of intent: the extension knows it is filling an
-email input on a signup form, which means the counterparty is a product or
-service, not a person. That signal is the whole basis for domain scope, and
-it's why domain scope is never inferred from the address alone.
+email input on a signup form, so the counterparty is a product or a service,
+not a person. That signal is the entire basis for domain scope — it is never
+inferred from the recipient address alone.
 
-The extension can also mint with no field association at all — that lands on
-path 3, mode `address`, no binding.
+The extension can also mint with no field association, which lands on path 3.
 
-Path 3 produces an alias that is never auto-selected until something binds it:
-either the first cold send (which binds at whatever `scopeMode` says) or the
-user, in the UI.
+Path 3 produces an alias nothing resolves to until it is bound: by its first
+cold send (a contact), or by the user in the UI (either level).
 
 ## Resolution
 
-Only runs when MAIL FROM is one of the user's verified mailboxes and the
-recipient is not a reverse alias — i.e. exactly where `submission.ts:277`
-refuses today. Send mode and reverse-alias replies are untouched.
+Runs only when MAIL FROM is one of the user's verified mailboxes and the
+recipient is not a reverse alias — exactly where `submission.ts:277` refuses
+today. Send mode and reverse-alias replies are untouched.
 
 For each envelope recipient:
 
-1. **Exact address binding** — `alias_scopes` where `kind='address'` and
-   `value` = the recipient. Never needs classification; always safe.
-2. **Domain binding** — `alias_scopes` where `kind='domain'` and `value` = the
-   recipient's registrable domain. Subject to the shared-domain guard below.
-3. **Existing correspondence** — a `contacts` row for this user with
-   `websiteEmail` = the recipient, under an enabled alias. Covers aliases that
-   predate scopes and anything imported without one.
-4. **No match** — mint a new alias, bind `address:<recipient>`, `source`
-   `cold_send`.
+1. **Contact** — a `contacts` row for this user with `websiteEmail` = the
+   recipient, under an enabled alias. The memo: exact, needs no
+   classification, always safe.
+2. **Domain scope** — an `alias_scopes` row for the recipient's registrable
+   domain. Subject to the shared-domain guard below.
+3. **Nothing** — mint an alias, `scopeMode = 'address'`, and let the send's own
+   `findOrCreateContact` record the pairing.
 
-Within any tier that returns several candidates:
+Earlier tiers beat later ones: a contact always overrides a domain scope, so
+one deliberate exception at a company never gets overwritten by the company's
+own scope.
+
+Within a tier returning several candidates:
 
 - Drop aliases where `enabled = false`. This is what makes revoke-and-replace
-  work with no configuration: the leaked alias falls out, its replacement takes
-  over.
+  work with no configuration — the leaked alias falls out, its replacement
+  takes over.
 - A `pinned` binding wins outright.
-- Otherwise the most recently created binding wins, and the refusal path below
-  applies if that's judged too arbitrary (open question 3).
-
-Earlier tiers always beat later ones — an exact address binding overrides a
-domain binding on the same message.
+- Otherwise most-recently-created wins, subject to open question 3.
 
 ## Conflicts and refusals
 
@@ -245,7 +278,7 @@ Ties into `plans/legacy-import.md`. The old system already worked this way:
 correspondent domain per user, recorded in `virtuals.sourceDomain`.
 
 - `virtuals.sourceDomain` non-empty → `scopeMode = 'domain'` plus an
-  `alias_scopes` row `domain:<registrable(sourceDomain)>`, `source = 'import'`.
+  `alias_scopes` row for `registrable(sourceDomain)`, `source = 'import'`.
 - `virtuals.sourceDomain` empty → `scopeMode = 'address'`, no binding.
 - The shared-domain guard applies to imported bindings like any other, which is
   the main reason it belongs at resolution time.

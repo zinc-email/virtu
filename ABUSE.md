@@ -222,6 +222,18 @@ forwarding-only, quota grows with account age. A hard deny teaches them
 what to randomize; a quota makes each account worthless while costing a
 false-positive legit user almost nothing.
 
+**Structure when this lands (decided 2026-08-22):** graduation-time
+policies compose behind a `signupGate` seam (sudoGuard-shaped: a
+callable invoked inside the verify handler at the graduation point,
+NOT route middleware — anything before code proof leaks registration
+status, and the checks must be atomic with activation). Extract the
+inline invite check into it as the first policy; abuser-hash lookup,
+domain scoring and the restricted-tier decision join it. Do the auth
+dance descent in the same refactor: move login-code consumption into
+the graduation transaction (widen `consumeVerificationCode`'s Db type
+to accept a tx), so a failed policy check rolls back the code too and
+an invite typo stops costing a fresh login email.
+
 ## Tier 3 — reputation program (Lane K P3/P4 + deploy lane)
 
 Protect and measure the asset the abusers spend.

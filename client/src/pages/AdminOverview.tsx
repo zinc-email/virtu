@@ -69,6 +69,11 @@ export function AdminOverviewPage() {
       <KeyValue>
         <KV k="Total">{users.total}</KV>
         <KV k="Disabled">{users.disabled}</KV>
+        <KV k="Invites">
+          <Link to="/admin/invites" className={ui.link}>
+            Manage
+          </Link>
+        </KV>
       </KeyValue>
     </Section>
   );

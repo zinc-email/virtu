@@ -103,6 +103,48 @@ export const AdminBouncedResponse = z
   })
   .meta({ id: "AdminBouncedResponse" });
 
+// A user reference on admin DTOs — enough to link, never more.
+export const AdminUserRef = z
+  .object({ id: z.number().int(), email: z.string() })
+  .meta({ id: "AdminUserRef" });
+
+export const AdminInvite = z
+  .object({
+    id: z.number().int(),
+    code: z.string(),
+    note: z.string().nullable(),
+    created_by: AdminUserRef.nullable(),
+    used_by: AdminUserRef.nullable(),
+    used_at: z.string().nullable(),
+    expires_at: z.string().nullable(),
+    created_at: z.string(),
+  })
+  .meta({ id: "AdminInvite" });
+
+export const AdminInviteListResponse = z
+  .object({
+    total: z.number().int(),
+    unused: z.number().int(),
+    invites: z.array(AdminInvite),
+  })
+  .meta({ id: "AdminInviteListResponse" });
+
+export const AdminInviteCreateBody = z
+  .object({
+    count: z.number().int().min(1).max(100).default(1),
+    note: z.string().max(256).optional(),
+    expires_in_days: z.number().int().min(1).max(365).optional(),
+  })
+  .meta({ id: "AdminInviteCreateBody", example: { count: 1, note: "for jane" } });
+
+export const AdminInviteCreatedResponse = z
+  .object({ invites: z.array(AdminInvite) })
+  .meta({ id: "AdminInviteCreatedResponse" });
+
+export const AdminInviteDeletedResponse = z
+  .object({ deleted: z.number().int() })
+  .meta({ id: "AdminInviteDeletedResponse" });
+
 export const AdminOverviewResponse = z
   .object({
     queue: z.object({

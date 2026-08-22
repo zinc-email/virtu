@@ -79,7 +79,8 @@ when re-verification mail starts bouncing).
 
 ## Tier 0 — before open signup (now)
 
-**Invite-only signup gate.** The proven stopgap from the legacy service;
+**Invite-only signup gate.** *Built 2026-08-22 (see STATE.md).* The proven
+stopgap from the legacy service;
 open signup stays off until Tier 2 detection is live and proven. Design
 (the "invite lane"):
 

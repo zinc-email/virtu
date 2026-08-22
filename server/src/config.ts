@@ -31,6 +31,11 @@ const ConfigSchema = z.object({
   // Requests/minute per IP across the auth routes (register/activate/login).
   // The dev compose raises it: the DOM test tier registers users freely.
   authRateLimitMax: z.coerce.number().int().default(10),
+  // Invite-only signup (ABUSE.md Tier 0): when true, /auth/verify refuses to
+  // graduate a provisional user without a valid invite code. Existing
+  // (activated) users log in unaffected. Off by default so dev/lmnop stay
+  // open; zinc sets it until the Tier 2 detector is proven.
+  signupInviteOnly: booleanString(false),
 
   // ── Mail path (mx / submission / deliverd — PLAN Milestones 1-3) ─────────
   // The domain aliases + reverse aliases + VERP addresses live on.

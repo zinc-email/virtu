@@ -6,6 +6,7 @@
 import rateLimit from "@fastify/rate-limit";
 import type { FastifyInstance } from "fastify";
 import { withAccountRoutes } from "./account";
+import { withAdminInviteRoutes } from "./admin/invites";
 import { withAdminOverviewRoutes } from "./admin/overview";
 import { withAdminQueueRoutes } from "./admin/queue";
 import { requireAdmin } from "./adminAuth";
@@ -57,6 +58,7 @@ export async function withApiRoutes(app: FastifyInstance) {
             admin.addHook("onRequest", requireAdmin);
             await withAdminOverviewRoutes(admin);
             await withAdminQueueRoutes(admin);
+            await withAdminInviteRoutes(admin);
           },
           { prefix: "/admin" },
         );

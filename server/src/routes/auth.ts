@@ -15,14 +15,14 @@
 // the shared handler.
 
 import rateLimit from "@fastify/rate-limit";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { generateApiKey, hashApiKey } from "../auth/apiKey";
 import { config } from "../config";
 import { db } from "../db";
-import { apiKeys, mailboxes, type User, users } from "../db/schema";
+import { apiKeys, invites, mailboxes, type User, users } from "../db/schema";
 import {
   consumeVerificationCode,
   createVerificationCode,
@@ -52,6 +52,9 @@ const VerifyPost = z
     email: z.string(),
     code: z.string(),
     device: z.string().optional(),
+    // Consumed only when the deployment is invite-only AND this verify would
+    // graduate a new account; ignored otherwise.
+    invite: z.string().optional(),
   })
   .meta({
     id: "AuthVerifyRequest",
@@ -115,8 +118,13 @@ async function findOrCreateUser(email: string): Promise<User> {
  * to this exact address, so verifying it proves control. Races (double
  * verify, legacy half-created rows) are absorbed by the activated-flag guard
  * and the mailbox find-or-create.
+ *
+ * When `inviteCode` is set (invite-only deployments — ABUSE.md Tier 0) the
+ * invite is consumed inside the same transaction, after the activated-flag
+ * guard: a bad code rolls the activation back, and a concurrent graduation
+ * that already won never burns the invite.
  */
-async function graduateUser(userId: number, email: string): Promise<void> {
+async function graduateUser(userId: number, email: string, inviteCode?: string): Promise<void> {
   await db.transaction(async (tx) => {
     const updated = await tx
       .update(users)
@@ -124,6 +132,23 @@ async function graduateUser(userId: number, email: string): Promise<void> {
       .where(and(eq(users.id, userId), eq(users.activated, false)))
       .returning({ id: users.id });
     if (updated.length === 0) return; // concurrent graduation won
+
+    if (inviteCode !== undefined) {
+      const consumed = await tx
+        .update(invites)
+        .set({ usedBy: userId, usedAt: new Date() })
+        .where(
+          and(
+            eq(invites.code, inviteCode),
+            isNull(invites.usedAt),
+            or(isNull(invites.expiresAt), gt(invites.expiresAt, new Date())),
+          ),
+        )
+        .returning({ id: invites.id });
+      if (consumed.length === 0) {
+        throw new HttpError(403, "Invalid, expired or already-used invite code");
+      }
+    }
 
     const existing = await tx
       .select({ id: mailboxes.id })
@@ -220,12 +245,18 @@ export async function withAuthRoutes(api: FastifyInstance) {
           "an api_key for the Authentication header is minted either way, with sudo " +
           "mode already fresh. 400 on a wrong email/code, 410 once the code has been " +
           "tried wrongly too many times (request a new one via /auth/login). MFA is " +
-          "not implemented: mfa_enabled is always false and mfa_key null.",
+          "not implemented: mfa_enabled is always false and mfa_key null. On an " +
+          "invite-only deployment a FIRST-TIME email additionally needs a valid " +
+          "`invite` code or the response is 403 — sent only after code proof (so " +
+          "whether an address is registered still never leaks), which spends the " +
+          "login code: fix the invite, request a fresh code via /auth/login, and " +
+          "verify again. Existing accounts never need an invite.",
         tags: ["Account"],
         body: VerifyPost,
         response: {
           200: LoginResponse,
           400: ErrorResponse,
+          403: ErrorResponse,
           410: ErrorResponse,
           429: ErrorResponse,
         },
@@ -249,7 +280,19 @@ export async function withAuthRoutes(api: FastifyInstance) {
         // stale one could linger; either way don't leak standing to guessers.
         if (user.disabled) throw new HttpError(400, "Account disabled");
 
-        if (!user.activated) await graduateUser(user.id, email);
+        if (!user.activated) {
+          // The invite gate (ABUSE.md Tier 0) sits HERE, at graduation, and
+          // only after code proof — the caller has demonstrated mailbox
+          // ownership, so a 403 reveals nothing about which emails are
+          // registered. The cost: a failed invite spends the login code
+          // (consumed above); the client offers a fresh-code retry.
+          const needsInvite = config.signupInviteOnly;
+          const inviteCode = req.body.invite?.trim();
+          if (needsInvite && !inviteCode) {
+            throw new HttpError(403, "Signups are invite-only — an invite code is required");
+          }
+          await graduateUser(user.id, email, needsInvite ? inviteCode : undefined);
+        }
 
         // Keys are stored hashed, so every verify mints a fresh one. A code
         // round-trip is our strongest re-auth, so the key starts in sudo mode

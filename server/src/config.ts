@@ -54,6 +54,12 @@ const ConfigSchema = z.object({
     .number()
     .int()
     .default(25 * 1024 * 1024),
+  // Per-user outbound send quota (submission pre-enqueue, Lane K P2):
+  // recipients per rolling 24h, by plan. 0 = unlimited. Overridable per user
+  // via users.max_daily_sends. Caps what a leaked device credential can
+  // blast through our IP; forwards never count.
+  sendQuotaFreePerDay: z.coerce.number().int().default(50),
+  sendQuotaPremiumPerDay: z.coerce.number().int().default(500),
   // deliverd egress guard: when false (the default), deliverd refuses to open
   // an SMTP connection to a recipient domain whose MX (or implicit-MX A record)
   // resolves to a private/loopback/link-local address — the SSRF where an

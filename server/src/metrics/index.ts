@@ -77,6 +77,11 @@ export const submissionEnqueuedTotal = registry.counter(
   ["mode"], // reply | send
 );
 
+export const submissionQuotaRefusedTotal = registry.counter(
+  "virtu_submission_quota_refused_total",
+  "Messages refused by the per-user daily send quota",
+);
+
 // ── delivery queue / deliverd ───────────────────────────────────────────────
 
 export const queueClaimedTotal = registry.counter(

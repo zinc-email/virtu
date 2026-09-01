@@ -53,14 +53,22 @@ import {
   smtpConnectionsTotal,
   submissionAuthTotal,
   submissionEnqueuedTotal,
+  submissionQuotaRefusedTotal,
   submissionRcptRefusedTotal,
 } from "./metrics/index.ts";
+import { isPremium } from "./billing/premium.ts";
 import { mailboxMatchKey } from "./pipeline/addressMatch.ts";
 import { type AuthThrottle, authThrottleKey, createAuthThrottle } from "./pipeline/authThrottle.ts";
 import { findOrCreateContact, resolveReverseAlias } from "./pipeline/contacts.ts";
 import { selectReplyDkimKey } from "./pipeline/dkim.ts";
 import { createReplyLog, resolveOurMessageId, setMessageIdMap } from "./pipeline/emailLog.ts";
 import { senderOwnership } from "./pipeline/policy.ts";
+import {
+  countRecentSends,
+  dailySendLimit,
+  decideSendQuota,
+  type SendQuotaLimits,
+} from "./pipeline/sendQuota.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
 import { enqueue } from "./queue/index.ts";
 import {
@@ -84,6 +92,8 @@ export interface SubmissionOptions {
   tls?: SmtpTlsConfig;
   /** Failed-AUTH throttle override for tests; default {@link createAuthThrottle}. */
   authThrottle?: AuthThrottle;
+  /** Daily send quota plan defaults; omitted = quota not enforced (tests). */
+  sendQuota?: SendQuotaLimits;
   logger?: Logger;
 }
 
@@ -360,6 +370,34 @@ async function handleSubmissionData(
   if ("reject" in resolved) return resolved.reject;
   const { alias, plan, mode, sendingMailboxId } = resolved;
 
+  // Daily send quota (PLAN Lane K P2), pre-enqueue and pre-write: the cap on
+  // what a leaked device credential can blast through our IP. Counted per
+  // recipient over a rolling 24h; a multi-recipient message is refused whole
+  // rather than partially sent. 452/4.7.1 = transient, so a legitimate MUA
+  // retries tomorrow instead of erroring the message out of its outbox.
+  if (opts.sendQuota !== undefined) {
+    const limit = dailySendLimit(user, await isPremium(user), opts.sendQuota);
+    const quota = decideSendQuota(
+      limit,
+      await countRecentSends(opts.db, user.id, new Date()),
+      plan.length,
+    );
+    if (!quota.allowed) {
+      submissionQuotaRefusedTotal.inc();
+      log.info("quota_refused", {
+        from: envelope.mailFrom,
+        recipients: plan.length,
+        used: quota.used,
+        limit: quota.limit,
+      });
+      return rejectWith(
+        452,
+        "4.7.1",
+        `Daily send limit reached (${quota.limit}/day); try again later`,
+      );
+    }
+  }
+
   const parsed = parseMessage(event.raw);
   const aliasDomain = alias.email.slice(alias.email.indexOf("@") + 1);
 
@@ -618,6 +656,10 @@ export function submissionOptionsFromConfig(): SubmissionOptions {
     verpSecret: config.verpSecret,
     maxMessageSize: config.smtpMaxMessageSize,
     tls: loadSmtpTls(config.smtpTlsCertFile, config.smtpTlsKeyFile),
+    sendQuota: {
+      freePerDay: config.sendQuotaFreePerDay,
+      premiumPerDay: config.sendQuotaPremiumPerDay,
+    },
   };
 }
 

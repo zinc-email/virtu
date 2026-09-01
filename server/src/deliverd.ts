@@ -92,6 +92,7 @@ export function startDeliverd(): QueueWorker {
       retainSentDays: config.queueRetainSentDays,
       retainFailedDays: config.queueRetainFailedDays,
       retentionIntervalMs: config.queueRetentionIntervalMs,
+      retainRejectionsDays: config.smtpRejectionsRetainDays,
     },
     logger: createLogger("queue"),
     deliver: (row) =>

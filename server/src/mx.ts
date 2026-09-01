@@ -49,6 +49,7 @@ import {
   resolveOriginalMessageId,
 } from "./pipeline/emailLog.ts";
 import { type EvaluatedRcpt, evaluateRcpt } from "./pipeline/policy.ts";
+import { recordSmtpRejection } from "./pipeline/smtpRejection.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
 import { enqueue } from "./queue/index.ts";
 import {
@@ -391,11 +392,44 @@ export function createMxServer(opts: MxOptions): SmtpServer {
       });
       mxRcptTotal.inc({ decision: decision.kind });
       if (decision.kind === "reject") {
-        return rejectWith(decision.code, decision.enhanced, decision.message);
+        const result = rejectWith(decision.code, decision.enhanced, decision.message);
+        await recordSmtpRejection(
+          opts.db,
+          {
+            entrypoint: "mx",
+            phase: "rcpt_to",
+            remoteAddress: event.session.remoteAddress,
+            heloName: event.session.heloName,
+            rcptTo: event.address,
+            reject: result.reject,
+          },
+          opts.logger ?? defaultMxLogger(),
+        );
+        return result;
       }
       return { accept: true };
     },
-    onData: (event) => handleInboundData(event, opts),
+    // Any DATA-time reject (today: the SPF/DKIM/DMARC verdict) is recorded
+    // with the full envelope before the reply goes out.
+    onData: async (event) => {
+      const result = await handleInboundData(event, opts);
+      if ("reject" in result) {
+        await recordSmtpRejection(
+          opts.db,
+          {
+            entrypoint: "mx",
+            phase: "data",
+            remoteAddress: event.session.remoteAddress,
+            heloName: event.envelope.heloName,
+            mailFrom: event.envelope.mailFrom,
+            rcptTo: event.envelope.rcptTo.map((r) => r.address).join(", "),
+            reject: result.reject,
+          },
+          opts.logger ?? defaultMxLogger(),
+        );
+      }
+      return result;
+    },
   });
 }
 

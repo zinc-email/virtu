@@ -16,7 +16,7 @@
 
 import { and, eq, inArray, lt } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
-import { type OutboundStatus, outboundMessages } from "../db/schema.ts";
+import { type OutboundStatus, outboundMessages, smtpRejections } from "../db/schema.ts";
 
 export interface RetentionOptions {
   retainSentDays: number;
@@ -74,4 +74,41 @@ export async function runRetentionOnce(
     sent: await deleteAged(db, "sent", sentCutoff, batchSize, maxBatches),
     failed: await deleteAged(db, "failed", failedCutoff, batchSize, maxBatches),
   };
+}
+
+export interface RejectionRetentionOptions {
+  retainDays: number;
+  batchSize?: number;
+  maxBatchesPerPass?: number;
+  now?: () => Date;
+}
+
+/**
+ * Age out smtp_rejections rows (append-only forensics, Lane K P2) past their
+ * window. Same batched/bounded shape as the queue pass, same reason: this
+ * runs inside the delivery loop.
+ */
+export async function runRejectionRetentionOnce(
+  db: Db,
+  opts: RejectionRetentionOptions,
+): Promise<number> {
+  const now = opts.now ?? (() => new Date());
+  const batchSize = opts.batchSize ?? 500;
+  const maxBatches = opts.maxBatchesPerPass ?? 20;
+  const cutoff = new Date(now().getTime() - opts.retainDays * 86_400_000);
+  let total = 0;
+  for (let pass = 0; pass < maxBatches; pass++) {
+    const batch = db
+      .select({ id: smtpRejections.id })
+      .from(smtpRejections)
+      .where(lt(smtpRejections.createdAt, cutoff))
+      .limit(batchSize);
+    const deleted = await db
+      .delete(smtpRejections)
+      .where(inArray(smtpRejections.id, batch))
+      .returning({ id: smtpRejections.id });
+    total += deleted.length;
+    if (deleted.length < batchSize) return total;
+  }
+  return total;
 }

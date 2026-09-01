@@ -93,6 +93,9 @@ const ConfigSchema = z.object({
     .default(60 * 60_000),
   queueRetainSentDays: z.coerce.number().int().default(7),
   queueRetainFailedDays: z.coerce.number().int().default(30),
+  // smtp_rejections rows (Lane K P2 forensics) age out on the same retention
+  // tick; 0 keeps them forever.
+  smtpRejectionsRetainDays: z.coerce.number().int().default(30),
 });
 
 export const config = loadConfigFromEnv(ConfigSchema);

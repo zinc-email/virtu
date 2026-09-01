@@ -82,6 +82,13 @@ export const submissionQuotaRefusedTotal = registry.counter(
   "Messages refused by the per-user daily send quota",
 );
 
+// Shared by mx and submission (pipeline/smtpRejection.ts).
+export const smtpRejectionsTotal = registry.counter(
+  "virtu_smtp_rejections_total",
+  "SMTP-time refusals recorded to smtp_rejections",
+  ["entrypoint", "phase"],
+);
+
 // ── delivery queue / deliverd ───────────────────────────────────────────────
 
 export const queueClaimedTotal = registry.counter(

@@ -39,7 +39,7 @@ import {
 } from "../smtp/index.ts";
 import { backoffDelayMs } from "./backoff.ts";
 import { reapStuckSending } from "./reaper.ts";
-import { runRetentionOnce } from "./retention.ts";
+import { runRejectionRetentionOnce, runRetentionOnce } from "./retention.ts";
 
 /** Outcome of one delivery attempt. */
 export type DeliveryOutcome =
@@ -513,6 +513,8 @@ export interface QueueHygieneOptions {
   retainSentDays?: number;
   retainFailedDays?: number;
   retentionIntervalMs?: number;
+  /** Age out smtp_rejections rows (Lane K P2); 0 disables. */
+  retainRejectionsDays?: number;
 }
 
 /**
@@ -559,6 +561,16 @@ export function startQueueWorker(
       if (deleted.failed > 0) queueRetentionDeletedTotal.inc({ status: "failed" }, deleted.failed);
       if (deleted.sent > 0 || deleted.failed > 0) {
         logger.info("retention_deleted", { sent: deleted.sent, failed: deleted.failed });
+      }
+      if ((hygiene.retainRejectionsDays ?? 0) > 0) {
+        const rejections = await runRejectionRetentionOnce(db, {
+          retainDays: hygiene.retainRejectionsDays ?? 0,
+          now: opts.now,
+        });
+        if (rejections > 0) {
+          queueRetentionDeletedTotal.inc({ status: "smtp_rejections" }, rejections);
+          logger.info("rejection_retention_deleted", { deleted: rejections });
+        }
       }
     }
   };

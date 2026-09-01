@@ -152,6 +152,10 @@ admin-grant email:
 admin-revoke email:
   bin/admin-revoke {{email}}
 
+# Mint signup invite codes (ABUSE.md Tier 0); prints one code per line.
+invite-create *args="":
+  bin/invite-create {{args}}
+
 # DSN the originator, then fail the row ("bounced by operator") — polite drop.
 queue-bounce +ids:
   bin/queue-bounce {{ids}}

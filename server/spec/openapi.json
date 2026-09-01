@@ -44,6 +44,9 @@
           },
           "device": {
             "type": "string"
+          },
+          "invite": {
+            "type": "string"
           }
         },
         "required": [
@@ -363,6 +366,30 @@
         "required": [
           "ids"
         ]
+      },
+      "AdminInviteCreateBody": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          }
+        },
+        "example": {
+          "count": 1,
+          "note": "for jane"
+        }
       },
       "MsgResponse": {
         "type": "object",
@@ -2236,6 +2263,157 @@
           "alias_unresolvable",
           "in_flight"
         ]
+      },
+      "AdminInviteListResponse": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "unused": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "invites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminInvite"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "unused",
+          "invites"
+        ],
+        "additionalProperties": false
+      },
+      "AdminInvite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "code": {
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminUserRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminUserRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "note",
+          "created_by",
+          "used_by",
+          "used_at",
+          "expires_at",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "AdminUserRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email"
+        ],
+        "additionalProperties": false
+      },
+      "AdminInviteCreatedResponse": {
+        "type": "object",
+        "properties": {
+          "invites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminInvite"
+            }
+          }
+        },
+        "required": [
+          "invites"
+        ],
+        "additionalProperties": false
+      },
+      "AdminInviteDeletedResponse": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -2295,7 +2473,7 @@
         "tags": [
           "Account"
         ],
-        "description": "Enter the emailed login code to finish authenticating: a first-time email is graduated to a full account (trial started, self-mailbox created), and an api_key for the Authentication header is minted either way, with sudo mode already fresh. 400 on a wrong email/code, 410 once the code has been tried wrongly too many times (request a new one via /auth/login). MFA is not implemented: mfa_enabled is always false and mfa_key null.",
+        "description": "Enter the emailed login code to finish authenticating: a first-time email is graduated to a full account (trial started, self-mailbox created), and an api_key for the Authentication header is minted either way, with sudo mode already fresh. 400 on a wrong email/code, 410 once the code has been tried wrongly too many times (request a new one via /auth/login). MFA is not implemented: mfa_enabled is always false and mfa_key null. On an invite-only deployment a FIRST-TIME email additionally needs a valid `invite` code or the response is 403 — sent only after code proof (so whether an address is registered still never leaks), which spends the login code: fix the invite, request a fresh code via /auth/login, and verify again. Existing accounts never need an invite.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2318,6 +2496,16 @@
             }
           },
           "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -5400,6 +5588,171 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invites": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "List invites, newest first (up to 200), with total and unused counts. Used invites carry the used_by linkage — the permanent invite graph.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Mint invite codes (up to 100 at once), optionally with a note and an expiry. Codes are returned here and remain readable in the list.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminInviteCreateBody"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteCreatedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invites/{id}": {
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Revoke an UNUSED invite. Used invites are the invite graph and can never be deleted — 404 covers both a missing and a used id.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteDeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
             "description": "Default Response",
             "content": {
               "application/json": {

@@ -324,7 +324,10 @@ the worker, shared by the admin API and the `bin/queue-*` CLI.
 
 ### Lane K — Admin & abuse (`server/src/routes/admin/`, `client/src/pages/Admin*`)
 
-Operator surface + the abuse/reputation program. Admin = the `users.flags`
+Operator surface + the abuse/reputation program. The threat model,
+industry-practice catalog, and implementation ranking (including the
+invite-only signup gate) live in **`ABUSE.md`** — it names which Lane K
+phase each practice lands in. Admin = the `users.flags`
 admin bit (`auth/userFlags.ts`) + a `requireAdmin` hook on a nested
 `/api/admin` scope inside the authed context (decision #16) — same spec,
 same Kubb SDK, tagged `Admin` (escape hatch if the public spec must ever be

@@ -139,6 +139,34 @@ export const apiKeys = pgTable(
   (t) => [index("api_keys_user_id_idx").on(t.userId)],
 );
 
+// Signup invite codes (ABUSE.md Tier 0). When SIGNUP_INVITE_ONLY is set the
+// /auth/verify graduation step refuses to activate a provisional user
+// without consuming a valid invite; existing users are untouched. Used rows
+// are kept forever — the created_by -> used_by linkage is the invite graph
+// (accountability when abuse re-enters through a leaked invite), so invites
+// only reference users with SET NULL, never CASCADE.
+export const invites = pgTable(
+  "invites",
+  {
+    id: id(),
+    // The code itself, shown to the operator at mint time. A capability
+    // token an admin hands out, not a proof of identity — stored plaintext
+    // (unlike login codes / API keys) so it can be re-read from the list.
+    code: varchar({ length: 64 }).unique().notNull(),
+    // Operator bookkeeping: who this invite is meant for.
+    note: varchar({ length: 256 }),
+    // Admin who minted it; null when minted by the break-glass CLI.
+    createdBy: integer().references(() => users.id, { onDelete: "set null" }),
+    // Set once, atomically, by the graduation that consumed it.
+    usedBy: integer().references(() => users.id, { onDelete: "set null" }),
+    usedAt: timestamp({ withTimezone: true, mode: "date" }),
+    // Null = never expires.
+    expiresAt: timestamp({ withTimezone: true, mode: "date" }),
+    ...timestamps,
+  },
+  (t) => [index("invites_used_by_idx").on(t.usedBy)],
+);
+
 // Per-device SMTP submission passwords ("app passwords"): one row per device
 // ("my phone", "my laptop"), each revocable/replaceable independently of the
 // others. The account itself has no password, so these are the ONLY
@@ -589,6 +617,7 @@ export type Contact = typeof contacts.$inferSelect;
 export type AliasUsedOn = typeof aliasUsedOn.$inferSelect;
 export type AliasMailbox = typeof aliasMailboxes.$inferSelect;
 export type VerificationCode = typeof verificationCodes.$inferSelect;
+export type Invite = typeof invites.$inferSelect;
 export type Domain = typeof domains.$inferSelect;
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type OutboundMessage = typeof outboundMessages.$inferSelect;

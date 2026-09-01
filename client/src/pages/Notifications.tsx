@@ -8,11 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
-import {
-  getNotificationsQueryKey,
-  useGetNotifications,
-  usePostNotificationsNotificationIdRead,
-} from "src/gen";
+import { useGetNotifications, usePostNotificationsNotificationIdRead } from "src/gen";
 import { Alert, Button, EntityList, EntityRow, Section, Tag, ui } from "src/ui";
 
 export function NotificationsPage() {

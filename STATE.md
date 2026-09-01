@@ -1,10 +1,18 @@
 # STATE — progress against PLAN.md
 
-Last updated: 2026-08-14 (observability + admin wave: Lane J foundation +
-Lane K P1 — structured logs, Prometheus metrics + Grafana Cloud shipping,
-queue reaper/retention/drop, the admin flag + `/api/admin` surface + first
-admin pages — PLAN decisions #15/#16). Companion to `PLAN.md` (the design
-doc); this file tracks what is built, how it was verified, and what remains.
+Last updated: 2026-09-01 (Lane K P2 wave, first slice: durable queue
+attribution columns, per-user daily send quotas at submission pre-enqueue,
+the `smtp_rejections` refusal log + retention, and the notifications
+API + bell UI). Companion to `PLAN.md` (the design doc); this file tracks
+what is built, how it was verified, and what remains.
+
+NOTE (2026-09-01): `feat/observability-admin` carries three UNMERGED
+commits from 2026-08-22 — `ABUSE.md` (the measured threat model + ranked
+abuse program) and the Tier-0 invite-only signup gate (`invites` table,
+`SIGNUP_INVITE_ONLY`, admin invite tooling). The dev DB has that branch's
+`invites` table (18 rows) — schema pushes from main must NOT drop it;
+the P2 wave applied its additive DDL manually for exactly this reason.
+Decide merge order before the next schema change.
 
 ## TL;DR
 
@@ -24,12 +32,12 @@ and the entire production/deploy story, which has not been started.
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~462 tests / 33 files | `just test-unit` | green |
+| Unit | ~477 tests / 37 files | `just test-unit` | green |
 | Contract (bridge protocol) | 14 tests / 2 files | `just test-contract` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit + contract | `just check` | green |
-| Integration (API vs real Postgres) | 136 tests / 10 files | `just up && just db push && just test-int` | green |
-| Client DOM (real React vs running stack) | 14 tests / 5 files | `just up && just db push && just test-client` | green |
-| Stories (simulated internet) | 24 stories / 13 files | `just test-net-up && just test-story` | green ×2 (2026-08-14, incl. the maild metrics assertion) |
+| Integration (API vs real Postgres) | 152 tests / 12 files | `just up && just db push && just test-int` | green |
+| Client DOM (real React vs running stack) | 16 tests / 6 files | `just up && just db push && just test-client` | green |
+| Stories (simulated internet) | 24 stories / 13 files | `just test-net-up && just test-story` | green (2026-09-01, fresh volumes, post-P2 pipeline changes) |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
 
 Test-net gotcha found 2026-08-14: the `pg_test` volume had survived since
@@ -80,7 +88,7 @@ with a regression test encoding the observed sequence).
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |
 | J — Observability & queue hygiene | ✅ done | 2026-08-14, decision #15. First-party structured logger (`src/log.ts`, all 6 daemon files migrated off console.log) + Prometheus registry (`src/metrics/`, `virtu_*` set) — api at `/meta/metrics`, maild on `:9100` (also its liveness: listeners + worker heartbeat); `/meta/health` now probes the DB; compose healthchecks on api+maild. Queue: `claimed_at` lease + reaper, retention (raw cleared on sent; 7d/30d windows), status-guarded terminal writes, `dropMessages`/`requeueMessages`, retry horizon 6→25 tries (~4 days, 6h cap; test net pins fast values). Alloy → Grafana Cloud under compose profile `observe` (`alloy/config.alloy`); creds go in `/opt/virtu/.env`. **Not yet verified against a real Grafana Cloud stack** — needs the account + creds on lmnop first |
-| K — Admin & abuse | P1 ✅ | 2026-08-14, decision #16. `USER_FLAGS.admin` bit + `requireAdmin` nested `/api/admin` scope; endpoints: overview, queue list (status filter + limit + total), detail (allowlisted routing headers — never Subject/body — + VERP-decoded owner), drop, requeue, delete (terminal rows only, ahead of retention), bounce (operator DSN via the shared `pipeline/dsnDelivery.ts` — extracted from deliverd — then failed "bounced by operator"; NO recordBounce, so the auto-disable ledger never moves on an operator action; forward diagnostics sanitized as always); `is_admin` on user_info. Client: Admin nav item (admins only), AdminOverview/AdminQueue/AdminQueueMessage pages, in-kit, screenshot-verified 360/700/1100/1440. Break-glass CLI: `bin/admin-{grant,revoke}`, `bin/queue-{list,stats,drop,requeue}` + just recipes (verified live against the dev DB). `sudoGuard.ts` seam extracted (POST /api_key refactored onto it); admin ops NOT sudo-gated until P2. Roadmap P2–P4 in PLAN Lane K |
+| K — Admin & abuse | P1 ✅ | 2026-08-14, decision #16. `USER_FLAGS.admin` bit + `requireAdmin` nested `/api/admin` scope; endpoints: overview, queue list (status filter + limit + total), detail (allowlisted routing headers — never Subject/body — + VERP-decoded owner), drop, requeue, delete (terminal rows only, ahead of retention), bounce (operator DSN via the shared `pipeline/dsnDelivery.ts` — extracted from deliverd — then failed "bounced by operator"; NO recordBounce, so the auto-disable ledger never moves on an operator action; forward diagnostics sanitized as always); `is_admin` on user_info. Client: Admin nav item (admins only), AdminOverview/AdminQueue/AdminQueueMessage pages, in-kit, screenshot-verified 360/700/1100/1440. Break-glass CLI: `bin/admin-{grant,revoke}`, `bin/queue-{list,stats,drop,requeue}` + just recipes (verified live against the dev DB). `sudoGuard.ts` seam extracted (POST /api_key refactored onto it); admin ops NOT sudo-gated until P2. Roadmap P2–P4 in PLAN Lane K. **P2 first slice ✅ 2026-09-01**: (1) durable attribution — `outbound_messages.user_id/email_log_id` written by every enqueue (mx forwards + trash copies, submission, transactional via sendWithRateLimit's userId, DSNs from the email_log), admin queue DTO carries `user_id`, `resolveQueueOwner` falls back to the columns when VERP doesn't decode (DSNs/trash/expired now name their user); (2) per-user daily send quota at submission pre-enqueue — counts `email_logs.is_reply` recipients over a rolling 24h (forwards never count), refuses whole messages 452/4.7.1, limits `users.max_daily_sends` override (0 = unlimited) else SEND_QUOTA_{FREE,PREMIUM}_PER_DAY (50/500); (3) `smtp_rejections` — every SMTP-time refusal from both daemons (auth/mail_from/rcpt_to/data phases) recorded fail-open with envelope context + the exact reply, aged out on the retention tick (SMTP_REJECTIONS_RETAIN_DAYS=30), metric `virtu_smtp_rejections_total`; (4) notifications — SL-compatible GET /notifications (unread-first, 20/page, humanized created_at via `routes/timeAgo.ts`) + POST /notifications/:id/read, header bell with unread badge + /notifications page (screenshot-verified 360–1440), `bin/notification-create` dev/announce tool. Still open from P2: sudo-gating the destructive ops, admin user views, notifications for quota hits |
 
 Milestones M1–M4 (PLAN sequencing diagram): all reached.
 
@@ -102,10 +110,11 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
    admin flag + a confirm dialog only; the `sudoGuard.ts` seam exists and
    P2 flips it on together with the SudoDialog the user-facing destructive
    deletes also need.
-7. **Queue ownership is VERP-only** — admin detail decodes the return path
-   (5-day validity; retention keeps rows younger), so trash copies and DSNs
-   show no owner. Durable `outbound_messages.user_id` attribution is the
-   Lane K P2 schema decision.
+7. ~~**Queue ownership is VERP-only**~~ (resolved 2026-09-01: durable
+   `outbound_messages.user_id`/`email_log_id` written at every enqueue;
+   admin detail falls back to them when the VERP doesn't decode. Rows
+   enqueued before the wave stay unattributed until retention ages them
+   out.)
 8. **Grafana Cloud shipping unverified** — the Alloy service + config are
    in the serve stack behind `COMPOSE_PROFILES=observe`, but no Grafana
    Cloud stack/credentials exist yet; first real scrape should happen on

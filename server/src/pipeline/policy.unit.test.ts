@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Alias, Domain, Mailbox, User } from "../db/schema.ts";
 import type { VerpInfo } from "../mail/index.ts";
-import { type CatchAllFacts, decideRcpt, type RcptFacts } from "./policy.ts";
+import { type CatchAllFacts, decideRcpt, mailboxDeliverable, type RcptFacts } from "./policy.ts";
 
 const NOW = new Date("2026-08-08T12:00:00Z");
 
@@ -62,6 +62,7 @@ function fakeMailbox(over: Partial<Mailbox> = {}): Mailbox {
     email: "wes@qmail.com",
     verified: true,
     disabled: false,
+    suppressedAt: null,
     nbFailedChecks: 0,
     createdAt: NOW,
     updatedAt: NOW,
@@ -108,6 +109,7 @@ function facts(over: Partial<RcptFacts> = {}): RcptFacts {
     user: fakeUser(),
     mailbox: fakeMailbox(),
     deliveryMailboxes: [],
+    suppressedFromDelivery: false,
     trashMailbox: null,
     catchAll: null,
     ...over,
@@ -178,6 +180,38 @@ describe("decideRcpt", () => {
   });
 });
 
+describe("decideRcpt — mailbox suppression (ABUSE.md Tier 1)", () => {
+  test("sole mailbox suppressed: drop with the distinct reason", () => {
+    const decision = decideRcpt(facts({ deliveryMailboxes: [], suppressedFromDelivery: true }));
+    expect(decision).toEqual({ kind: "drop", reason: "mailbox_suppressed" });
+  });
+
+  test("suppressed primary with a healthy extra: still deliver", () => {
+    const extra = fakeMailbox({ id: 12, email: "second@qmail.com" });
+    const decision = decideRcpt(
+      facts({ deliveryMailboxes: [extra], suppressedFromDelivery: true }),
+    );
+    expect(decision).toEqual({ kind: "deliver" });
+  });
+
+  test("suppressed trash mailbox: fall back to accept-and-drop", () => {
+    const decision = decideRcpt(
+      facts({
+        alias: fakeAlias({ enabled: false }),
+        trashMailbox: fakeMailbox({ id: 11, suppressedAt: NOW }),
+      }),
+    );
+    expect(decision).toEqual({ kind: "drop", reason: "alias_disabled" });
+  });
+
+  test("mailboxDeliverable: the shared bar", () => {
+    expect(mailboxDeliverable(fakeMailbox())).toBe(true);
+    expect(mailboxDeliverable(fakeMailbox({ suppressedAt: NOW }))).toBe(false);
+    expect(mailboxDeliverable(fakeMailbox({ verified: false }))).toBe(false);
+    expect(mailboxDeliverable(fakeMailbox({ disabled: true }))).toBe(false);
+  });
+});
+
 describe("decideRcpt — trash inbox", () => {
   const off = () => fakeAlias({ enabled: false });
   const trash = (over: Partial<Mailbox> = {}) =>
@@ -244,6 +278,16 @@ describe("decideRcpt — catch-all", () => {
 
   test("no default mailbox: user unknown, not mint", () => {
     const decision = decideRcpt(facts({ ...noAlias, catchAll: fakeCatchAll({ mailbox: null }) }));
+    expect(decision).toMatchObject({ kind: "reject", code: 550, enhanced: "5.1.1" });
+  });
+
+  test("suppressed mailbox: user unknown, not mint", () => {
+    const decision = decideRcpt(
+      facts({
+        ...noAlias,
+        catchAll: fakeCatchAll({ mailbox: fakeMailbox({ suppressedAt: NOW }) }),
+      }),
+    );
     expect(decision).toMatchObject({ kind: "reject", code: 550, enhanced: "5.1.1" });
   });
 

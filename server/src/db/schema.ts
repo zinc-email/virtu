@@ -204,6 +204,13 @@ export const mailboxes = pgTable(
     verified: boolean().default(false).notNull(),
     // A mailbox can be disabled if it can't be reached.
     disabled: boolean().default(false).notNull(),
+    // Bounce suppression (ABUSE.md Tier 1): set on the FIRST forward-phase
+    // bounce whose enhanced code says the mailbox is gone (5.1.1 no such
+    // user / 5.2.1 account disabled). While set, no alias delivers here —
+    // inbound is dropped, never bounced. Cleared ONLY by re-verification
+    // (a fresh emailed code); never auto-cleared when the domain answers
+    // again, because a recycled domain looks exactly like a recovery.
+    suppressedAt: timestamp({ withTimezone: true, mode: "date" }),
     // Incremented when a delivery/DNS check fails; alert past a threshold.
     nbFailedChecks: integer().default(0).notNull(),
     ...timestamps,
@@ -410,6 +417,9 @@ export const emailLogs = pgTable(
     isReply: boolean().default(false).notNull(),
     // E.g. alias disabled — the forward was blocked.
     blocked: boolean().default(false).notNull(),
+    // Why a blocked row was dropped: "alias_disabled" | "mailbox_unavailable"
+    // | "mailbox_suppressed" (ABUSE.md Tier 1). Null on pre-existing rows.
+    blockedReason: varchar({ length: 32 }),
     bounced: boolean().default(false).notNull(),
     // When the bounce was recorded (wave 2): the auto-disable thresholds
     // (>12/day, >10/week, 9-of-10 days — PLAN Lane C) count on this, not on

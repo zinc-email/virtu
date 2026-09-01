@@ -28,6 +28,19 @@ import {
 import { parseVerp, type VerpInfo } from "../mail/index.ts";
 
 /**
+ * The one bar a mailbox must clear to receive mail, shared by every site
+ * that builds a delivery set (RCPT delivery mailboxes, the trash inbox,
+ * the catch-all default, bounce-detach survivors): proven ownership, not
+ * operator-disabled, and not bounce-suppressed (ABUSE.md Tier 1 —
+ * pipeline/suppression.ts; suppression clears only via re-verification).
+ */
+export function mailboxDeliverable(
+  mb: Pick<Mailbox, "verified" | "disabled" | "suppressedAt">,
+): boolean {
+  return mb.verified && !mb.disabled && mb.suppressedAt === null;
+}
+
+/**
  * Facts about a VERIFIED custom domain matching the address's domain, only
  * gathered when no alias matched (the catch-all question).
  */
@@ -52,11 +65,18 @@ export interface RcptFacts {
   mailbox: Mailbox | null;
   /**
    * Every healthy mailbox the alias delivers to: the primary plus the
-   * alias_mailboxes extras, disabled ones filtered out, primary first. The
-   * mx enqueues one copy per entry; an unhealthy primary no longer drops
-   * mail that a healthy extra mailbox could receive.
+   * alias_mailboxes extras, disabled/suppressed ones filtered out, primary
+   * first. The mx enqueues one copy per entry; an unhealthy primary no
+   * longer drops mail that a healthy extra mailbox could receive.
    */
   deliveryMailboxes: Mailbox[];
+  /**
+   * True when at least one of the alias's mailboxes was excluded from the
+   * delivery set because it is bounce-suppressed — distinguishes the
+   * "mailbox_suppressed" drop from plain "mailbox_unavailable" when the
+   * set comes up empty.
+   */
+  suppressedFromDelivery: boolean;
   user: User | null;
   /**
    * The owner's designated trash mailbox, only gathered when the alias is
@@ -82,7 +102,7 @@ export type RcptDecision =
    */
   | { kind: "mint" }
   /** Accept-and-drop (250, blocked log, no queue). */
-  | { kind: "drop"; reason: "alias_disabled" | "mailbox_unavailable" }
+  | { kind: "drop"; reason: "alias_disabled" | "mailbox_unavailable" | "mailbox_suppressed" }
   | { kind: "reject"; code: number; enhanced: string; message: string };
 
 /**
@@ -107,7 +127,11 @@ export function decideRcpt(facts: RcptFacts): RcptDecision {
       !ca.tombstoned &&
       !ca.owner.disabled &&
       ca.mailbox !== null &&
-      !ca.mailbox.disabled
+      !ca.mailbox.disabled &&
+      // A suppressed default mailbox must not mint aliases that would only
+      // ever drop (same bar as the delivery set, minus the historical
+      // verified quirk kept above it).
+      ca.mailbox.suppressedAt === null
     ) {
       return { kind: "mint" };
     }
@@ -130,18 +154,17 @@ export function decideRcpt(facts: RcptFacts): RcptDecision {
     // The trash-inbox concept: an "off" alias forwards to the owner's
     // designated trash mailbox when one is set and healthy; otherwise the
     // default accept-and-drop (existence stays unprobeable either way).
-    if (
-      facts.trashMailbox !== null &&
-      facts.trashMailbox.verified &&
-      !facts.trashMailbox.disabled
-    ) {
+    if (facts.trashMailbox !== null && mailboxDeliverable(facts.trashMailbox)) {
       return { kind: "deliver", trash: true };
     }
     return { kind: "drop", reason: "alias_disabled" };
   }
 
   if (facts.deliveryMailboxes.length === 0) {
-    return { kind: "drop", reason: "mailbox_unavailable" };
+    return {
+      kind: "drop",
+      reason: facts.suppressedFromDelivery ? "mailbox_suppressed" : "mailbox_unavailable",
+    };
   }
 
   return { kind: "deliver" };
@@ -181,7 +204,8 @@ export async function evaluateRcpt(
   let alias: Alias | null = null;
   let user: User | null = null;
   let mailbox: Mailbox | null = null;
-  let deliveryMailboxes: Mailbox[] = [];
+  const deliveryMailboxes: Mailbox[] = [];
+  let suppressedFromDelivery = false;
   let trashMailbox: Mailbox | null = null;
   let catchAll: CatchAllFacts | null = null;
 
@@ -212,8 +236,14 @@ export async function evaluateRcpt(
         .orderBy(mailboxes.id);
       const seen = new Set<number>();
       for (const mb of [mailbox, ...extraRows.map((r) => r.mailbox)]) {
-        if (mb === null || mb.disabled || !mb.verified || seen.has(mb.id)) continue;
+        if (mb === null || seen.has(mb.id)) continue;
         seen.add(mb.id);
+        if (!mailboxDeliverable(mb)) {
+          if (mb.verified && !mb.disabled && mb.suppressedAt !== null) {
+            suppressedFromDelivery = true;
+          }
+          continue;
+        }
         deliveryMailboxes.push(mb);
       }
     }
@@ -274,6 +304,7 @@ export async function evaluateRcpt(
     alias,
     mailbox,
     deliveryMailboxes,
+    suppressedFromDelivery,
     user,
     trashMailbox,
     catchAll,

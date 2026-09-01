@@ -42,7 +42,13 @@ import { type DnsResolver, signOutbound, verifyInbound } from "./mailauth/index.
 import { getOrCreateContact } from "./pipeline/contacts.ts";
 import { loadDkimKey } from "./pipeline/dkim.ts";
 import { makeVerifyResolver } from "./pipeline/dnsTxt.ts";
-import { looksLikeDsn, recordBounce, recordTransactionalBounce } from "./pipeline/bounce.ts";
+import {
+  extractDsnStatus,
+  looksLikeDsn,
+  recordBounce,
+  recordTransactionalBounce,
+} from "./pipeline/bounce.ts";
+import { isSuppressionCode, suppressMailbox } from "./pipeline/suppression.ts";
 import {
   createBlockedLog,
   createForwardLog,
@@ -133,11 +139,12 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     // book a bounce against the user's own alias (forward/reply) — the latter
     // could trip auto-disable on a victim whose mailbox answers the return
     // path. (utf-8 with replacement chars is fine: the Action fields are ASCII.)
+    const bodyText = new TextDecoder().decode(parsed.body);
     const dsnish = looksLikeDsn({
       envelopeFrom: envelope.mailFrom,
       contentType: parsed.headers.get("Content-Type"),
       autoSubmitted: parsed.headers.get("Auto-Submitted"),
-      body: new TextDecoder().decode(parsed.body),
+      body: bodyText,
     });
     if (!dsnish) {
       mxMessagesTotal.inc({ outcome: "verp_ignored" });
@@ -160,6 +167,27 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       emailLogId: info.id,
       aliasDisabled: result.aliasDisabled,
     });
+    // Async-bounce suppression (ABUSE.md Tier 1): the DSN's per-recipient
+    // Status field is the enhanced code deliverd would have seen at SMTP
+    // time. Forward phase only, same as the deliverd path.
+    const status = extractDsnStatus(bodyText);
+    if (
+      info.type === "bounce_forward" &&
+      status !== undefined &&
+      isSuppressionCode(status) &&
+      result.emailLog?.mailboxId != null
+    ) {
+      const suppressed = await suppressMailbox(opts.db, result.emailLog.mailboxId, {
+        enhancedCode: status,
+      });
+      if (suppressed.suppressed) {
+        log.warn("mailbox_suppressed", {
+          emailLogId: info.id,
+          mailboxId: result.emailLog.mailboxId,
+          enhancedCode: status,
+        });
+      }
+    }
   }
 
   const deliverable = evaluated.filter((r) => r.decision.kind === "deliver");
@@ -205,10 +233,13 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     log.warn("dkim_key_missing", { domain: opts.mailDomain, consequence: "forwarding unsigned" });
   }
 
-  // 3. Accept-and-drop recipients: blocked log, nothing queued.
+  // 3. Accept-and-drop recipients: blocked log (with the drop reason —
+  //    "mailbox_suppressed" is how a paused mailbox's dropped mail stays
+  //    auditable), nothing queued.
   for (const drop of drops) {
     const { alias, user } = drop.facts;
     if (alias === null || user === null) continue;
+    const reason = drop.decision.kind === "drop" ? drop.decision.reason : "unknown";
     const scope = { userId: user.id, aliasId: alias.id };
     const contact = await getOrCreateContact(opts.db, scope, fromAddr, "from", {
       mailDomain: opts.mailDomain,
@@ -220,12 +251,10 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       aliasId: alias.id,
       mailboxId: drop.facts.mailbox?.id ?? null,
       messageId: originalMessageId,
+      blockedReason: reason,
     });
     mxMessagesTotal.inc({ outcome: "dropped" });
-    log.info("inbound_dropped", {
-      to: drop.address,
-      reason: (drop.decision as { reason: string }).reason,
-    });
+    log.info("inbound_dropped", { to: drop.address, reason });
   }
 
   // Trace header for the hop we handled (RFC 5321 §4.4): topmost on every

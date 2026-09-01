@@ -1374,6 +1374,9 @@
           },
           "trash": {
             "type": "boolean"
+          },
+          "suppressed": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1383,7 +1386,8 @@
           "default",
           "creation_timestamp",
           "nb_alias",
-          "trash"
+          "trash",
+          "suppressed"
         ],
         "additionalProperties": false
       },
@@ -4231,6 +4235,73 @@
             }
           },
           "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mailboxes/{mailbox_id}/verify/request": {
+      "post": {
+        "tags": [
+          "Mailbox"
+        ],
+        "description": "Email a fresh 6-digit verification code for a mailbox that is unverified or bounce-suppressed (suppressed mailboxes resume forwarding only after re-verifying — proof the address receives mail again). 400 when the mailbox is already verified and not suppressed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "mailbox_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
             "description": "Default Response",
             "content": {
               "application/json": {

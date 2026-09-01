@@ -89,6 +89,13 @@ export const smtpRejectionsTotal = registry.counter(
   ["entrypoint", "phase"],
 );
 
+// Mailbox-level bounce suppression (pipeline/suppression.ts, ABUSE.md Tier 1).
+export const mailboxSuppressedTotal = registry.counter(
+  "virtu_mailbox_suppressed_total",
+  "Mailboxes suppressed on a first-strike bounce code",
+  ["code"], // 5.1.1 | 5.2.1
+);
+
 // ── delivery queue / deliverd ───────────────────────────────────────────────
 
 export const queueClaimedTotal = registry.counter(

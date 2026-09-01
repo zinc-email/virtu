@@ -13,6 +13,7 @@ import {
   getV2MailboxesQueryKey,
   type Mailbox,
   useGetV2Mailboxes,
+  usePostMailboxesMailboxIdVerifyRequest,
   usePutMailboxesMailboxId,
 } from "src/gen";
 import { Alert, Button, EmailBreak, KV, KVSwitch, KeyValue, Section, ui } from "src/ui";
@@ -31,6 +32,11 @@ export function MailboxDetailPage() {
     void queryClient.invalidateQueries({ queryKey: getV2MailboxesQueryKey() });
 
   const update = usePutMailboxesMailboxId({ mutation: { onSuccess: invalidate } });
+  // Resume flow for a bounce-paused mailbox: email a fresh code, then the
+  // same verify dialog — a successful code proof clears the suppression.
+  const requestCode = usePostMailboxesMailboxIdVerifyRequest({
+    mutation: { onSuccess: () => setVerifying(true) },
+  });
 
   if (mailboxes.isPending) {
     return (
@@ -77,7 +83,13 @@ export function MailboxDetailPage() {
       </header>
 
       <KeyValue>
-        <KV k="Status">{mailbox.verified ? "Verified" : "Not verified"}</KV>
+        <KV k="Status">
+          {mailbox.suppressed
+            ? "Paused — mail was bouncing"
+            : mailbox.verified
+              ? "Verified"
+              : "Not verified"}
+        </KV>
         <KV k="Aliases">
           {mailbox.nb_alias === 1
             ? "1 alias delivers here"
@@ -116,6 +128,37 @@ export function MailboxDetailPage() {
         <div className={ui.actionsCenter}>
           <Button onClick={() => setVerifying(true)}>Enter code</Button>
         </div>
+      )}
+
+      {mailbox.suppressed && (
+        <>
+          <p
+            className={css({
+              margin: "2rem auto 0",
+              maxWidth: "34rem",
+              padding: "0 2rem",
+              color: "textDim",
+              fontSize: "0.9rem",
+            })}
+          >
+            This mailbox rejected forwarded mail as undeliverable, so forwarding to it is paused for
+            every alias that delivers here — incoming mail is dropped while paused. Once the mailbox
+            works again, re-verify it to resume.
+          </p>
+          {requestCode.isError && (
+            <div className={css({ margin: "1rem auto 0", maxWidth: "34rem", padding: "0 2rem" })}>
+              <Alert>{apiErrorMessage(requestCode.error)}</Alert>
+            </div>
+          )}
+          <div className={cx(ui.actionsCenter, css({ marginTop: "1.5rem" }))}>
+            <Button
+              loading={requestCode.isPending}
+              onClick={() => requestCode.mutate({ mailbox_id: mailbox.id })}
+            >
+              Re-verify this mailbox
+            </Button>
+          </div>
+        </>
       )}
 
       {!mailbox.default && (

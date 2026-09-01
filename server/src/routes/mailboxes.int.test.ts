@@ -1,8 +1,12 @@
 // Mailbox routes int tests. Prerequisites: `just up` + `just db push`.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { eq } from "drizzle-orm";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
+import { db } from "../db";
+import { notifications, users } from "../db/schema";
+import { suppressMailbox } from "../pipeline/suppression";
 import { createAlias, latestEmailedCode, registerAndLogin, uniqueEmail } from "./intHarness";
 
 let app: App;
@@ -514,5 +518,97 @@ describe("PUT /api/mailboxes/:id trash flag (Virtu extension)", () => {
     });
     expect(del.statusCode).toBe(200);
     expect((await listMailboxes(apiKey)).every((m) => !m.trash)).toBe(true);
+  });
+});
+
+describe("mailbox bounce suppression (ABUSE.md Tier 1)", () => {
+  async function suppress(mailboxId: number) {
+    const result = await suppressMailbox(db, mailboxId, { enhancedCode: "5.1.1" });
+    if (!result.suppressed) throw new Error(`mailbox ${mailboxId} did not suppress`);
+    return result;
+  }
+
+  async function getMailboxDto(apiKey: string, id: number) {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v2/mailboxes",
+      headers: auth(apiKey),
+    });
+    const rows = res.json<{ mailboxes: { id: number; verified: boolean; suppressed: boolean }[] }>()
+      .mailboxes;
+    const row = rows.find((m) => m.id === id);
+    if (!row) throw new Error(`mailbox ${id} not in list`);
+    return row;
+  }
+
+  test("suppression surfaces on the DTO; re-verify with a fresh code clears it", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mbEmail = uniqueEmail();
+    const mb = await createVerifiedMailbox(apiKey, mbEmail);
+
+    await suppress(mb.id);
+    expect(await getMailboxDto(apiKey, mb.id)).toMatchObject({ verified: true, suppressed: true });
+
+    // Resume path: request a fresh code (allowed while suppressed), then verify.
+    const requested = await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify/request`,
+      headers: auth(apiKey),
+    });
+    expect(requested.statusCode).toBe(200);
+    const verify = await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify`,
+      headers: auth(apiKey),
+      payload: { code: await latestEmailedCode(mbEmail) },
+    });
+    expect(verify.statusCode).toBe(200);
+    expect(verify.json<{ suppressed: boolean }>().suppressed).toBe(false);
+    expect(await getMailboxDto(apiKey, mb.id)).toMatchObject({ verified: true, suppressed: false });
+  });
+
+  test("suppression is first-strike idempotent and notifies once", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const mb = await createVerifiedMailbox(apiKey);
+    const userId = (await db.select({ id: users.id }).from(users).where(eq(users.email, email)))[0]!
+      .id;
+
+    await suppress(mb.id);
+    const second = await suppressMailbox(db, mb.id, { enhancedCode: "5.1.1" });
+    expect(second.suppressed).toBe(false);
+
+    const notes = await db.select().from(notifications).where(eq(notifications.userId, userId));
+    expect(notes.filter((n) => n.title?.includes("paused")).length).toBe(1);
+  });
+
+  test("wrong code leaves the mailbox suppressed", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mb = await createVerifiedMailbox(apiKey);
+    await suppress(mb.id);
+    await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify/request`,
+      headers: auth(apiKey),
+    });
+    const verify = await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify`,
+      headers: auth(apiKey),
+      payload: { code: "000000" },
+    });
+    expect(verify.statusCode).toBe(400);
+    expect(await getMailboxDto(apiKey, mb.id)).toMatchObject({ suppressed: true });
+  });
+
+  test("verify/request on a healthy verified mailbox is refused", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mb = await createVerifiedMailbox(apiKey);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/mailboxes/${mb.id}/verify/request`,
+      headers: auth(apiKey),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toBe("Mailbox is already verified");
   });
 });

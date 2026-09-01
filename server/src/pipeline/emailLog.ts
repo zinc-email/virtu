@@ -61,7 +61,13 @@ export async function createReplyLog(db: Db, input: EmailLogInput): Promise<Emai
 }
 
 /** Create a blocked-drop log row (disabled alias accept-and-drop etc.). */
-export async function createBlockedLog(db: Db, input: EmailLogInput): Promise<EmailLog> {
+export async function createBlockedLog(
+  db: Db,
+  input: EmailLogInput & {
+    /** Why the drop happened ("alias_disabled" | "mailbox_suppressed" | …). */
+    blockedReason?: string;
+  },
+): Promise<EmailLog> {
   const rows = await db
     .insert(emailLogs)
     .values({
@@ -71,6 +77,7 @@ export async function createBlockedLog(db: Db, input: EmailLogInput): Promise<Em
       mailboxId: input.mailboxId,
       isReply: false,
       blocked: true,
+      blockedReason: clip(input.blockedReason, 32),
       messageId: clip(input.messageId, MAX_MESSAGE_ID),
     })
     .returning();

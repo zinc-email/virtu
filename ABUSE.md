@@ -112,7 +112,13 @@ the remainder mechanical. (Billing lane + Lane K P2 audit log.)
 
 These cap what an active abuser costs us, independent of detection.
 
-**Mailbox-level bounce suppression.** The single highest-value control.
+**Mailbox-level bounce suppression.** *Built 2026-09-01 (see STATE.md):
+`mailboxes.suppressed_at` + `pipeline/suppression.ts`, triggered from both
+the deliverd SMTP-time path (the refusing reply's enhanced code) and the mx
+async-DSN intake (the report's Status field); drops log
+`email_logs.blocked_reason = "mailbox_suppressed"`; resume =
+POST /mailboxes/:id/verify/request + the code proof; Paused state in the
+dashboard.* The single highest-value control.
 Today the ledger auto-disables per *alias*, so one dead mailbox behind
 40 aliases bleeds bounce-by-bounce, alias-by-alias. Instead, key on the
 enhanced status code of the forward-phase bounce:

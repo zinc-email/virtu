@@ -44,7 +44,16 @@ import { runRejectionRetentionOnce, runRetentionOnce } from "./retention.ts";
 /** Outcome of one delivery attempt. */
 export type DeliveryOutcome =
   | { kind: "sent" }
-  | { kind: "permanent"; error: string }
+  | {
+      kind: "permanent";
+      error: string;
+      /**
+       * RFC 3463 enhanced status code of the refusing reply, when the remote
+       * sent one — the mailbox-suppression signal (ABUSE.md Tier 1). Absent
+       * on retries-exhausted failures (those were transient replies).
+       */
+      enhancedCode?: string;
+    }
   | { kind: "transient"; error: string };
 
 /** Format one SMTP reply for last_error. */
@@ -67,7 +76,7 @@ export function classifySendResult(result: SmtpSendResult): DeliveryOutcome {
   if (result.mailFrom.code < 200 || result.mailFrom.code >= 300) {
     const error = describeReply("MAIL FROM", result.mailFrom);
     return isPermanentCode(result.mailFrom.code)
-      ? { kind: "permanent", error }
+      ? { kind: "permanent", error, enhancedCode: result.mailFrom.enhancedCode }
       : { kind: "transient", error };
   }
 
@@ -75,14 +84,14 @@ export function classifySendResult(result: SmtpSendResult): DeliveryOutcome {
   if (refusedRcpt !== undefined && !result.rcptTo.some((r) => r.accepted)) {
     const error = describeReply(`RCPT TO ${refusedRcpt.address}`, refusedRcpt.reply);
     return isPermanentCode(refusedRcpt.reply.code)
-      ? { kind: "permanent", error }
+      ? { kind: "permanent", error, enhancedCode: refusedRcpt.reply.enhancedCode }
       : { kind: "transient", error };
   }
 
   if (result.data !== undefined) {
     const error = describeReply("DATA", result.data);
     return isPermanentCode(result.data.code)
-      ? { kind: "permanent", error }
+      ? { kind: "permanent", error, enhancedCode: result.data.enhancedCode }
       : { kind: "transient", error };
   }
 
@@ -242,7 +251,9 @@ export async function deliverOverSmtp(
     } catch (err) {
       if (err instanceof SmtpCommandError) {
         const outcome = describeReply(`${connectHost} ${err.command}`, err.reply);
-        if (isPermanentCode(err.reply.code)) return { kind: "permanent", error: outcome };
+        if (isPermanentCode(err.reply.code)) {
+          return { kind: "permanent", error: outcome, enhancedCode: err.reply.enhancedCode };
+        }
         lastError = outcome;
         continue; // 4xx from this host: try the next one
       }
@@ -303,8 +314,14 @@ export interface QueueWorkerOptions {
   batchSize: number;
   maxTries: number;
   deliver: DeliverFn;
-  /** Called once per row that permanently failed (bounce accounting, DSN). */
-  onPermanentFailure?: (row: OutboundMessage, error: string) => Promise<void>;
+  /** Called once per row that permanently failed (bounce accounting, DSN,
+   * mailbox suppression — `enhancedCode` is the refusing reply's RFC 3463
+   * code when the remote sent one). */
+  onPermanentFailure?: (
+    row: OutboundMessage,
+    error: string,
+    enhancedCode?: string,
+  ) => Promise<void>;
   /** Retry-delay shape; defaults are the ~4-day horizon (backoff.ts). */
   backoff?: { baseMs?: number; maxMs?: number };
   now?: () => Date;
@@ -475,7 +492,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
         });
         if (opts.onPermanentFailure !== undefined) {
           try {
-            await opts.onPermanentFailure(row, outcome.error);
+            await opts.onPermanentFailure(row, outcome.error, outcome.enhancedCode);
           } catch (err) {
             rowLogger.error("permanent_failure_hook_error", {
               error: (err as Error).message,

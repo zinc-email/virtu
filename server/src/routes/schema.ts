@@ -123,6 +123,10 @@ export const MailboxDto = z
     // Virtu extension (not in SimpleLogin): true when this mailbox is the
     // account's trash inbox — mail for disabled ("off") aliases lands here.
     trash: z.boolean(),
+    // Virtu extension: true when the mailbox is bounce-suppressed (it
+    // rejected a forward with 5.1.1/5.2.1 — ABUSE.md Tier 1). Forwarding to
+    // it is paused for every alias; re-verify with a fresh code to resume.
+    suppressed: z.boolean(),
   })
   .meta({ id: "Mailbox" });
 

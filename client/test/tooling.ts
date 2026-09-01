@@ -70,6 +70,15 @@ export function grantAdmin(email: string): Promise<string> {
 }
 
 /**
+ * Bounce-suppress a mailbox via bin/mailbox-suppress — in real life the
+ * pipeline suppresses on a 5.1.1/5.2.1 bounce (ABUSE.md Tier 1); tests need
+ * the state on demand. Same pipeline function, notification included.
+ */
+export function suppressMailbox(email: string): Promise<string> {
+  return runTool([bin("mailbox-suppress"), email]);
+}
+
+/**
  * Insert one in-app notification via bin/notification-create — notifications
  * are pipeline-produced (bounce auto-disable etc.), so tests mint one the
  * same way an operator announcement would.

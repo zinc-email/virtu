@@ -30,12 +30,17 @@ import { parseVerp } from "./mail/index.ts";
 import { dsnTotal, registerQueueCollectors } from "./metrics/index.ts";
 import { recordBounce, recordTransactionalBounce } from "./pipeline/bounce.ts";
 import { sendFailureDsn } from "./pipeline/dsnDelivery.ts";
+import { isSuppressionCode, suppressMailbox } from "./pipeline/suppression.ts";
 import { deliverOverSmtp, type QueueWorker, startQueueWorker } from "./queue/index.ts";
 
 const logger = createLogger("deliverd");
 
 /** Bounce accounting + DSN generation for permanently-failed rows. */
-export async function handlePermanentFailure(row: OutboundMessage, error: string): Promise<void> {
+export async function handlePermanentFailure(
+  row: OutboundMessage,
+  error: string,
+  enhancedCode?: string,
+): Promise<void> {
   if (row.envelopeFrom === "") {
     // Null reverse path: never bounce a bounce.
     return;
@@ -66,6 +71,26 @@ export async function handlePermanentFailure(row: OutboundMessage, error: string
     aliasDisabled: result.aliasDisabled,
   });
   if (log === null) return;
+
+  // Mailbox-level suppression (ABUSE.md Tier 1): a forward-phase 5.1.1/5.2.1
+  // means the MAILBOX is gone — first strike, every alias delivering there
+  // pauses. Forward phase only: a reply bounce's code describes the
+  // contact's address, not our user's mailbox.
+  if (
+    verp.type === "bounce_forward" &&
+    enhancedCode !== undefined &&
+    isSuppressionCode(enhancedCode) &&
+    log.mailboxId !== null
+  ) {
+    const suppressed = await suppressMailbox(db, log.mailboxId, { enhancedCode });
+    if (suppressed.suppressed) {
+      logger.warn("mailbox_suppressed", {
+        queueId: row.id,
+        mailboxId: log.mailboxId,
+        enhancedCode,
+      });
+    }
+  }
 
   // Composition, alias-naming/sanitization, rate limit, signing and the
   // enqueue all live in pipeline/dsnDelivery.ts (shared with the operator

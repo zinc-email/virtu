@@ -136,6 +136,10 @@ operator-create email="ops@qmail.com":
 login-code email:
   bin/login-code {{email}}
 
+# Bounce-suppress a mailbox by address (dev/operator tooling, ABUSE.md Tier 1).
+mailbox-suppress email code="5.1.1":
+  bin/mailbox-suppress {{email}} {{code}}
+
 # Insert one in-app notification for a user (dev/announce tooling).
 notification-create email title message:
   bin/notification-create {{email}} {{title}} {{message}}

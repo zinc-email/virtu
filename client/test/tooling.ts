@@ -68,3 +68,12 @@ export async function createUser(email: string): Promise<string> {
 export function grantAdmin(email: string): Promise<string> {
   return runTool([bin("admin-grant"), email]);
 }
+
+/**
+ * Insert one in-app notification via bin/notification-create — notifications
+ * are pipeline-produced (bounce auto-disable etc.), so tests mint one the
+ * same way an operator announcement would.
+ */
+export function createNotification(email: string, title: string, message: string): Promise<string> {
+  return runTool([bin("notification-create"), email, title, message]);
+}

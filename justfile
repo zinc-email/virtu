@@ -136,6 +136,10 @@ operator-create email="ops@qmail.com":
 login-code email:
   bin/login-code {{email}}
 
+# Insert one in-app notification for a user (dev/announce tooling).
+notification-create email title message:
+  bin/notification-create {{email}} {{title}} {{message}}
+
 # ----------------------------------------------------------------------------
 # Ops — queue + admin break-glass (direct DB; work with the API down)
 # ----------------------------------------------------------------------------

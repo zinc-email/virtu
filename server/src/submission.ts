@@ -507,6 +507,8 @@ async function handleSubmissionData(
       envelopeFrom,
       envelopeTo: target.contact.websiteEmail,
       maxRawBytes: opts.maxMessageSize,
+      userId: user.id,
+      emailLogId: emailLog.id,
     });
     submissionEnqueuedTotal.inc({ mode });
     log.info("submission_queued", {

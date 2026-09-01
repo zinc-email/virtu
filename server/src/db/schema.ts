@@ -81,6 +81,10 @@ export const users = pgTable(
     defaultAliasDomain: varchar({ length: 128 }),
     // Bitfield for misc account flags (SimpleLogin User.flags).
     flags: bigint({ mode: "number" }).default(0).notNull(),
+    // Per-user override of the daily outbound send quota (submission
+    // pre-enqueue, Lane K P2). Null = the plan default from config
+    // (SEND_QUOTA_FREE_PER_DAY / SEND_QUOTA_PREMIUM_PER_DAY); 0 = unlimited.
+    maxDailySends: integer(),
     // The "trash inbox": mail for a disabled ("off") alias is forwarded here
     // instead of being dropped. Null = accept-and-drop (the default).
     trashMailboxId: integer().references((): AnyPgColumn => mailboxes.id, { onDelete: "set null" }),
@@ -431,12 +435,62 @@ export const outboundMessages = pgTable(
     // (queue/reaper.ts) returns rows whose lease is stale to "pending".
     claimedAt: timestamp({ withTimezone: true, mode: "date" }),
     lastError: text(),
+    // Durable attribution (Lane K P2 schema decision): who a row belongs to,
+    // outliving VERP's 5-day decode window. Purely informational — deliverd
+    // never reads these; the queue stays dumb. Null on rows that predate the
+    // columns and on system mail with no owner. userId cascades: deleting an
+    // account withdraws its queued mail; emailLogId detaches (delivery of an
+    // in-flight message must survive its log row's deletion).
+    userId: integer().references(() => users.id, { onDelete: "cascade" }),
+    emailLogId: integer().references(() => emailLogs.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (t) => [
     index("outbound_messages_status_next_attempt_at_idx").on(t.status, t.nextAttemptAt),
     // Retention scans terminal rows by age (updatedAt = terminal-write time).
     index("outbound_messages_status_updated_at_idx").on(t.status, t.updatedAt),
+    // FK maintenance (user cascade / email_log set-null) + per-user listing.
+    index("outbound_messages_user_id_idx").on(t.userId),
+    index("outbound_messages_email_log_id_idx").on(t.emailLogId),
+  ],
+);
+
+/** Which SMTP daemon refused (Lane K P2). */
+export type SmtpRejectionEntrypoint = "mx" | "submission";
+/** SMTP conversation phase the refusal happened in. */
+export type SmtpRejectionPhase = "connect" | "auth" | "mail_from" | "rcpt_to" | "data";
+
+// Every SMTP-time refusal, from both listeners (Lane K P2 — RCPT/DATA rejects
+// previously wrote nothing). Append-only forensics: probing/dictionary
+// traffic shows up here first, and Lane K P3's per-IP mx throttling feeds on
+// (remoteAddress, createdAt). Aged out by the retention pass
+// (queue/retention.ts) after SMTP_REJECTIONS_RETAIN_DAYS.
+export const smtpRejections = pgTable(
+  "smtp_rejections",
+  {
+    id: id(),
+    entrypoint: varchar({ length: 16 }).$type<SmtpRejectionEntrypoint>().notNull(),
+    phase: varchar({ length: 16 }).$type<SmtpRejectionPhase>().notNull(),
+    remoteAddress: varchar({ length: 64 }).notNull(),
+    heloName: varchar({ length: 256 }),
+    // Envelope context as far as the session got (null before that phase).
+    mailFrom: text(),
+    rcptTo: text(),
+    smtpCode: integer().notNull(),
+    enhancedCode: varchar({ length: 16 }),
+    // The reply text sent to the peer — our reject messages are stable
+    // constants, so this doubles as the machine-groupable reason.
+    reason: varchar({ length: 256 }).notNull(),
+    // The authenticated user, when the session had one (submission only).
+    // SET NULL: the row is abuse forensics and outlives the account.
+    userId: integer().references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    // Retention scans by age; throttling (P3) counts per peer per window.
+    index("smtp_rejections_created_at_idx").on(t.createdAt),
+    index("smtp_rejections_remote_address_created_at_idx").on(t.remoteAddress, t.createdAt),
+    index("smtp_rejections_user_id_idx").on(t.userId),
   ],
 );
 
@@ -538,6 +592,7 @@ export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type Domain = typeof domains.$inferSelect;
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type OutboundMessage = typeof outboundMessages.$inferSelect;
+export type SmtpRejection = typeof smtpRejections.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type SentAlert = typeof sentAlerts.$inferSelect;

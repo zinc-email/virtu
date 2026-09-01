@@ -28,6 +28,7 @@ function fakeUser(over: Partial<User> = {}): User {
     randomAliasSuffix: "random_string",
     defaultAliasDomain: null,
     flags: 0,
+    maxDailySends: null,
     trashMailboxId: null,
     createdAt: NOW,
     updatedAt: NOW,

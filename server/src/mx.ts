@@ -323,6 +323,8 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
         envelopeFrom,
         envelopeTo: mailbox.email,
         maxRawBytes: opts.maxMessageSize,
+        userId: user.id,
+        emailLogId: emailLog.id,
       });
       mxMessagesTotal.inc({ outcome: isTrash ? "trash" : "forwarded" });
       log.info("forward_queued", {

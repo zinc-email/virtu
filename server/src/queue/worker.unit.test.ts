@@ -131,6 +131,8 @@ function outboundRow(over: Partial<OutboundMessage>): OutboundMessage {
     nextAttemptAt: new Date("2026-08-11T00:00:00Z"),
     claimedAt: null,
     lastError: null,
+    userId: null,
+    emailLogId: null,
     createdAt: new Date("2026-08-11T00:00:00Z"),
     updatedAt: new Date("2026-08-11T00:00:00Z"),
     ...over,

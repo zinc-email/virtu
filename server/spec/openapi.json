@@ -1846,6 +1846,18 @@
                 "type": "null"
               }
             ]
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1859,7 +1871,8 @@
           "last_error",
           "created_at",
           "size_bytes",
-          "verp_type"
+          "verp_type",
+          "user_id"
         ],
         "additionalProperties": false
       },
@@ -1921,12 +1934,26 @@
         "type": "object",
         "properties": {
           "verp_type": {
-            "$ref": "#/components/schemas/VerpType"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerpType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "verp_id": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "email_log_id": {
             "anyOf": [
@@ -4924,7 +4951,7 @@
         "tags": [
           "Admin"
         ],
-        "description": "One queue row: envelope, error state, an allowlisted set of ROUTING headers (never Subject, never the body — the message is the user's mail), and the owning user/alias decoded from the VERP return path (null for null-reverse-path rows and expired VERP).",
+        "description": "One queue row: envelope, error state, an allowlisted set of ROUTING headers (never Subject, never the body — the message is the user's mail), and the owning user/alias — decoded from the VERP return path when it verifies, else from the durable attribution columns (so DSNs, trash copies and expired-VERP rows still name their user).",
         "parameters": [
           {
             "schema": {

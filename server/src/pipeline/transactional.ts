@@ -100,6 +100,9 @@ export interface SendTransactionalOptions {
   testId?: string;
   /** Object id encoded in the VERP envelope sender (0 = none). */
   refId?: number;
+  /** Recipient account, for durable queue attribution (Lane K P2).
+   * sendWithRateLimit's RateLimitScope supplies it automatically. */
+  userId?: number;
   /** Clock override for tests. */
   now?: Date;
 }
@@ -167,6 +170,7 @@ export async function sendTransactional(
       envelopeFrom,
       envelopeTo: opts.to,
       maxRawBytes: config.smtpMaxMessageSize,
+      userId: opts.userId,
     });
     return { queued: true, queueId, messageId };
   } catch (err) {

@@ -28,6 +28,9 @@ export const AdminQueueMessage = z
     // Decoded from envelope_from when it HMAC-verifies as ours; null for the
     // null reverse path (DSNs, trash copies) and expired/foreign addresses.
     verp_type: VerpTypeDto.nullable(),
+    // Durable attribution (Lane K P2): the owning account, independent of
+    // VERP validity. Null on unowned system mail and pre-P2 rows.
+    user_id: z.number().int().nullable(),
   })
   .meta({ id: "AdminQueueMessage" });
 
@@ -47,8 +50,10 @@ export const AdminMessageHeader = z
 
 export const AdminQueueOwner = z
   .object({
-    verp_type: VerpTypeDto,
-    verp_id: z.number().int(),
+    // Null when the owner came from the durable attribution columns rather
+    // than a decodable VERP return path (DSNs, trash copies, expired VERP).
+    verp_type: VerpTypeDto.nullable(),
+    verp_id: z.number().int().nullable(),
     email_log_id: z.number().int().nullable(),
     verification_code_id: z.number().int().nullable(),
     user: z.object({ id: z.number().int(), email: z.string() }).nullable(),

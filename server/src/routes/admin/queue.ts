@@ -50,6 +50,8 @@ const listColumns = {
   lastError: outboundMessages.lastError,
   createdAt: outboundMessages.createdAt,
   updatedAt: outboundMessages.updatedAt,
+  userId: outboundMessages.userId,
+  emailLogId: outboundMessages.emailLogId,
   sizeBytes: sql<number>`octet_length(${outboundMessages.raw})`.mapWith(Number),
 };
 
@@ -69,6 +71,9 @@ function toDto(row: QueueRow): z.infer<typeof AdminQueueMessage> {
       row.envelopeFrom === ""
         ? null
         : (parseVerp(row.envelopeFrom, config.verpSecret)?.type ?? null),
+    // Durable attribution column (Lane K P2); null on system mail and rows
+    // that predate it.
+    user_id: row.userId,
   };
 }
 
@@ -116,8 +121,9 @@ export async function withAdminQueueRoutes(admin: FastifyInstance) {
       description:
         "One queue row: envelope, error state, an allowlisted set of ROUTING " +
         "headers (never Subject, never the body — the message is the user's " +
-        "mail), and the owning user/alias decoded from the VERP return path " +
-        "(null for null-reverse-path rows and expired VERP).",
+        "mail), and the owning user/alias — decoded from the VERP return path " +
+        "when it verifies, else from the durable attribution columns (so DSNs, " +
+        "trash copies and expired-VERP rows still name their user).",
       tags: ["Admin"],
       security: [{ apiKeyAuth: [] }],
       params: z.object({ message_id: z.coerce.number().int().min(1) }),
@@ -147,7 +153,11 @@ export async function withAdminQueueRoutes(admin: FastifyInstance) {
 
       const headers =
         row.rawHead.length === 0 ? [] : allowlistHeaders(parseMessage(row.rawHead).headers.fields);
-      const owner = await resolveQueueOwner(db, row.envelopeFrom);
+      const owner = await resolveQueueOwner(db, {
+        envelopeFrom: row.envelopeFrom,
+        userId: row.userId,
+        emailLogId: row.emailLogId,
+      });
       return {
         message: toDto(row),
         headers,

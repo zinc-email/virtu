@@ -150,6 +150,10 @@ export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<Fa
     envelopeFrom: "", // RFC 5321 §4.5.5: DSNs use the null reverse path
     envelopeTo: recipient,
     maxRawBytes: config.smtpMaxMessageSize,
+    // Null reverse path defeats VERP decoding, so the DSN's owner is
+    // recorded durably here (the user whose message failed).
+    userId: emailLog.userId,
+    emailLogId: emailLog.id,
   });
   dsnTotal.inc({ outcome: "sent" });
   logger.info("dsn_enqueued", { queueId, to: recipient, failedQueueId: row.id });

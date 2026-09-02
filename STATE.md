@@ -33,7 +33,7 @@ and the entire production/deploy story, which has not been started.
 | CI gauntlet | format + 2× tsc + SDK gen + unit + contract | `just check` | green |
 | Integration (API vs real Postgres) | 173 tests / 15 files | `just up && just db push && just test-int` | green |
 | Client DOM (real React vs running stack) | 17 tests / 6 files | `just up && just db push && just test-client` | green |
-| Stories (simulated internet) | 25 stories / 13 files | `just test-net-up && just test-story` | green (2026-09-01, fresh volumes, incl. the suppression + async-DSN threshold stories) |
+| Stories (simulated internet) | 27 stories / 13 files | `just test-net-up && just test-story` | green (2026-09-01, incl. suppression, async-DSN threshold, and the scripted open.relay wire-reply stories) |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
 
 Test-net gotcha found 2026-08-14: the `pg_test` volume had survived since
@@ -63,11 +63,18 @@ alias → trash inbox with `X-Virtu-Trash` (and on-alias mail unmarked), and
 multi-mailbox fan-out (one send → both Maildirs, one email_log per mailbox;
 a dead extra mailbox SUPPRESSES on its first 5.1.1 bounce — stays attached,
 excluded from delivery — while the alias and its healthy primary keep
-going). Since 2026-09-01 the bounce loop is two stories: first-strike
+going). Since 2026-09-01 the bounce loop is four stories: first-strike
 mailbox suppression (one 5.1.1 → paused mailbox, drop-not-bounce, in-app
-notification, alias stays enabled) and threshold auto-disable driven by
+notification, alias stays enabled), threshold auto-disable driven by
 async 5.7.1 DSNs at the VERP return path (non-suppression codes still
-accumulate to >12/24h); the detach-at-threshold decision table moved to
+accumulate to >12/24h), and — via the **scripted open.relay neighbor**
+(`smtpd` template `scripted-replies.pcre`: a recipient
+`reply-<code>-<c>-<s>-<d>-<tag>@open.relay` is refused at RCPT with exactly
+that SMTP + enhanced code, `scriptedReplyAddress()` in `test/personas.ts`)
+— the same regimes as genuine SMTP-time wire replies: a 550 5.7.1
+threshold run through deliverd's permanent path, and a 450 tempfail pinning
+the retry/backoff path (row back to `pending`, tries counted, no bounce,
+no suppression). The detach-at-threshold decision table moved to
 `pipeline/bounce.int.test.ts`.
 
 The live Stripe pass caught a real bug the self-signed tests missed

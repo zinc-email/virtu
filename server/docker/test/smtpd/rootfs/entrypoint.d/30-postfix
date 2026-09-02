@@ -60,7 +60,7 @@ POSTFIX_ENV_VARS='
   ${TLS_KEY_FILE}
 '
 
-POSTFIX_TEMPLATES='main.cf master.cf vmailbox'
+POSTFIX_TEMPLATES='main.cf master.cf vmailbox scripted-replies.pcre'
 
 for template in $POSTFIX_TEMPLATES; do
   if [ -f /templates/postfix/"$template" ]; then

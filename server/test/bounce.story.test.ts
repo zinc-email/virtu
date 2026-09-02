@@ -20,6 +20,13 @@
  *    through the mx's async-DSN intake: forwards deliver fine, then fake
  *    RFC 3464 reports with Status: 5.7.1 arrive at each VERP return path.
  *
+ * 3. SCRIPTED WIRE REPLIES. The open.relay peer answers reply-<code>-...
+ *    recipients with exactly that refusal at RCPT (scripted-replies.pcre),
+ *    so the same regimes are also pinned as genuine SMTP-time wire replies:
+ *    a 550 5.7.1 threshold run through deliverd's permanent-failure path,
+ *    and a 450 tempfail exercising the retry/backoff path (no bounce at
+ *    all).
+ *
  * Assertions run against the DB (test-runner shares Postgres with the mail
  * service) plus Maildir presence/absence.
  */
@@ -27,7 +34,13 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import { db } from "../src/db/index.ts";
-import { aliases, emailLogs, mailboxes, notifications } from "../src/db/schema.ts";
+import {
+  aliases,
+  emailLogs,
+  mailboxes,
+  notifications,
+  outboundMessages,
+} from "../src/db/schema.ts";
 import {
   createAlias,
   ensureDkimKey,
@@ -40,7 +53,7 @@ import {
 } from "./fixtures.ts";
 import { findMail, getHeader } from "./maildir.ts";
 import { buildMessage } from "./message.ts";
-import { milton } from "./personas.ts";
+import { milton, scriptedReplyAddress } from "./personas.ts";
 import { smtpSend, waitForPort } from "./smtpSend.ts";
 import { newTestId } from "./testId.ts";
 
@@ -52,6 +65,7 @@ let fixture: UserFixture;
 beforeAll(async () => {
   await waitForPort(milton.submission.host, milton.submission.port, 60_000);
   await waitForPort("mail.virtu.email", 25, 60_000);
+  await waitForPort("mail.open.relay", 25, 60_000);
   await ensureDkimKey();
   fixture = await ensureWes();
 });
@@ -190,6 +204,83 @@ describe("M3: threshold auto-disable on non-suppression codes", () => {
       .from(emailLogs)
       .where(and(eq(emailLogs.aliasId, alias.id), eq(emailLogs.bounced, true)));
     expect(bounced.length).toBe(BOUNCES_TO_DISABLE);
+  }, 300_000);
+});
+
+describe("scripted wire replies from the open.relay neighbor", () => {
+  test("13 SMTP-time 550 5.7.1 rejects disable the alias; mailbox untouched", async () => {
+    // Unlike the async-DSN regime above, these bounces happen AT RCPT on
+    // the delivery attempt itself — the enhanced code rides the wire reply
+    // through classifySendResult → onPermanentFailure. 5.7.1 is a policy
+    // code, so the ledger (not suppression) must handle it.
+    const badMailbox = await ensureMailbox(
+      fixture.user.id,
+      scriptedReplyAddress(550, "5.7.1", randomTag()),
+    );
+    const alias = await createAlias(fixture, { mailboxId: badMailbox.id });
+
+    for (let i = 0; i < BOUNCES_TO_DISABLE; i++) {
+      await sendFromMilton(alias.email, `wire bounce fodder ${i + 1}`, newTestId());
+    }
+
+    await pollUntil(
+      async () => {
+        const row = await getAlias(alias.id);
+        return row !== undefined && !row.enabled;
+      },
+      { timeoutMs: 240_000, pollMs: 500, what: `alias ${alias.email} to auto-disable` },
+    );
+
+    const bounced = await db
+      .select()
+      .from(emailLogs)
+      .where(and(eq(emailLogs.aliasId, alias.id), eq(emailLogs.bounced, true)));
+    expect(bounced.length).toBe(BOUNCES_TO_DISABLE);
+
+    // A policy reject says nothing about the mailbox existing or not.
+    const mb = (
+      await db.select().from(mailboxes).where(eq(mailboxes.id, badMailbox.id)).limit(1)
+    )[0]!;
+    expect(mb.suppressedAt).toBeNull();
+  }, 300_000);
+
+  test("450 tempfail: the message stays queued and retries — no bounce, no suppression", async () => {
+    const slowMailbox = await ensureMailbox(
+      fixture.user.id,
+      scriptedReplyAddress(450, "4.2.1", randomTag()),
+    );
+    const alias = await createAlias(fixture, { mailboxId: slowMailbox.id });
+
+    await sendFromMilton(alias.email, "please hold", newTestId());
+
+    // The worker's first attempt eats the scripted 450 and returns the row
+    // to pending with backoff — the transient path, observable in the queue.
+    const row = await pollUntil(
+      async () => {
+        const rows = await db
+          .select()
+          .from(outboundMessages)
+          .where(eq(outboundMessages.envelopeTo, slowMailbox.email))
+          .limit(1);
+        const r = rows[0];
+        return r !== undefined && r.tries >= 1 && r.status === "pending" ? r : undefined;
+      },
+      { timeoutMs: 120_000, pollMs: 500, what: "tempfailed row back in pending" },
+    );
+    expect(row.lastError ?? "").toContain("450");
+    expect(row.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+
+    // Transient ≠ bounce: no ledger entry, alias up, mailbox unsuppressed.
+    const bounced = await db
+      .select()
+      .from(emailLogs)
+      .where(and(eq(emailLogs.aliasId, alias.id), eq(emailLogs.bounced, true)));
+    expect(bounced.length).toBe(0);
+    expect((await getAlias(alias.id))?.enabled).toBe(true);
+    const mb = (
+      await db.select().from(mailboxes).where(eq(mailboxes.id, slowMailbox.id)).limit(1)
+    )[0]!;
+    expect(mb.suppressedAt).toBeNull();
   }, 300_000);
 });
 

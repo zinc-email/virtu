@@ -22,11 +22,14 @@ import type { Db } from "../db/index.ts";
 import { type OutboundMessage, outboundMessages } from "../db/schema.ts";
 import { createLogger, type Logger } from "../log.ts";
 import {
+  destinationPausesTotal,
   providerFor,
   queueClaimedTotal,
   queueDeliveriesTotal,
   queueDeliveryDurationSeconds,
+  queueDestinationDeferredTotal,
   queueDestinationDeliveriesTotal,
+  queueDestinationRepliesTotal,
   queueReapedTotal,
   queueRetentionDeletedTotal,
 } from "../metrics/index.ts";
@@ -38,6 +41,16 @@ import {
   type SmtpSendResult,
 } from "../smtp/index.ts";
 import { backoffDelayMs } from "./backoff.ts";
+import {
+  type DeliveryReply,
+  destinationDomain,
+  type DestinationThrottleOptions,
+  isDeferralSignal,
+  pausedUntilFor,
+  recordDeferral,
+  recordSuccess,
+  stepForCommand,
+} from "./destinationThrottle.ts";
 import { reapStuckSending } from "./reaper.ts";
 import { runRejectionRetentionOnce, runRetentionOnce } from "./retention.ts";
 
@@ -53,13 +66,34 @@ export type DeliveryOutcome =
        * on retries-exhausted failures (those were transient replies).
        */
       enhancedCode?: string;
+      /** The refusing reply itself, when there was one (metrics). */
+      reply?: DeliveryReply;
     }
-  | { kind: "transient"; error: string };
+  | {
+      kind: "transient";
+      error: string;
+      /**
+       * The deferring reply, when the attempt got as far as an SMTP reply
+       * (absent on DNS/transport failures). Feeds the per-destination
+       * reply metrics and the domain pause (destinationThrottle.ts).
+       */
+      reply?: DeliveryReply;
+    };
 
 /** Format one SMTP reply for last_error. */
 function describeReply(step: string, reply: SmtpReply): string {
   const enhanced = reply.enhancedCode === undefined ? "" : ` ${reply.enhancedCode}`;
   return `${step}: ${reply.code}${enhanced} ${reply.message.split("\n")[0] ?? ""}`.trim();
+}
+
+/** The reply in the shape the throttle/metrics consume. */
+function toDeliveryReply(step: DeliveryReply["step"], reply: SmtpReply): DeliveryReply {
+  return {
+    code: reply.code,
+    enhancedCode: reply.enhancedCode,
+    step,
+    text: reply.message.split("\n")[0] ?? "",
+  };
 }
 
 function isPermanentCode(code: number): boolean {
@@ -75,24 +109,27 @@ export function classifySendResult(result: SmtpSendResult): DeliveryOutcome {
 
   if (result.mailFrom.code < 200 || result.mailFrom.code >= 300) {
     const error = describeReply("MAIL FROM", result.mailFrom);
+    const reply = toDeliveryReply("mail_from", result.mailFrom);
     return isPermanentCode(result.mailFrom.code)
-      ? { kind: "permanent", error, enhancedCode: result.mailFrom.enhancedCode }
-      : { kind: "transient", error };
+      ? { kind: "permanent", error, enhancedCode: result.mailFrom.enhancedCode, reply }
+      : { kind: "transient", error, reply };
   }
 
   const refusedRcpt = result.rcptTo.find((r) => !r.accepted);
   if (refusedRcpt !== undefined && !result.rcptTo.some((r) => r.accepted)) {
     const error = describeReply(`RCPT TO ${refusedRcpt.address}`, refusedRcpt.reply);
+    const reply = toDeliveryReply("rcpt_to", refusedRcpt.reply);
     return isPermanentCode(refusedRcpt.reply.code)
-      ? { kind: "permanent", error, enhancedCode: refusedRcpt.reply.enhancedCode }
-      : { kind: "transient", error };
+      ? { kind: "permanent", error, enhancedCode: refusedRcpt.reply.enhancedCode, reply }
+      : { kind: "transient", error, reply };
   }
 
   if (result.data !== undefined) {
     const error = describeReply("DATA", result.data);
+    const reply = toDeliveryReply("data", result.data);
     return isPermanentCode(result.data.code)
-      ? { kind: "permanent", error, enhancedCode: result.data.enhancedCode }
-      : { kind: "transient", error };
+      ? { kind: "permanent", error, enhancedCode: result.data.enhancedCode, reply }
+      : { kind: "transient", error, reply };
   }
 
   return { kind: "transient", error: "delivery ended without a DATA reply" };
@@ -222,6 +259,7 @@ export async function deliverOverSmtp(
   const resolveHost = opts.resolveHost ?? defaultResolveHost;
 
   let lastError = `no MX targets for ${domain}`;
+  let lastReply: DeliveryReply | undefined;
   let attempted = false;
   let sawBlocked = false;
   for (const target of targets.slice(0, opts.maxHosts ?? 3)) {
@@ -251,10 +289,17 @@ export async function deliverOverSmtp(
     } catch (err) {
       if (err instanceof SmtpCommandError) {
         const outcome = describeReply(`${connectHost} ${err.command}`, err.reply);
+        const reply = toDeliveryReply(stepForCommand(err.command), err.reply);
         if (isPermanentCode(err.reply.code)) {
-          return { kind: "permanent", error: outcome, enhancedCode: err.reply.enhancedCode };
+          return {
+            kind: "permanent",
+            error: outcome,
+            enhancedCode: err.reply.enhancedCode,
+            reply,
+          };
         }
         lastError = outcome;
+        lastReply = reply;
         continue; // 4xx from this host: try the next one
       }
       lastError = `${connectHost}: ${(err as Error).message}`;
@@ -264,7 +309,7 @@ export async function deliverOverSmtp(
   // that will never become deliverable, so fail permanently instead of burning
   // the full retry schedule reconnecting to nothing.
   if (!attempted && sawBlocked) return { kind: "permanent", error: lastError };
-  return { kind: "transient", error: lastError };
+  return { kind: "transient", error: lastError, reply: lastReply };
 }
 
 /** One host attempt; throws SmtpClientError/SmtpCommandError upward. */
@@ -324,6 +369,11 @@ export interface QueueWorkerOptions {
   ) => Promise<void>;
   /** Retry-delay shape; defaults are the ~4-day horizon (backoff.ts). */
   backoff?: { baseMs?: number; maxMs?: number };
+  /**
+   * Per-destination pause (destinationThrottle.ts). Omitted = off: rows
+   * retry on their own backoff only, as before.
+   */
+  destinationThrottle?: DestinationThrottleOptions;
   now?: () => Date;
   random?: () => number;
   logger?: Logger;
@@ -375,8 +425,55 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
   });
   queueClaimedTotal.inc({}, claimed.length);
 
+  // Destination pauses, looked up once per batch: rows bound for a domain
+  // that told us to back off go straight back to pending (no attempt, no
+  // try spent) until the pause lifts.
+  const throttle = opts.destinationThrottle;
+  const paused =
+    throttle === undefined || claimed.length === 0
+      ? new Map<string, Date>()
+      : await pausedUntilFor(
+          db,
+          claimed.map((r) => destinationDomain(r.envelopeTo)),
+          now(),
+        );
+
   for (const row of claimed) {
     opts.onRowStart?.();
+    const domain = destinationDomain(row.envelopeTo);
+    const pausedUntil = paused.get(domain);
+    if (pausedUntil !== undefined) {
+      // Spread the wake-ups so the whole batch doesn't reconnect in the
+      // same second the pause lifts.
+      const jitterMs = Math.round((opts.random ?? Math.random)() * 30_000);
+      const deferred = await db
+        .update(outboundMessages)
+        .set({
+          status: "pending",
+          tries: row.tries, // the claim counted an attempt that never happened
+          nextAttemptAt: new Date(pausedUntil.getTime() + jitterMs),
+          lastError: `deferred: ${domain} paused until ${pausedUntil.toISOString()}`,
+          claimedAt: null,
+        })
+        .where(
+          and(
+            eq(outboundMessages.id, row.id),
+            eq(outboundMessages.status, "sending"),
+            eq(outboundMessages.claimedAt, batchClaimTime),
+          ),
+        )
+        .returning({ id: outboundMessages.id });
+      if (deferred.length > 0) {
+        queueDestinationDeferredTotal.inc({ provider: providerFor(domain) });
+        logger
+          .child({ queueId: row.id, to: row.envelopeTo })
+          .info("delivery_deferred_destination", {
+            domain,
+            pausedUntil: pausedUntil.toISOString(),
+          });
+      }
+      continue;
+    }
     // Every line below is about THIS row: bind its id once instead of
     // repeating `queueId` at each call site, so a grep/Loki filter on
     // `queueId` returns the row's whole story (skip, retry, failure, the
@@ -423,10 +520,37 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
 
     queueDeliveriesTotal.inc({ result: outcome.kind });
     queueDeliveryDurationSeconds.observe({ result: outcome.kind }, durationMs / 1000);
-    queueDestinationDeliveriesTotal.inc({
-      provider: providerFor(row.envelopeTo),
-      result: outcome.kind,
-    });
+    const provider = providerFor(row.envelopeTo);
+    queueDestinationDeliveriesTotal.inc({ provider, result: outcome.kind });
+    if (outcome.kind !== "sent" && outcome.reply !== undefined) {
+      // Bounded labels: provider bucket × step × 3-digit code × the
+      // class.subject prefix of the enhanced code ("4.7"). "How angry is
+      // Gmail, and about what" is a rate over this series.
+      queueDestinationRepliesTotal.inc({
+        provider,
+        step: outcome.reply.step,
+        code: String(outcome.reply.code),
+        enhanced: outcome.reply.enhancedCode?.split(".").slice(0, 2).join(".") ?? "",
+      });
+    }
+    if (throttle !== undefined && domain !== "") {
+      if (outcome.kind === "sent") {
+        if (await recordSuccess(db, domain, now())) {
+          rowLogger.info("destination_recovered", { domain });
+        }
+      } else if (outcome.reply !== undefined && isDeferralSignal(outcome.reply)) {
+        const recorded = await recordDeferral(db, domain, outcome.reply, throttle, now());
+        destinationPausesTotal.inc({ provider });
+        rowLogger.warn("destination_paused", {
+          domain,
+          strikes: recorded.strikes,
+          pausedUntil: recorded.pausedUntil.toISOString(),
+          code: outcome.reply.code,
+          enhanced: outcome.reply.enhancedCode ?? null,
+          step: outcome.reply.step,
+        });
+      }
+    }
 
     // Terminal/retry writes are guarded on status AND our own lease
     // timestamp. Status alone is not enough: reaper → re-claim by another

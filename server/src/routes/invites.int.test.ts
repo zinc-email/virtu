@@ -1,6 +1,6 @@
 // Invite lane int tests (ABUSE.md Tier 0): the admin mint/list/revoke
-// surface and the /auth/verify graduation gate. Prerequisites: `just up` +
-// `just db push`. Parallel-safe: unique users and codes per test, no
+// surface and the /auth/verify graduation gate. Prerequisites: `just up`
+// (migrates on boot). Parallel-safe: unique users and codes per test, no
 // truncation; the gate tests toggle config.signupInviteOnly and restore it
 // (test files run serially in one bun process, so nothing else observes the
 // toggle).

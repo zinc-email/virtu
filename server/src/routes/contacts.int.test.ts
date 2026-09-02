@@ -1,4 +1,4 @@
-// Contact routes int tests. Prerequisites: `just up` + `just db push`.
+// Contact routes int tests. Prerequisites: `just up` (migrates on boot).
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { App } from "../app/server";

@@ -157,6 +157,23 @@ custom domain; sudo-gated disable/enable at both account and
 single-alias granularity. Real abuse reports arrive as "this alias
 spammed me," not "this user is bad."
 
+**Per-alias / per-mailbox inbound rate limit.** *Built 2026-09-02:
+`pipeline/inboundRateLimit.ts`, SimpleLogin's 10/min per alias and 15/min
+per mailbox as `INBOUND_RATE_LIMIT_PER_{ALIAS,MAILBOX}_PER_MINUTE` (0 =
+off), tempfailed `450 4.7.1` at RCPT so the sending MTA queues — a flooded
+alias stays the sender's burst instead of becoming ours into Gmail.
+Counted over `email_logs` (distinct messages per alias, copies per
+mailbox); `virtu_mx_rate_limited_total{scope}`; every hit lands in
+`smtp_rejections`.*
+
+**No DSN for a flagged inbound.** *Built 2026-09-02:* the mx now persists
+its "flag" verdict (SPF hard-fail without DMARC, DMARC quarantine fail) on
+the forward's `email_logs.is_spam/spam_status`, and `sendFailureDsn` skips
+the forward-phase DSN for such rows (`flagged_inbound`) — bouncing an
+unauthenticated sender's mail back at the address it claimed is
+backscatter, the classic way onto a blocklist. Bounce accounting is
+untouched (the mailbox is still dead); only the outbound DSN is withheld.
+
 **Quotas and burst limits — on lifetime mints, not live rows.** Per-plan
 alias caps and creation rate limits *including paid users* (SimpleLogin
 binds paid accounts to 50/15min, 200/hour). The legacy data shows these
@@ -249,7 +266,28 @@ Protect and measure the asset the abusers spend.
   the wire-format TXT client, rDNS/HELO sanity) writing
   `email_logs.isSpam/spamScore`; rspamd stays deferred until a bigger
   box.
-- **Reputation telemetry** (P4, already planned, plus additions):
+- **Per-destination backpressure.** *Built 2026-09-02:*
+  `queue/destinationThrottle.ts` + `destination_throttles`. A `421` at any
+  step, or a `4.7.x` policy deferral at greeting/EHLO/MAIL FROM/DATA (never
+  at RCPT — that is greylisting), pauses the recipient DOMAIN for
+  base·2^strikes (5 min → 1 h, `DESTINATION_PAUSE_{BASE,MAX}_MS`); deliverd
+  returns every row for a paused domain to pending without an attempt or a
+  try spent; one success resets the strikes; the admin page
+  `/admin/destinations` (and `just destination-resume`) lifts a pause.
+  Visibility: `virtu_queue_destination_replies_total{provider,step,code,
+  enhanced}`, `virtu_destination_pauses_total`, `virtu_queue_destination_
+  deferred_total`, `virtu_destination_paused` gauge — charted in
+  `grafana/deliverability.json` ("how angry is each receiver").
+- **Role addresses to operators.** *Built 2026-09-02:*
+  `postmaster@`/`abuse@`/`hostmaster@`/`security@`/`dmarc@` on the service
+  domain (`OPERATOR_LOCALPARTS`) deliver a re-signed, DMARC-aligned copy to
+  the opted-in admins (`users.flags` operatorMail bit, `/admin/operators`,
+  `just operator-mail`), the first admin by default; null reverse path,
+  reserved from alias minting. Every feedback-loop signup below verifies
+  through one of these.
+- **Reputation telemetry** (P4, already planned, plus additions —
+  signup runbook + automate-or-read verdicts in
+  **`docs/reputation-telemetry.md`**, 2026-09-02):
   `domain_delivery_stats` daily aggregates, DMARC rua ingestion
   (self-hosted MX — point rua at ourselves), Google Postmaster Tools,
   **Microsoft SNDS**, and **automated DNSBL self-checks of our own IPs
@@ -295,7 +333,8 @@ don't get re-proposed:
 | When | What | Home |
 |---|---|---|
 | Now | Invite gate at verify-graduation; chargeback policy | invite lane, billing |
-| P2 | Mailbox suppression; audit log; ledger reset; user/alias views; quotas | Lane K P2 |
+| P2 | Mailbox suppression ✅; inbound rate limit ✅; no-DSN-for-flagged ✅; audit log; ledger reset; user/alias views; quotas | Lane K P2 |
+| P3 | Destination backpressure ✅; role addresses → operators ✅; telemetry runbook ✅ | Lane K P3 (landed early) |
 | P2/P4 | Concentration detector; abuser archive; signup scoring + restricted tier | Lane K P2 groundwork, P4 detection |
 | P3/P4 | Inbound hardening; reputation telemetry | Lane K P3/P4 |
 | Next box | Pool separation + warmed standby | deploy lane |

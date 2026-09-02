@@ -1,7 +1,7 @@
 // Billing routes int tests: the webhook flow end-to-end with self-signed
 // payloads (no live Stripe anywhere), plus the checkout/portal routes with
 // auth/unconfigured paths and a stubbed global fetch for the happy paths.
-// Prerequisites: `just up` + `just db push`.
+// Prerequisites: `just up` (migrates on boot).
 //
 // Parallel-safe: every test registers its own user and uses unique
 // cus_/sub_ ids; billing config is injected via the stripe.ts test seam and

@@ -6,7 +6,8 @@
 // snake_case in Postgres via the drizzle `casing: "snake_case"` option (set
 // in db/index.ts and drizzle.config.ts) — never name columns explicitly.
 //
-// Migrations are push-based: `just db push` (drizzle-kit push).
+// Migrations are generated and committed (server/drizzle/): after changing
+// this file run `just db-generate`, review the SQL, commit it with the change.
 
 import { sql } from "drizzle-orm";
 import {
@@ -531,6 +532,41 @@ export const smtpRejections = pgTable(
     index("smtp_rejections_user_id_idx").on(t.userId),
   ],
 );
+
+/** Which outbound SMTP step the destination answered at (queue/worker.ts). */
+export type DeliveryStep = "greeting" | "ehlo" | "starttls" | "mail_from" | "rcpt_to" | "data";
+
+// Per-destination outbound backpressure (queue/destinationThrottle.ts,
+// ABUSE.md Tier 3). One row per recipient DOMAIN that has told us to slow
+// down — a 421, or a 4.7.x policy deferral at a non-recipient step — with
+// an escalating pause. deliverd defers every row bound for a paused domain
+// without an attempt (the pause is the point: a cold IP hammering Gmail
+// through a 421 is how a temporary deferral becomes a reputation hit).
+// Rows persist across workers and restarts; a successful delivery to the
+// domain resets the strike count, an operator can clear the pause early.
+export const destinationThrottles = pgTable(
+  "destination_throttles",
+  {
+    domain: varchar({ length: 256 }).primaryKey(),
+    // Null = not paused (history only). deliverd checks `pausedUntil > now`.
+    pausedUntil: timestamp({ withTimezone: true, mode: "date" }),
+    // Consecutive deferral signals since the last success; drives the
+    // exponential pause length. Reset to 0 by a successful delivery.
+    strikes: integer().default(0).notNull(),
+    // Lifetime count of pauses — how often this destination has pushed back.
+    pauses: integer().default(0).notNull(),
+    // The reply that caused the latest pause (first line only).
+    lastCode: integer(),
+    lastEnhanced: varchar({ length: 16 }),
+    lastStep: varchar({ length: 16 }).$type<DeliveryStep>(),
+    lastReply: varchar({ length: 512 }),
+    lastDeferredAt: timestamp({ withTimezone: true, mode: "date" }),
+    ...timestamps,
+  },
+  (t) => [index("destination_throttles_paused_until_idx").on(t.pausedUntil)],
+);
+
+export type DestinationThrottle = typeof destinationThrottles.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Billing (PLAN Lane I — Stripe only, fully offloaded)

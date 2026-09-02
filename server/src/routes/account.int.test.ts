@@ -1,5 +1,5 @@
 // Account/misc routes int tests (stats, setting, domains, sudo -> api_key,
-// logout). Prerequisites: `just up` + `just db push`.
+// logout). Prerequisites: `just up` (migrates on boot).
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";

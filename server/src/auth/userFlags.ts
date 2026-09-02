@@ -12,6 +12,13 @@
 export const USER_FLAGS = {
   /** Operator: sees /api/admin/* and the SPA admin section. */
   admin: 1 << 0,
+  /**
+   * Opted in to operator mail: this admin's default mailbox receives the
+   * RFC 2142 role addresses on the service domain (postmaster@, abuse@, …
+   * — pipeline/operatorMail.ts). When no admin opts in, the first admin
+   * receives them by default; postmaster must always land somewhere.
+   */
+  operatorMail: 1 << 1,
 } as const;
 
 export function hasFlag(flags: number, flag: number): boolean {
@@ -20,4 +27,8 @@ export function hasFlag(flags: number, flag: number): boolean {
 
 export function isAdmin(user: { flags: number }): boolean {
   return hasFlag(user.flags, USER_FLAGS.admin);
+}
+
+export function receivesOperatorMail(user: { flags: number }): boolean {
+  return hasFlag(user.flags, USER_FLAGS.operatorMail);
 }

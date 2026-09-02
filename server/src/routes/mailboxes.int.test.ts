@@ -1,4 +1,4 @@
-// Mailbox routes int tests. Prerequisites: `just up` + `just db push`.
+// Mailbox routes int tests. Prerequisites: `just up` (migrates on boot).
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";

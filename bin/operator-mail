@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# operator-mail — opt an operator in to (--on) or out of (--off) operator
+# mail: the RFC 2142 role addresses (postmaster@, abuse@ …) on the service
+# domain (pipeline/operatorMail.ts). Mirrors PATCH /api/admin/operators/:id
+# so it works with the API down — only Postgres must be up.
+#
+# Usage: bin/operator-mail <email> --on|--off
+
+set -euo pipefail
+
+if [ $# -lt 2 ]; then
+  echo "usage: bin/operator-mail <email> --on|--off" >&2
+  exit 2
+fi
+
+cd "$(dirname "$0")/.."
+exec bin/server-run bun run src/scripts/operatorMail.ts "$@"

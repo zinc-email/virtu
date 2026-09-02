@@ -15,7 +15,10 @@
  *     user's real mailbox)
  *
  * Policy at RCPT time (pipeline/policy.ts): nonexistent alias → 550,
- * disabled alias → 250 accept-and-drop (blocked email_log, nothing queued).
+ * disabled alias → 250 accept-and-drop (blocked email_log, nothing queued),
+ * role addresses (postmaster@ …) → a re-signed copy per operator
+ * (pipeline/operatorMail.ts, mail/rewriteOperator.ts) on the null reverse
+ * path, per-alias/per-mailbox floods → 450 (pipeline/inboundRateLimit.ts).
  */
 
 import { config } from "./config.ts";
@@ -25,6 +28,7 @@ import { createLogger, type Logger } from "./log.ts";
 import {
   mxAuthVerdictsTotal,
   mxMessagesTotal,
+  mxRateLimitedTotal,
   mxRcptTotal,
   smtpConnectionsTotal,
 } from "./metrics/index.ts";
@@ -36,9 +40,17 @@ import {
   parseAddressList,
   parseMessage,
   rewriteForward,
+  rewriteOperator,
   serializeMessage,
 } from "./mail/index.ts";
-import { type DnsResolver, signOutbound, verifyInbound } from "./mailauth/index.ts";
+import {
+  type DkimKeyConfig,
+  type DnsResolver,
+  signOutbound,
+  verifyInbound,
+  type VerifyResult,
+} from "./mailauth/index.ts";
+
 import { getOrCreateContact } from "./pipeline/contacts.ts";
 import { loadDkimKey } from "./pipeline/dkim.ts";
 import { makeVerifyResolver } from "./pipeline/dnsTxt.ts";
@@ -54,6 +66,7 @@ import {
   createForwardLog,
   resolveOriginalMessageId,
 } from "./pipeline/emailLog.ts";
+import type { InboundRateLimits } from "./pipeline/inboundRateLimit.ts";
 import { type EvaluatedRcpt, evaluateRcpt } from "./pipeline/policy.ts";
 import { recordSmtpRejection } from "./pipeline/smtpRejection.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
@@ -84,6 +97,10 @@ export interface MxOptions {
   dkimSelector: string;
   verpSecret: string;
   maxMessageSize: number;
+  /** Per-alias / per-mailbox inbound budgets; omitted = not enforced (tests). */
+  inboundRateLimits?: InboundRateLimits;
+  /** Role-address localparts routed to operators; omitted = none (tests). */
+  operatorLocalparts?: readonly string[];
   tls?: SmtpTlsConfig;
   /**
    * DNS resolver override for verifyInbound. Defaults to
@@ -122,6 +139,8 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       await evaluateRcpt(opts.db, rcpt.address, {
         verpSecret: opts.verpSecret,
         mailDomain: opts.mailDomain,
+        inboundRateLimits: opts.inboundRateLimits,
+        operatorLocalparts: opts.operatorLocalparts,
       }),
     );
   }
@@ -192,7 +211,8 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
 
   const deliverable = evaluated.filter((r) => r.decision.kind === "deliver");
   const drops = evaluated.filter((r) => r.decision.kind === "drop");
-  if (deliverable.length === 0 && drops.length === 0) {
+  const operatorRcpts = evaluated.filter((r) => r.decision.kind === "operator");
+  if (deliverable.length === 0 && drops.length === 0 && operatorRcpts.length === 0) {
     return { accept: true, message: "Ok" };
   }
 
@@ -226,10 +246,13 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     address: envelope.mailFrom !== "" ? envelope.mailFrom : "unknown-sender@invalid",
   };
   const originalMessageId = parsed.headers.get("Message-ID") ?? null;
+  // The verdict rides into email_logs (is_spam/spam_status) so the bounce
+  // path can refuse to DSN a flagged message's sender — see dsnDelivery.ts.
+  const spamFlag = verification.verdict.action === "flag" ? verification.verdict.reason : null;
   const prepended = parseMessage(encoder.encode(verification.prependHeaders));
-  const dkimKey =
-    deliverable.length > 0 ? await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector) : null;
-  if (deliverable.length > 0 && dkimKey === null) {
+  const needsKey = deliverable.length > 0 || operatorRcpts.length > 0;
+  const dkimKey = needsKey ? await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector) : null;
+  if (needsKey && dkimKey === null) {
     log.warn("dkim_key_missing", { domain: opts.mailDomain, consequence: "forwarding unsigned" });
   }
 
@@ -252,6 +275,7 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       mailboxId: drop.facts.mailbox?.id ?? null,
       messageId: originalMessageId,
       blockedReason: reason,
+      spamFlag,
     });
     mxMessagesTotal.inc({ outcome: "dropped" });
     log.info("inbound_dropped", { to: drop.address, reason });
@@ -285,6 +309,7 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
         aliasId: alias.id,
         mailboxId: mailbox.id,
         messageId: originalMessageId,
+        spamFlag,
       });
 
       const rewritten = await rewriteForwardForAlias(opts, {
@@ -309,31 +334,7 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
         rewritten.append("X-Virtu-Trash", "YES (alias disabled)");
       }
 
-      let message: Uint8Array;
-      if (dkimKey === null) {
-        message = serializeMessage(rewritten, parsed.body);
-      } else {
-        const signed = await signOutbound(rewritten, parsed.body, {
-          dkimKeys: [dkimKey],
-          arc:
-            verification.arcContext === null
-              ? undefined
-              : {
-                  signingDomain: opts.mailDomain,
-                  selector: dkimKey.selector,
-                  privateKey: dkimKey.privateKey,
-                  context: verification.arcContext,
-                },
-        });
-        for (const err of signed.errors) {
-          log.error("dkim_sign_error", {
-            domain: err.signingDomain,
-            selector: err.selector,
-            error: err.err.message,
-          });
-        }
-        message = signed.message;
-      }
+      const message = await signCopy(opts, log, rewritten, parsed.body, verification, dkimKey);
 
       // Trash copies use the NULL reverse path: an off alias must not start
       // emitting delivery-failure signals (DSNs to the outside sender,
@@ -367,7 +368,88 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     }
   }
 
+  // 5. Operator mail (postmaster@ / abuse@ …): one re-signed copy per
+  //    effective operator, null reverse path (an operator's dead mailbox
+  //    must never bounce a complaint back to the reporter), no email_log —
+  //    it is the service's own mail, outside any user's ledger.
+  for (const rcpt of operatorRcpts) {
+    if (rcpt.decision.kind !== "operator") continue;
+    const { localpart, recipients } = rcpt.decision;
+    if (recipients.length === 0) {
+      mxMessagesTotal.inc({ outcome: "operator_undeliverable" });
+      log.warn("operator_mail_undeliverable", {
+        to: rcpt.address,
+        from: envelope.mailFrom || "<>",
+        consequence: "accepted and dropped: no operator has a deliverable default mailbox",
+      });
+      continue;
+    }
+    const rewrite = rewriteOperator(
+      { headers: parsed.headers },
+      { localpart, mailDomain: opts.mailDomain, envelopeFrom: envelope.mailFrom },
+    );
+    const rewritten = rewrite.headers;
+    rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
+    rewritten.prepend("Received", receivedValue);
+    if (verification.verdict.action === "flag") {
+      rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
+    }
+    const message = await signCopy(opts, log, rewritten, parsed.body, verification, dkimKey);
+    for (const { user, mailbox } of recipients) {
+      const queueId = await enqueue(opts.db, {
+        raw: message,
+        envelopeFrom: "",
+        envelopeTo: mailbox.email,
+        maxRawBytes: opts.maxMessageSize,
+        userId: user.id,
+      });
+      mxMessagesTotal.inc({ outcome: "operator" });
+      log.info("operator_mail_queued", {
+        queueId,
+        role: localpart,
+        from: rewrite.originalFrom.address,
+        to: mailbox.email,
+        operatorUserId: user.id,
+      });
+    }
+  }
+
   return { accept: true, message: "Ok: queued" };
+}
+
+/**
+ * DKIM-sign (and ARC-seal with the pre-rewrite context) one outbound copy;
+ * without a key the copy goes out unsigned rather than not at all.
+ */
+async function signCopy(
+  opts: MxOptions,
+  log: Logger,
+  headers: HeaderBlock,
+  body: Uint8Array,
+  verification: VerifyResult,
+  dkimKey: DkimKeyConfig | null,
+): Promise<Uint8Array> {
+  if (dkimKey === null) return serializeMessage(headers, body);
+  const signed = await signOutbound(headers, body, {
+    dkimKeys: [dkimKey],
+    arc:
+      verification.arcContext === null
+        ? undefined
+        : {
+            signingDomain: opts.mailDomain,
+            selector: dkimKey.selector,
+            privateKey: dkimKey.privateKey,
+            context: verification.arcContext,
+          },
+  });
+  for (const err of signed.errors) {
+    log.error("dkim_sign_error", {
+      domain: err.signingDomain,
+      selector: err.selector,
+      error: err.err.message,
+    });
+  }
+  return signed.message;
 }
 
 /** The pure rewrite with its DB callbacks wired up. */
@@ -415,11 +497,14 @@ export function createMxServer(opts: MxOptions): SmtpServer {
       return { accept: true };
     },
     onRcptTo: async (event) => {
-      const { decision } = await evaluateRcpt(opts.db, event.address, {
+      const { decision, facts } = await evaluateRcpt(opts.db, event.address, {
         verpSecret: opts.verpSecret,
         mailDomain: opts.mailDomain,
+        inboundRateLimits: opts.inboundRateLimits,
+        operatorLocalparts: opts.operatorLocalparts,
       });
       mxRcptTotal.inc({ decision: decision.kind });
+      if (facts.rateLimited !== null) mxRateLimitedTotal.inc({ scope: facts.rateLimited });
       if (decision.kind === "reject") {
         const result = rejectWith(decision.code, decision.enhanced, decision.message);
         await recordSmtpRejection(
@@ -471,6 +556,11 @@ export function mxOptionsFromConfig(): MxOptions {
     dkimSelector: config.dkimSelector,
     verpSecret: config.verpSecret,
     maxMessageSize: config.smtpMaxMessageSize,
+    inboundRateLimits: {
+      perAliasPerMinute: config.inboundRateLimitPerAliasPerMinute,
+      perMailboxPerMinute: config.inboundRateLimitPerMailboxPerMinute,
+    },
+    operatorLocalparts: config.operatorLocalparts,
     tls: loadSmtpTls(config.smtpTlsCertFile, config.smtpTlsKeyFile),
   };
 }

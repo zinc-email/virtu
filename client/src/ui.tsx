@@ -819,19 +819,21 @@ export function KVSwitch({
   label,
   hint,
 }: {
-  k: string;
+  /** Row key. A non-string key (e.g. <EmailBreak>) requires `label`. */
+  k: ReactNode;
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
-  /** Accessible name for the switch (defaults to the row key). */
+  /** Accessible name for the switch (defaults to the row key when a string). */
   label?: string;
   hint?: ReactNode;
 }) {
+  const name = label ?? (typeof k === "string" ? k : "");
   return (
     <div className={kvSwitchRow}>
       <dt className={kvSwitchKey}>{k}</dt>
       <dd className={kvSwitchValue}>
-        <Switch checked={checked} onChange={onChange} disabled={disabled} label={label ?? k} />
+        <Switch checked={checked} onChange={onChange} disabled={disabled} label={name} />
         {hint && <span className={ui.finePrint}>{hint}</span>}
       </dd>
     </div>

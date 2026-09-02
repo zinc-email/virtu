@@ -104,6 +104,7 @@ function fakeCatchAll(over: Partial<CatchAllFacts> = {}): CatchAllFacts {
 function facts(over: Partial<RcptFacts> = {}): RcptFacts {
   const base: RcptFacts = {
     verp: null,
+    operator: null,
     isLocalDomain: true,
     alias: fakeAlias(),
     user: fakeUser(),
@@ -112,6 +113,7 @@ function facts(over: Partial<RcptFacts> = {}): RcptFacts {
     suppressedFromDelivery: false,
     trashMailbox: null,
     catchAll: null,
+    rateLimited: null,
     ...over,
   };
   // Delivery set defaults to the healthy primary, like evaluateRcpt gathers.
@@ -126,6 +128,27 @@ describe("decideRcpt", () => {
     const verp: VerpInfo = { type: "bounce_forward", id: 42 };
     const decision = decideRcpt(facts({ verp, alias: null, user: null, mailbox: null }));
     expect(decision).toEqual({ kind: "verp", info: verp });
+  });
+
+  test("role address: operator delivery beats the alias lookup, even with no recipients", () => {
+    const op = {
+      localpart: "postmaster",
+      recipients: [{ user: fakeUser(), mailbox: fakeMailbox() }],
+    };
+    expect(decideRcpt(facts({ operator: op, alias: null }))).toEqual({
+      kind: "operator",
+      localpart: "postmaster",
+      recipients: op.recipients,
+    });
+    // A squatting legacy alias loses to the role address.
+    expect(decideRcpt(facts({ operator: op })).kind).toBe("operator");
+    // Nobody deliverable: still accepted (postmaster must never bounce).
+    expect(
+      decideRcpt(facts({ operator: { localpart: "abuse", recipients: [] }, alias: null })),
+    ).toEqual({ kind: "operator", localpart: "abuse", recipients: [] });
+    // VERP still wins.
+    const verp: VerpInfo = { type: "bounce_forward", id: 1 };
+    expect(decideRcpt(facts({ operator: op, verp })).kind).toBe("verp");
   });
 
   test("nonexistent alias on our domain: 550 5.1.1", () => {
@@ -173,6 +196,45 @@ describe("decideRcpt", () => {
       facts({ mailbox: fakeMailbox({ disabled: true }), deliveryMailboxes: [extra] }),
     );
     expect(decision).toEqual({ kind: "deliver" });
+  });
+
+  test("rate-limited alias: 450 4.7.1 tempfail, never a drop", () => {
+    const d = decideRcpt(facts({ rateLimited: "alias" }));
+    expect(d.kind).toBe("reject");
+    if (d.kind === "reject") {
+      expect(d.code).toBe(450);
+      expect(d.enhanced).toBe("4.7.1");
+    }
+  });
+
+  test("rate-limited mailbox: 450 4.7.1 with the mailbox wording", () => {
+    const d = decideRcpt(facts({ rateLimited: "mailbox" }));
+    expect(d).toMatchObject({ kind: "reject", code: 450, enhanced: "4.7.1" });
+    if (d.kind === "reject") expect(d.message).toContain("mailbox");
+  });
+
+  test("rate limit gates trash delivery too, but a plain drop stays a drop", () => {
+    const trash = fakeMailbox({ id: 11, email: "trash@qmail.com" });
+    expect(
+      decideRcpt(
+        facts({
+          alias: fakeAlias({ enabled: false }),
+          trashMailbox: trash,
+          rateLimited: "mailbox",
+        }),
+      ).kind,
+    ).toBe("reject");
+    // No trash mailbox: accept-and-drop wins — the count was never gathered
+    // for a drop, and even a stale fact must not turn a drop into a reject.
+    expect(
+      decideRcpt(facts({ alias: fakeAlias({ enabled: false }), rateLimited: "alias" })),
+    ).toEqual({ kind: "drop", reason: "alias_disabled" });
+  });
+
+  test("account standing beats the rate limit (a disabled user is 550, not 450)", () => {
+    expect(decideRcpt(facts({ user: fakeUser({ disabled: true }), rateLimited: "alias" }))).toEqual(
+      { kind: "reject", code: 550, enhanced: "5.7.1", message: "Account is disabled" },
+    );
   });
 
   test("healthy alias/user/mailbox: deliver", () => {

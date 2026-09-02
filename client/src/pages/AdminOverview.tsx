@@ -28,7 +28,7 @@ export function AdminOverviewPage() {
     );
   }
 
-  const { queue, activity_24h, users } = overview.data;
+  const { queue, activity_24h, users, destinations_paused } = overview.data;
   const oldest =
     queue.oldest_pending_age_seconds === null
       ? "—"
@@ -55,6 +55,11 @@ export function AdminOverviewPage() {
         </KV>
         <KV k="Sent (24h)">{queue.sent_24h}</KV>
         <KV k="Oldest due pending">{oldest}</KV>
+        <KV k="Destinations paused">
+          <Link to="/admin/destinations" className={ui.link}>
+            {destinations_paused}
+          </Link>
+        </KV>
       </KeyValue>
 
       <h2 className={h2}>Last 24 hours</h2>
@@ -71,6 +76,11 @@ export function AdminOverviewPage() {
         <KV k="Disabled">{users.disabled}</KV>
         <KV k="Invites">
           <Link to="/admin/invites" className={ui.link}>
+            Manage
+          </Link>
+        </KV>
+        <KV k="Operator mail">
+          <Link to="/admin/operators" className={ui.link}>
             Manage
           </Link>
         </KV>

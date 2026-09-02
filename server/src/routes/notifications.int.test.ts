@@ -1,5 +1,5 @@
 // Notification routes int tests (list paging/ordering, mark-as-read,
-// cross-user isolation). Prerequisites: `just up` + `just db push`.
+// cross-user isolation). Prerequisites: `just up` (migrates on boot).
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";

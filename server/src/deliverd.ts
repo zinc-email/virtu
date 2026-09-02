@@ -111,6 +111,10 @@ export function startDeliverd(): QueueWorker {
     batchSize: config.queueBatchSize,
     maxTries: config.queueMaxTries,
     backoff: { maxMs: config.queueBackoffMaxMs },
+    destinationThrottle:
+      config.destinationPauseBaseMs > 0
+        ? { baseMs: config.destinationPauseBaseMs, maxMs: config.destinationPauseMaxMs }
+        : undefined,
     hygiene: {
       stuckSendingMs: config.queueStuckSendingMinutes * 60_000,
       reapIntervalMs: config.queueReapIntervalMs,

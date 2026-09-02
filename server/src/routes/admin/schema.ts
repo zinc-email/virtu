@@ -96,6 +96,7 @@ export const AdminBounceSkipReason = z
     "email_log_missing",
     "originator_unresolvable",
     "alias_unresolvable",
+    "flagged_inbound",
     "in_flight",
   ])
   .meta({ id: "AdminBounceSkipReason" });
@@ -150,6 +151,68 @@ export const AdminInviteDeletedResponse = z
   .object({ deleted: z.number().int() })
   .meta({ id: "AdminInviteDeletedResponse" });
 
+// Operator mail (pipeline/operatorMail.ts): who receives postmaster@/abuse@.
+export const AdminOperator = z
+  .object({
+    id: z.number().int(),
+    email: z.string(),
+    // The opt-in flag (users.flags operatorMail bit).
+    receives_operator_mail: z.boolean(),
+    // True when this operator is in the effective recipient set right now:
+    // opted in, or the first operator when nobody has opted in.
+    effective: z.boolean(),
+    // The default mailbox operator mail would deliver to, and whether it
+    // clears the delivery bar (verified, not disabled, not suppressed).
+    mailbox: z.string().nullable(),
+    mailbox_deliverable: z.boolean(),
+  })
+  .meta({ id: "AdminOperator" });
+
+export const AdminOperatorListResponse = z
+  .object({
+    // The role localparts routed (config.operatorLocalparts).
+    localparts: z.array(z.string()),
+    operators: z.array(AdminOperator),
+  })
+  .meta({ id: "AdminOperatorListResponse" });
+
+export const AdminOperatorUpdateBody = z
+  .object({ receives_operator_mail: z.boolean() })
+  .meta({ id: "AdminOperatorUpdateBody", example: { receives_operator_mail: true } });
+
+// Per-destination throttle (queue/destinationThrottle.ts).
+export const DeliveryStepDto = z
+  .enum(["greeting", "ehlo", "starttls", "mail_from", "rcpt_to", "data"])
+  .meta({ id: "DeliveryStep" });
+
+export const AdminDestination = z
+  .object({
+    domain: z.string(),
+    // Provider bucket (metrics/provider.ts): gmail | microsoft | … | other.
+    provider: z.string(),
+    // Null when not paused; otherwise the pause end.
+    paused_until: z.string().nullable(),
+    strikes: z.number().int(),
+    pauses: z.number().int(),
+    last_code: z.number().int().nullable(),
+    last_enhanced: z.string().nullable(),
+    last_step: DeliveryStepDto.nullable(),
+    last_reply: z.string().nullable(),
+    last_deferred_at: z.string().nullable(),
+  })
+  .meta({ id: "AdminDestination" });
+
+export const AdminDestinationListResponse = z
+  .object({
+    paused: z.number().int(),
+    destinations: z.array(AdminDestination),
+  })
+  .meta({ id: "AdminDestinationListResponse" });
+
+export const AdminDestinationClearedResponse = z
+  .object({ domain: z.string(), cleared: z.boolean() })
+  .meta({ id: "AdminDestinationClearedResponse" });
+
 export const AdminOverviewResponse = z
   .object({
     queue: z.object({
@@ -169,5 +232,7 @@ export const AdminOverviewResponse = z
       total: z.number().int(),
       disabled: z.number().int(),
     }),
+    // Destinations currently paused by the outbound throttle.
+    destinations_paused: z.number().int(),
   })
   .meta({ id: "AdminOverviewResponse" });

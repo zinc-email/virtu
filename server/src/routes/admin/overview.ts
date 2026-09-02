@@ -8,6 +8,7 @@ import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { and, count, eq, gt, isNotNull, min } from "drizzle-orm";
 import { db } from "../../db";
 import { emailLogs, outboundMessages, users } from "../../db/schema";
+import { countPaused } from "../../queue/destinationThrottle";
 import { ErrorResponse } from "../schema";
 import { AdminOverviewResponse } from "./schema";
 
@@ -20,7 +21,8 @@ export async function withAdminOverviewRoutes(admin: FastifyInstance) {
     schema: {
       description:
         "Operator landing numbers: queue depth by status, oldest due pending " +
-        "row, 24h activity (forwards/replies/bounces/blocked), user counts.",
+        "row, 24h activity (forwards/replies/bounces/blocked), user counts, " +
+        "destinations currently paused by the outbound throttle.",
       tags: ["Admin"],
       security: [{ apiKeyAuth: [] }],
       response: { 200: AdminOverviewResponse, 401: ErrorResponse, 403: ErrorResponse },
@@ -54,6 +56,7 @@ export async function withAdminOverviewRoutes(admin: FastifyInstance) {
         [bounces],
         [userTotal],
         [userDisabled],
+        pausedDomains,
       ] = await Promise.all([
         db
           .select({ status: outboundMessages.status, n: count() })
@@ -80,6 +83,7 @@ export async function withAdminOverviewRoutes(admin: FastifyInstance) {
           .where(and(isNotNull(emailLogs.bouncedAt), gt(emailLogs.bouncedAt, dayAgo))),
         db.select({ n: count() }).from(users),
         db.select({ n: count() }).from(users).where(eq(users.disabled, true)),
+        countPaused(db),
       ]);
 
       const statusCount = (status: string) => byStatus.find((r) => r.status === status)?.n ?? 0;
@@ -106,6 +110,7 @@ export async function withAdminOverviewRoutes(admin: FastifyInstance) {
           total: userTotal?.n ?? 0,
           disabled: userDisabled?.n ?? 0,
         },
+        destinations_paused: pausedDomains.length,
       };
     },
   });

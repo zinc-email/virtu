@@ -391,6 +391,20 @@
           "note": "for jane"
         }
       },
+      "AdminOperatorUpdateBody": {
+        "type": "object",
+        "properties": {
+          "receives_operator_mail": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "receives_operator_mail"
+        ],
+        "example": {
+          "receives_operator_mail": true
+        }
+      },
       "MsgResponse": {
         "type": "object",
         "properties": {
@@ -1853,12 +1867,18 @@
               "disabled"
             ],
             "additionalProperties": false
+          },
+          "destinations_paused": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
           }
         },
         "required": [
           "queue",
           "activity_24h",
-          "users"
+          "users",
+          "destinations_paused"
         ],
         "additionalProperties": false
       },
@@ -2265,6 +2285,7 @@
           "email_log_missing",
           "originator_unresolvable",
           "alias_unresolvable",
+          "flagged_inbound",
           "in_flight"
         ]
       },
@@ -2416,6 +2437,213 @@
         },
         "required": [
           "deleted"
+        ],
+        "additionalProperties": false
+      },
+      "AdminOperatorListResponse": {
+        "type": "object",
+        "properties": {
+          "localparts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminOperator"
+            }
+          }
+        },
+        "required": [
+          "localparts",
+          "operators"
+        ],
+        "additionalProperties": false
+      },
+      "AdminOperator": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "email": {
+            "type": "string"
+          },
+          "receives_operator_mail": {
+            "type": "boolean"
+          },
+          "effective": {
+            "type": "boolean"
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mailbox_deliverable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "receives_operator_mail",
+          "effective",
+          "mailbox",
+          "mailbox_deliverable"
+        ],
+        "additionalProperties": false
+      },
+      "AdminDestinationListResponse": {
+        "type": "object",
+        "properties": {
+          "paused": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "destinations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminDestination"
+            }
+          }
+        },
+        "required": [
+          "paused",
+          "destinations"
+        ],
+        "additionalProperties": false
+      },
+      "AdminDestination": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "paused_until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strikes": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "pauses": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "last_code": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_enhanced": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_step": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryStep"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_deferred_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "domain",
+          "provider",
+          "paused_until",
+          "strikes",
+          "pauses",
+          "last_code",
+          "last_enhanced",
+          "last_step",
+          "last_reply",
+          "last_deferred_at"
+        ],
+        "additionalProperties": false
+      },
+      "DeliveryStep": {
+        "type": "string",
+        "enum": [
+          "greeting",
+          "ehlo",
+          "starttls",
+          "mail_from",
+          "rcpt_to",
+          "data"
+        ]
+      },
+      "AdminDestinationClearedResponse": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "cleared": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "domain",
+          "cleared"
         ],
         "additionalProperties": false
       }
@@ -5270,7 +5498,7 @@
         "tags": [
           "Admin"
         ],
-        "description": "Operator landing numbers: queue depth by status, oldest due pending row, 24h activity (forwards/replies/bounces/blocked), user counts.",
+        "description": "Operator landing numbers: queue depth by status, oldest due pending row, 24h activity (forwards/replies/bounces/blocked), user counts, destinations currently paused by the outbound throttle.",
         "security": [
           {
             "apiKeyAuth": []
@@ -5799,6 +6027,240 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AdminInviteDeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/operators": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Operators (admins) and who receives operator mail — postmaster@, abuse@ and the other role addresses on the service domain. `effective` marks the current recipients: the opted-in operators, or the first operator when nobody has opted in.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperatorListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/operators/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Opt an operator in to (or out of) operator mail. 404 unless the id is an active operator. Returns the recomputed list.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminOperatorUpdateBody"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperatorListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/destinations": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Recipient domains the outbound throttle has heard a deferral signal from (421, or a 4.7.x policy deferral at a non-recipient step), paused ones first, with the reply that caused the latest pause.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDestinationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/destinations/{domain}": {
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Lift a destination's pause now and reset its strikes (history stays). 404 when the domain has no throttle row.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "in": "path",
+            "name": "domain",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDestinationClearedResponse"
                 }
               }
             }

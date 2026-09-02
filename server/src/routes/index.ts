@@ -6,7 +6,9 @@
 import rateLimit from "@fastify/rate-limit";
 import type { FastifyInstance } from "fastify";
 import { withAccountRoutes } from "./account";
+import { withAdminDestinationRoutes } from "./admin/destinations";
 import { withAdminInviteRoutes } from "./admin/invites";
+import { withAdminOperatorRoutes } from "./admin/operators";
 import { withAdminOverviewRoutes } from "./admin/overview";
 import { withAdminQueueRoutes } from "./admin/queue";
 import { requireAdmin } from "./adminAuth";
@@ -61,6 +63,8 @@ export async function withApiRoutes(app: FastifyInstance) {
             await withAdminOverviewRoutes(admin);
             await withAdminQueueRoutes(admin);
             await withAdminInviteRoutes(admin);
+            await withAdminOperatorRoutes(admin);
+            await withAdminDestinationRoutes(admin);
           },
           { prefix: "/admin" },
         );

@@ -26,6 +26,13 @@ import {
   users,
 } from "../db/schema.ts";
 import { parseVerp, type VerpInfo } from "../mail/index.ts";
+import {
+  countRecentInbound,
+  decideInboundRateLimit,
+  type InboundRateLimits,
+  type InboundRateLimitScope,
+} from "./inboundRateLimit.ts";
+import { effectiveOperators, listOperators, operatorLocalpart } from "./operatorMail.ts";
 
 /**
  * The one bar a mailbox must clear to receive mail, shared by every site
@@ -54,10 +61,24 @@ export interface CatchAllFacts {
   tombstoned: boolean;
 }
 
+/** A role address on the service domain and who receives it (operatorMail.ts). */
+export interface OperatorFacts {
+  localpart: string;
+  /** Effective operators with a deliverable default mailbox; may be empty. */
+  recipients: { user: User; mailbox: Mailbox }[];
+}
+
 /** Facts about one RCPT address, gathered by {@link evaluateRcpt}. */
 export interface RcptFacts {
   /** Non-null when the address parsed (and HMAC-verified) as one of our VERPs. */
   verp: VerpInfo | null;
+  /**
+   * Non-null when the address is postmaster@/abuse@/… on the service domain
+   * (config.operatorLocalparts). Beats the alias lookup: the role addresses
+   * are reserved (routes/aliasNew.ts) and must route to operators even if
+   * a legacy alias squats the name.
+   */
+  operator: OperatorFacts | null;
   /** True when the address's domain is one we accept mail for. */
   isLocalDomain: boolean;
   alias: Alias | null;
@@ -85,12 +106,24 @@ export interface RcptFacts {
    */
   trashMailbox: Mailbox | null;
   catchAll: CatchAllFacts | null;
+  /**
+   * Inbound rate limit (pipeline/inboundRateLimit.ts): which scope is over
+   * its trailing-minute budget, or null. Only gathered for a recipient that
+   * would otherwise deliver — a drop or a reject never needs the count.
+   */
+  rateLimited: InboundRateLimitScope | null;
 }
 
 /** What the mx should do with one RCPT address. */
 export type RcptDecision =
   /** A signed bounce address of ours: accept; DATA runs bounce handling. */
   | { kind: "verp"; info: VerpInfo }
+  /**
+   * A role address (postmaster@ …): accept; DATA delivers a re-signed copy
+   * to each recipient (mail/rewriteOperator.ts). An empty recipient list
+   * is still accepted — postmaster must never bounce — and logged.
+   */
+  | { kind: "operator"; localpart: string; recipients: { user: User; mailbox: Mailbox }[] }
   /** Deliverable alias: accept; DATA runs the forward pipeline. `trash` marks
    * a disabled alias routed to the owner's trash mailbox (facts.mailbox is
    * the trash mailbox by the time the mx sees the decision). */
@@ -113,6 +146,13 @@ export type RcptDecision =
  */
 export function decideRcpt(facts: RcptFacts): RcptDecision {
   if (facts.verp !== null) return { kind: "verp", info: facts.verp };
+  if (facts.operator !== null) {
+    return {
+      kind: "operator",
+      localpart: facts.operator.localpart,
+      recipients: facts.operator.recipients,
+    };
+  }
 
   if (facts.alias === null) {
     // Catch-all mint (SimpleLogin's on-the-fly creation): only when the
@@ -155,7 +195,9 @@ export function decideRcpt(facts: RcptFacts): RcptDecision {
     // designated trash mailbox when one is set and healthy; otherwise the
     // default accept-and-drop (existence stays unprobeable either way).
     if (facts.trashMailbox !== null && mailboxDeliverable(facts.trashMailbox)) {
-      return { kind: "deliver", trash: true };
+      return facts.rateLimited === null
+        ? { kind: "deliver", trash: true }
+        : rateLimitReject(facts.rateLimited);
     }
     return { kind: "drop", reason: "alias_disabled" };
   }
@@ -167,7 +209,25 @@ export function decideRcpt(facts: RcptFacts): RcptDecision {
     };
   }
 
+  // Last gate before delivery: the trailing-minute budget. A tempfail, so
+  // the sending MTA queues and retries — the burst stays on its side of
+  // the wire instead of becoming our outbound flood into the mailbox.
+  if (facts.rateLimited !== null) return rateLimitReject(facts.rateLimited);
+
   return { kind: "deliver" };
+}
+
+/** The RCPT reply for an over-budget recipient (pipeline/inboundRateLimit.ts). */
+function rateLimitReject(scope: InboundRateLimitScope): RcptDecision {
+  return {
+    kind: "reject",
+    code: 450,
+    enhanced: "4.7.1",
+    message:
+      scope === "alias"
+        ? "Recipient is receiving mail too fast, try again later"
+        : "Recipient mailbox is receiving mail too fast, try again later",
+  };
 }
 
 /** Options for {@link evaluateRcpt}. */
@@ -175,6 +235,16 @@ export interface EvaluateRcptOptions {
   verpSecret: string;
   /** Domains whose non-alias localparts are "user unknown" (vs relay denied). */
   mailDomain: string;
+  /**
+   * Per-alias / per-mailbox trailing-minute budgets. Omitted = not enforced
+   * (unit/int callers that don't care); the mx passes config's values.
+   */
+  inboundRateLimits?: InboundRateLimits;
+  /**
+   * Role-address localparts routed to operators (config.operatorLocalparts).
+   * Omitted = none (callers that don't care).
+   */
+  operatorLocalparts?: readonly string[];
   now?: Date;
 }
 
@@ -201,6 +271,23 @@ export async function evaluateRcpt(
 
   const verp = parseVerp(normalized, opts.verpSecret, { now: opts.now });
 
+  // Role addresses (postmaster@ …): resolved before the alias lookup — see
+  // RcptFacts.operator.
+  let operator: OperatorFacts | null = null;
+  const roleLocalpart =
+    verp === null && opts.operatorLocalparts !== undefined
+      ? operatorLocalpart(normalized, opts.mailDomain, opts.operatorLocalparts)
+      : null;
+  if (roleLocalpart !== null) {
+    const recipients: { user: User; mailbox: Mailbox }[] = [];
+    for (const o of effectiveOperators(await listOperators(db))) {
+      if (o.mailbox !== null && mailboxDeliverable(o.mailbox)) {
+        recipients.push({ user: o.user, mailbox: o.mailbox });
+      }
+    }
+    operator = { localpart: roleLocalpart, recipients };
+  }
+
   let alias: Alias | null = null;
   let user: User | null = null;
   let mailbox: Mailbox | null = null;
@@ -209,7 +296,7 @@ export async function evaluateRcpt(
   let trashMailbox: Mailbox | null = null;
   let catchAll: CatchAllFacts | null = null;
 
-  if (verp === null) {
+  if (verp === null && operator === null) {
     const rows = await db
       .select({ alias: aliases, user: users, mailbox: mailboxes })
       .from(aliases)
@@ -300,6 +387,7 @@ export async function evaluateRcpt(
 
   const facts: RcptFacts = {
     verp,
+    operator,
     isLocalDomain,
     alias,
     mailbox,
@@ -308,6 +396,7 @@ export async function evaluateRcpt(
     user,
     trashMailbox,
     catchAll,
+    rateLimited: null,
   };
   let decision = decideRcpt(facts);
 
@@ -342,6 +431,20 @@ export async function evaluateRcpt(
         message: "Recipient address rejected: User unknown",
       };
     }
+  }
+
+  // Inbound rate limit: counted only once the recipient would deliver (the
+  // delivery set as finally settled above — trash swap, catch-all mint — is
+  // exactly what the mailbox scope must measure), then the table re-decides
+  // with the fact filled in.
+  if (decision.kind === "deliver" && opts.inboundRateLimits !== undefined && facts.alias !== null) {
+    const counts = await countRecentInbound(
+      db,
+      { aliasId: facts.alias.id, mailboxIds: facts.deliveryMailboxes.map((mb) => mb.id) },
+      opts.now,
+    );
+    facts.rateLimited = decideInboundRateLimit(opts.inboundRateLimits, counts);
+    if (facts.rateLimited !== null) decision = decideRcpt(facts);
   }
 
   return { address: normalized, decision, facts };

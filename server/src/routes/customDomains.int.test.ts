@@ -1,4 +1,4 @@
-// Custom-domain routes int tests. Prerequisites: `just up` + `just db push`.
+// Custom-domain routes int tests. Prerequisites: `just up` (migrates on boot).
 //
 // Domains use random `.invalid` names (RFC 6761: guaranteed to never
 // resolve), so the verify endpoint's REAL DNS lookups deterministically find

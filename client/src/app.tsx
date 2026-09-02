@@ -21,7 +21,9 @@ import { css, cx } from "styled-system/css";
 import { clearApiKey, getApiKey } from "src/auth";
 import { getColorScheme, setColorScheme } from "src/colorScheme";
 import { getLogout, useGetNotifications, useGetUserInfo } from "src/gen";
+import { AdminDestinationsPage } from "src/pages/AdminDestinations";
 import { AdminInvitesPage } from "src/pages/AdminInvites";
+import { AdminOperatorsPage } from "src/pages/AdminOperators";
 import { AdminOverviewPage } from "src/pages/AdminOverview";
 import { AdminQueuePage } from "src/pages/AdminQueue";
 import { AdminQueueMessagePage } from "src/pages/AdminQueueMessage";
@@ -306,7 +308,10 @@ function Shell() {
         ? "/mailboxes"
         : isAdminQueueDetail
           ? "/admin/queue"
-          : path === "/admin/queue" || path === "/admin/invites"
+          : path === "/admin/queue" ||
+              path === "/admin/invites" ||
+              path === "/admin/operators" ||
+              path === "/admin/destinations"
             ? "/admin"
             : null;
   const authed = Boolean(getApiKey());
@@ -609,6 +614,20 @@ const adminInvitesRoute = createRoute({
   component: AdminInvitesPage,
 });
 
+const adminOperatorsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/operators",
+  beforeLoad: requireAuth,
+  component: AdminOperatorsPage,
+});
+
+const adminDestinationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/destinations",
+  beforeLoad: requireAuth,
+  component: AdminDestinationsPage,
+});
+
 interface LoginSearch {
   /** Prefill from the www homepage CTA (GET /app/login?email=…). */
   email?: string;
@@ -686,6 +705,8 @@ export const router = createRouter({
     adminQueueRoute,
     adminQueueMessageRoute,
     adminInvitesRoute,
+    adminOperatorsRoute,
+    adminDestinationsRoute,
     loginRoute,
     registerRoute,
   ]),

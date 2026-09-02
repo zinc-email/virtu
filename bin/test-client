@@ -7,7 +7,7 @@ set -euo pipefail
 #
 # Prerequisites:
 #   just up        # start the compose stack (api on :3000, db on :5432)
-#   just db push   # apply the Drizzle schema
+#   (the api applies pending server/drizzle/ migrations on boot)
 #
 # Parallel-safe by construction (like the int tier: unique randomized data per
 # test). The emailed activation code is fetched over a process boundary

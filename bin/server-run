@@ -2,8 +2,8 @@
 #
 # server-run — run a server/ command inside the stack's `api` service.
 #
-# The break-glass ops tools (bin/admin-*, bin/queue-*) and the `just db`
-# recipe go through here so they never depend on a host-reachable
+# The break-glass ops tools (bin/admin-*, bin/queue-*) and the `just db-*`
+# recipes go through here so they never depend on a host-reachable
 # DATABASE_URL: the container inherits DATABASE_URL=…@db:5432 from the
 # compose file — the exact value the api process itself uses — instead of
 # whatever someone last typed into server/.env. On a deploy box the published
@@ -22,7 +22,7 @@
 #
 # Usage: bin/server-run <cmd...>     # runs with cwd /app/server in-container
 #   e.g. bin/server-run bun run src/scripts/queueList.ts
-#        bin/server-run bun drizzle-kit push
+#        bin/server-run bun drizzle-kit generate
 
 set -euo pipefail
 
@@ -38,8 +38,8 @@ if [ -z "$(bin/compose ps -q --status running db 2>/dev/null)" ]; then
   exit 1
 fi
 
-# Interactive when we have a terminal (drizzle-kit's data-loss review, and
-# anything else that prompts); -T otherwise so piped/CI invocations don't
+# Interactive when we have a terminal (drizzle-kit generate's rename
+# questions, and anything else that prompts); -T otherwise so piped/CI invocations don't
 # trip over "the input device is not a TTY".
 if [ -t 0 ] && [ -t 1 ]; then
   exec bin/compose run --rm --no-deps api "$@"

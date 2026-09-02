@@ -31,8 +31,15 @@ bunx lefthook install            # pre-commit format hook (once per machine)
 
 cp server/.env.example server/.env  # optional; every var has a dev default
 just up                          # docker compose: db, api, client, homepage, proxy
-just db push                     # apply the Drizzle schema
+                                 # (the api applies pending DB migrations on boot)
 ```
+
+Schema changes: edit `server/src/db/schema.ts`, run `just db-generate`
+(diffs against the last snapshot into a new `server/drizzle/*.sql`, asking
+rename-vs-recreate questions here, once), commit the generated files, then
+`just db-migrate` (or restart the stack). Migrations are the only way schema
+reaches a database — dev, test net, and deploy boxes all apply the same
+committed SQL, unattended.
 
 Everything is behind one origin (the Caddy proxy), matching production:
 
@@ -92,7 +99,7 @@ Point a Stripe webhook endpoint at `POST /webhooks/stripe` with the events
 ```sh
 just check       # format-check + typecheck + unit tests (what CI runs)
 just test-unit   # pure-function tests, no docker
-just test-int    # route tests against the dockerized postgres (just up + just db push first)
+just test-int    # route tests against the dockerized postgres (just up first)
 just gen         # regenerate spec + client SDK after changing routes/schema
 ```
 
@@ -198,12 +205,17 @@ ssh root@box 'runuser -u virtu -- git clone https://github.com/zinc-email/virtu.
 #                               wins over this file.
 #                               See server/.env.example.
 
-# 3. Deploy (as virtu, from /opt/virtu) — build, up, cert sync:
+# 3. Deploy (as virtu, from /opt/virtu) — build, migrate, up, cert sync.
+#    The serve stack's db-migrate one-shot applies server/drizzle/ before
+#    api and maild start; a fresh box gets the whole schema here.
 bin/host-deploy
 
-# 3b. Apply the DB schema (interactive — reviews data-loss statements; run
-#     it whenever a release changes server/src/db/schema.ts):
-just db push
+# 3b. ONLY for a box whose DB predates generated migrations (created by the
+#     old `drizzle-kit push`): baseline it once — marks the committed
+#     migrations applied without running them. Do it BEFORE the first
+#     host-deploy of a migrations-era release, and make sure the schema is
+#     current first (`just db push` one last time on the pre-migrations code).
+just db-baseline
 
 # 4. Once per domain: mint the DKIM key and publish the TXT it prints:
 bin/dkim-ensure
@@ -213,12 +225,15 @@ bin/dkim-ensure
 bin/admin-grant you@example.com
 ```
 
-Redeploys are step 3 alone (+ 3b when the schema changed). `bin/host-deploy`
-is idempotent: fetch + checkout (an optional ref argument — a `v*` tag or
-sha; default `origin/main`), rebuild, `up -d`, cert sync. It deliberately
-never pushes the schema: unattended `drizzle-kit push --force` auto-accepts
-data-loss statements, so that review stays human — `just db push` is
-interactive and prompts on lossy SQL.
+Redeploys are step 3 alone. `bin/host-deploy` is idempotent: fetch +
+checkout (an optional ref argument — a `v*` tag or sha; default
+`origin/main`), rebuild, `up -d` (which runs pending migrations first), cert
+sync. Schema review is human but happens at generate time: `just db-generate`
+on the workstation answers drizzle-kit's questions and the resulting SQL is
+reviewed in the PR; the box only ever applies committed SQL. A failing
+migration leaves api and maild stopped on the old code rather than running
+on a half-applied schema — check `bin/compose -f docker-compose.serve.yml
+logs db-migrate`.
 
 ### Automatic deploys (tag push)
 
@@ -228,9 +243,8 @@ repo secret and runs `bin/host-deploy <tag>`. The box side is locked down in
 `~virtu/.ssh/authorized_keys`: a `restrict,command=` forced command pins the
 key to `bin/host-deploy "$SSH_ORIGINAL_COMMAND"`, so leaking the secret leaks
 "can redeploy" and nothing else; the workflow pins the box's host keys.
-Schema changes are **not** part of the automatic deploy — run
-`just db push` yourself when a tagged release touches
-`server/src/db/schema.ts` (the deploy output reminds you).
+Schema changes are part of the automatic deploy: the tagged release carries
+its `server/drizzle/` migrations and the stack applies them before starting.
 
 ```sh
 git tag v0.2.0 && git push origin v0.2.0

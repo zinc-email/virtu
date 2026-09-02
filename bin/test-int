@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Prerequisites (one-time per fresh DB volume):
 #   just up        # start the compose stack (db on localhost:5432)
-#   just db push   # apply the Drizzle schema
+#   (the api applies pending server/drizzle/ migrations on boot)
 #
 # The tier is parallel-safe by construction (madi RFC 0003: unique data per
 # test, no truncation, no ordering constraints) — tests run in any order

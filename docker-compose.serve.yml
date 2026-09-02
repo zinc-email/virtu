@@ -64,6 +64,29 @@ services:
     volumes:
       - ".:/app"
 
+  # One-shot: apply pending server/drizzle/ migrations before api and maild
+  # start. Non-interactive by construction (every prompt was answered at
+  # `just db-generate` time on the workstation), so bin/host-deploy's
+  # `up --build` carries schema changes with the code. A migration failure
+  # keeps api/maild on the old code+schema (they never start), which is the
+  # safe failure.
+  db-migrate:
+    image: "oven/bun:1.3"
+    working_dir: /app/server
+    command: ["bun", "run", "src/scripts/dbMigrate.ts"]
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    environment:
+      DATABASE_URL: "postgres://virtu:${POSTGRES_PASSWORD:-virtu}@db:5432/virtu"
+      VIRTU_ENV: "${VIRTU_ENV:-}"
+      HOME: /tmp
+    depends_on:
+      db:
+        condition: service_healthy
+      server-deps:
+        condition: service_completed_successfully
+    volumes:
+      - ".:/app"
+
   api:
     image: "oven/bun:1.3"
     working_dir: /app/server
@@ -81,6 +104,8 @@ services:
       db:
         condition: service_healthy
       server-deps:
+        condition: service_completed_successfully
+      db-migrate:
         condition: service_completed_successfully
     healthcheck:
       # /meta/health probes the DB; bun -e is the probe (no curl in oven/bun).
@@ -121,6 +146,8 @@ services:
       db:
         condition: service_healthy
       server-deps:
+        condition: service_completed_successfully
+      db-migrate:
         condition: service_completed_successfully
     ports:
       - "${MX_PUBLISH:-127.0.0.1:8025}:25"

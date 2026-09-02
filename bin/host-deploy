@@ -4,9 +4,12 @@
 # run it for every deploy after the one-time setup in README "Deploy" (host
 # provisioned, /opt/virtu cloned, .env files written).
 #
-# Deliberately does NOT touch the DB schema — unattended `drizzle-kit push
-# --force` auto-accepts data-loss statements. Schema changes are applied
-# manually via `just db push` (interactive, reviews lossy SQL).
+# Schema changes ride along: the serve stack's db-migrate one-shot applies
+# the committed server/drizzle/ migrations before api and maild start, so a
+# release that changed src/db/schema.ts needs nothing extra here (the
+# interactive decisions were made at `just db-generate` time and are in the
+# SQL). A box that predates generated migrations is baselined ONCE with
+# `just db-baseline` — see README "Deploy".
 #
 # Run on the box, from the repo root, as the app user:
 #   bin/host-deploy [ref]     # ref: a v* tag (what the deploy workflow
@@ -27,9 +30,5 @@ bin/compose -f docker-compose.serve.yml up --build -d
 # Pick up the (possibly fresh) mail cert and restart maild on top of it.
 bin/mail-certs-sync
 
-cat <<'EOF'
-
-host-deploy: done — schema NOT pushed.
-  If this release changes server/src/db/schema.ts, apply it now:
-    ssh -t <box>  ->  cd /opt/virtu && just db push
-EOF
+echo
+echo "host-deploy: done — schema migrated by the db-migrate one-shot (see: bin/compose -f docker-compose.serve.yml logs db-migrate)."

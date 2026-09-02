@@ -111,7 +111,9 @@ services:
   mail:
     image: oven/bun:1
     entrypoint: ["/bin/sh", "-c"]
-    command: ["bun drizzle-kit push --force && exec bun src/maild.ts"]
+    # Migrate the test DB from the committed server/drizzle/ (non-interactive),
+    # then run all three mail processes.
+    command: ["bun run src/scripts/dbMigrate.ts && exec bun src/maild.ts"]
     working_dir: /repo/server
     hostname: mail.virtu.email
     dns:
@@ -126,6 +128,14 @@ services:
       # days); retry-path stories need seconds, not days.
       QUEUE_MAX_TRIES: "6"
       QUEUE_BACKOFF_MAX_MS: "60000"
+      # Peer domains (open.relay, qmail.com) are shared by every story, and
+      # the scripted 4xx replies would otherwise pause them for everyone.
+      DESTINATION_PAUSE_BASE_MS: "0"
+      # The bounce-threshold stories push 13 messages through one alias in
+      # well under a minute; the production defaults (10/15) would tempfail
+      # them. inboundRateLimit.story.test.ts seeds exactly these budgets.
+      INBOUND_RATE_LIMIT_PER_ALIAS_PER_MINUTE: "50"
+      INBOUND_RATE_LIMIT_PER_MAILBOX_PER_MINUTE: "60"
       # Humans read these logs (`just test-net-logs`); prod ships JSON.
       LOG_FORMAT: pretty
       # Reachable from the test-runner (stories assert delivery counters).

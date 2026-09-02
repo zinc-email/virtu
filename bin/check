@@ -6,7 +6,7 @@
 #
 # Cheapest checks first so it fails fast. Only the unit tier runs here — it
 # needs no docker. The int tier (routes against the dockerized postgres) has
-# its own recipe: `just up && just db push && just test-int`.
+# its own recipe: `just up && just test-int`.
 #
 # Extra args forward to `bun test` (e.g. `bin/check apiKey`); with no args
 # the full unit tier runs, matching CI.

@@ -1,6 +1,6 @@
-// Push-based migrations: `just db push` (drizzle-kit push) applies
-// src/db/schema.ts directly to the dev DB. No committed migration files
-// for now; `out` is where drizzle-kit would write them if we ever switch.
+// Generated migrations: `just db-generate` (drizzle-kit generate) diffs
+// src/db/schema.ts against the last snapshot into ./drizzle (committed);
+// src/scripts/dbMigrate.ts applies them everywhere, unattended.
 
 import { defineConfig } from "drizzle-kit";
 

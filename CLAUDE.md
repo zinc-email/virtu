@@ -24,7 +24,9 @@ of a legacy PHP/postfix stack, with a SimpleLogin-compatible API. Open source
 Bun runtime · one `server/` package with several entrypoints (`api`, `mx`,
 `submission`, `deliverd`, and `maild` = all three mail processes in one) ·
 Fastify + `fastify-zod-openapi` · Drizzle over Bun's native postgres
-(`drizzle-orm/bun-sql`, push-based migrations) · `mailauth` for all
+(`drizzle-orm/bun-sql`, generated migrations committed in `server/drizzle/`,
+applied unattended by `src/scripts/dbMigrate.ts` on api boot, in the serve
+stack's `db-migrate` one-shot, and in the test net) · `mailauth` for all
 DKIM/ARC/SPF/DMARC (verify and sign, in-process — no milters) · a plain
 `outbound_messages` Postgres table as the delivery queue · React SPA (rsbuild
 + TanStack Router/Query + Panda CSS) with a Kubb-generated SDK · Astro static
@@ -87,7 +89,7 @@ prod/staging.
 
 - `*.unit.test.ts` — pure, no DB/network/docker. `just test-unit`.
 - `*.int.test.ts` — Fastify routes via `app.inject()` against the dockerized
-  Postgres. `just up && just db push`, then `just test-int`. Parallel-safe by
+  Postgres. `just up`, then `just test-int`. Parallel-safe by
   unique-data-per-test; no truncation.
 - `*.story.test.ts` — end-to-end mail through the **simulated internet**
   (fake DNS + peer MTAs, `docker-compose.test.yml`). `just test-net-up`, then
@@ -100,7 +102,7 @@ prod/staging.
   `just test-contract`; also runs in `just check` and CI.
 - `*.dom.test.tsx` (client) — real React pages rendered in happy-dom, driving
   the **running stack over real HTTP** (transport is *not* mocked; happy-dom's
-  document origin is the API). `just up && just db push`, then
+  document origin is the API). `just up`, then
   `just test-client`. Parallel-safe by unique-data-per-test, like the int tier.
   When a test needs something only the server can produce (the emailed
   activation code today; DNS zone edits for custom domains later) it invokes a
@@ -120,7 +122,11 @@ DB column rename surfaces as a client compile error. See PLAN.md "The
 type-safety spine" for the full rationale. **Never edit generated code or start
 downstream with a stale spec.**
 
-1. Change `server/src/db/schema.ts`, `routes/`, or response schemas.
+1. Change `server/src/db/schema.ts`, `routes/`, or response schemas. A
+   schema change also needs `just db-generate` (writes the migration into
+   `server/drizzle/`, asking rename-vs-recreate interactively — never
+   `drizzle-kit push`, which is gone from the workflow) and `just db-migrate`;
+   commit the generated SQL + snapshot with the schema change.
 2. `bin/openapi-gen` writes `server/spec/openapi.json` (**committed artifact**).
 3. `cd client && bun run kubb` regenerates `client/src/gen` (gitignored).
 4. Update the client against the new SDK. `just gen` chains 2–3.

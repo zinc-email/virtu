@@ -5,18 +5,31 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
+import { type BillingConfig, setBillingConfigForTests } from "../billing/stripe";
 import { db } from "../db";
 import { aliases, contacts, domains, emailLogs, users } from "../db/schema";
 import { createAlias, latestEmailedCode, registerAndLogin } from "./intHarness";
 
 let app: App;
 
+// The free-plan cases below need billing enforced: an unconfigured server
+// grants everyone premium (isPremium), so pin a configured Stripe here
+// regardless of this box's env.
+const CONFIGURED: BillingConfig = {
+  stripeSecretKey: "sk_test_int",
+  stripeWebhookSecret: "whsec_int_test_secret",
+  stripePriceId: "price_int_premium",
+  billingReturnUrl: "http://client.test",
+};
+
 beforeAll(async () => {
+  setBillingConfigForTests(CONFIGURED);
   app = await buildApp({ logger: false });
   await app.ready();
 });
 
 afterAll(async () => {
+  setBillingConfigForTests(undefined);
   await app.close();
 });
 

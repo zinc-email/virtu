@@ -39,8 +39,9 @@ describe("BillingPage — mobile-shell seam", () => {
 
     renderPage(BillingPage, "/billing");
 
-    // Status loaded (fresh users are on the trial).
-    await screen.findByText("Free trial");
+    // Status loaded. Fresh users are on the trial — which the server reports
+    // as premium when it has no Stripe (nothing to convert the trial into).
+    await screen.findByText(/^(Free trial|Premium)$/);
     // The consumption-only line replaces every action, configured or not.
     screen.getByText(/visit .* in your web browser/);
     expect(screen.queryByText("» Upgrade to Premium")).toBeNull();
@@ -54,7 +55,7 @@ describe("BillingPage — mobile-shell seam", () => {
 
     renderPage(BillingPage, "/billing");
 
-    await screen.findByText("Free trial");
+    await screen.findByText(/^(Free trial|Premium)$/);
     expect(screen.queryByText(/visit .* in your web browser/)).toBeNull();
     expect(screen.queryByText("» Upgrade to Premium")).toBeNull();
     expect(screen.queryByText("» Manage subscription")).toBeNull();
@@ -66,7 +67,7 @@ describe("BillingPage — mobile-shell seam", () => {
 
     renderPage(BillingPage, "/billing");
 
-    await screen.findByText("Free trial");
+    await screen.findByText(/^(Free trial|Premium)$/);
     expect(screen.queryByText(/visit .* in your web browser/)).toBeNull();
     // With Stripe configured the trial user gets the upgrade action; without,
     // the not-configured line. Either way it must NOT be the shell posture.

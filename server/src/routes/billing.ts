@@ -107,16 +107,19 @@ export async function withBillingRoutes(authed: FastifyInstance) {
       const sub = await findSubscription(req.user.id);
       // Mirrors userToDict: lifetime/subscription outrank the trial; the
       // trial only shows as "trial" when it's the sole source of premium.
+      const configured = isBillingConfigured(getBillingConfig());
       const hasSub = req.user.lifetime ? false : await hasActiveSubscription(req.user.id);
       const inTrial = !req.user.lifetime && !hasSub && trialActive(req.user);
+      // Unconfigured billing = premium for everyone (isPremium's rule); the
+      // page must not count down a trial nobody can convert.
       const plan =
-        req.user.lifetime || hasSub
+        !configured || req.user.lifetime || hasSub
           ? ("premium" as const)
           : inTrial
             ? ("trial" as const)
             : ("free" as const);
       return {
-        configured: isBillingConfigured(getBillingConfig()),
+        configured,
         plan,
         subscription_status: sub?.status ?? null,
         current_period_end: epoch(sub?.currentPeriodEnd ?? null),

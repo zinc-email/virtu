@@ -19,6 +19,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { subscriptions, type User } from "../db/schema";
+import { getBillingConfig, isBillingConfigured } from "./stripe";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -64,7 +65,20 @@ export function trialActive(user: Pick<User, "trialEnd">, now: Date = new Date()
   return user.trialEnd !== null && user.trialEnd.getTime() > now.getTime();
 }
 
-export async function isPremium(user: User, now: Date = new Date()): Promise<boolean> {
+/**
+ * Billing enforced at all? Without Stripe nobody can buy premium, so nobody
+ * is denied it: the trial clock, the free alias cap and the free send quota
+ * only bite on a server where an upgrade is actually for sale.
+ */
+export function billingEnforced(): boolean {
+  return isBillingConfigured(getBillingConfig());
+}
+
+export async function isPremium(
+  user: Pick<User, "id" | "lifetime" | "trialEnd">,
+  now: Date = new Date(),
+): Promise<boolean> {
+  if (!billingEnforced()) return true;
   if (user.lifetime) return true;
   if (await hasActiveSubscription(user.id, now)) return true;
   return trialActive(user, now);

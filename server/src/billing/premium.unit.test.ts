@@ -2,13 +2,16 @@
 // The DB-backed wrappers (hasActiveSubscription/isPremium) are exercised by
 // the billing int tier through the webhook flow.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
+  billingEnforced,
+  isPremium,
   PAST_DUE_GRACE_DAYS,
   PERIOD_END_GRACE_DAYS,
   subscriptionGrantsPremium,
   trialActive,
 } from "./premium";
+import { setBillingConfigForTests } from "./stripe";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const now = new Date("2026-08-08T12:00:00Z");
@@ -67,5 +70,27 @@ describe("trialActive", () => {
     expect(trialActive({ trialEnd: daysFromNow(1) }, now)).toBe(true);
     expect(trialActive({ trialEnd: daysFromNow(-1) }, now)).toBe(false);
     expect(trialActive({ trialEnd: null }, now)).toBe(false);
+  });
+});
+
+describe("billingEnforced / isPremium without Stripe", () => {
+  afterEach(() => setBillingConfigForTests(undefined));
+
+  test("an unconfigured server enforces nothing: expired trial, no lifetime → still premium", async () => {
+    setBillingConfigForTests({ billingReturnUrl: "http://client.test" });
+    expect(billingEnforced()).toBe(false);
+    // Returns before any DB lookup.
+    const expired = { id: 1, lifetime: false, trialEnd: daysFromNow(-30) };
+    expect(await isPremium(expired, now)).toBe(true);
+  });
+
+  test("the full Stripe trio turns enforcement on", () => {
+    setBillingConfigForTests({
+      stripeSecretKey: "sk_test_unit",
+      stripeWebhookSecret: "whsec_unit",
+      stripePriceId: "price_unit",
+      billingReturnUrl: "http://client.test",
+    });
+    expect(billingEnforced()).toBe(true);
   });
 });

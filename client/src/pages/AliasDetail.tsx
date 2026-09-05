@@ -32,6 +32,7 @@ import {
   Switch,
   ui,
 } from "src/ui";
+import { useHead } from "src/head";
 
 const ACTION_LABEL: Record<string, string> = {
   forward: "Forwarded",
@@ -50,6 +51,7 @@ export function AliasDetailPage() {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const alias = useGetAliasesAliasId(aliasId);
+  useHead({ title: alias.data?.email ?? "Alias" });
   const activities = useGetAliasesAliasIdActivities(aliasId, { page_id: String(page) });
 
   const invalidate = () => {

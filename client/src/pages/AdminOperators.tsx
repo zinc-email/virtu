@@ -10,9 +10,11 @@ import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import { getAdminOperatorsQueryKey, useGetAdminOperators, usePatchAdminOperatorsId } from "src/gen";
 import { Alert, EmailBreak, KeyValue, KVSwitch, Section, Tag, Tags, ui } from "src/ui";
+import { useHead } from "src/head";
 import { AdminErrorAlert } from "src/pages/adminCommon";
 
 export function AdminOperatorsPage() {
+  useHead({ title: "Operators" });
   const queryClient = useQueryClient();
   const list = useGetAdminOperators();
   const update = usePatchAdminOperatorsId({

@@ -8,11 +8,13 @@ import { useEffect, useState } from "react";
 import { css } from "styled-system/css";
 import { useGetAdminQueue } from "src/gen";
 import { Button, EntityList, EntityRow, SelectField, Section, Tag, Tags, ui } from "src/ui";
+import { useHead } from "src/head";
 import { AdminErrorAlert, STATUS_TONE, timeAgo } from "src/pages/adminCommon";
 
 const PAGE_SIZE = 20;
 
 export function AdminQueuePage() {
+  useHead({ title: "Queue" });
   const navigate = useNavigate();
   const { status } = useSearch({ from: "/admin/queue" });
   const [page, setPage] = useState(0);

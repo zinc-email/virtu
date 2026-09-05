@@ -37,6 +37,7 @@ import {
   Switch,
   ui,
 } from "src/ui";
+import { useHead } from "src/head";
 
 const GENERATOR_OPTIONS = [
   { value: "word", label: "Random words (breeze_cedar123)" },
@@ -192,6 +193,7 @@ function SmtpCredentialsSection() {
 }
 
 export function SettingsPage() {
+  useHead({ title: "Settings" });
   const queryClient = useQueryClient();
   const setting = useGetSetting();
   const domains = useGetV2SettingDomains();

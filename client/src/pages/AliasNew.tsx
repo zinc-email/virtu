@@ -18,8 +18,10 @@ import {
   usePostV3AliasCustomNew,
 } from "src/gen";
 import { Alert, Button, CheckboxGroup, Field, Section, SelectField, TextArea, ui } from "src/ui";
+import { useHead } from "src/head";
 
 export function AliasNewPage() {
+  useHead({ title: "New alias" });
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [prefix, setPrefix] = useState("");

@@ -24,6 +24,7 @@ import {
   Tags,
   ui,
 } from "src/ui";
+import { useHead } from "src/head";
 
 export function mailboxTags(mb: Mailbox) {
   return (
@@ -45,6 +46,7 @@ export function mailboxTags(mb: Mailbox) {
 }
 
 export function MailboxesPage() {
+  useHead({ title: "Mailboxes" });
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [verifying, setVerifying] = useState<Mailbox | null>(null);

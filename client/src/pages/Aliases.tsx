@@ -28,6 +28,7 @@ import {
   Switch,
   ui,
 } from "src/ui";
+import { useHead } from "src/head";
 
 const PAGE_SIZE = 20;
 
@@ -49,6 +50,7 @@ function activityLine(alias: Alias): string {
 }
 
 export function AliasesPage() {
+  useHead({ title: "Emails" });
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);

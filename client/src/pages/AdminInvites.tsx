@@ -18,6 +18,7 @@ import {
 import type { AdminInvite } from "src/gen";
 import { Dialog } from "src/overlays";
 import { Alert, Button, EntityList, EntityRow, Field, Section, Tag, Tags, ui } from "src/ui";
+import { useHead } from "src/head";
 import { AdminErrorAlert, timeAgo } from "src/pages/adminCommon";
 
 function inviteState(inv: AdminInvite): "used" | "expired" | "unused" {
@@ -29,6 +30,7 @@ function inviteState(inv: AdminInvite): "used" | "expired" | "unused" {
 const STATE_TONE = { unused: "primary", used: "neutral", expired: "accent" } as const;
 
 export function AdminInvitesPage() {
+  useHead({ title: "Invites" });
   const queryClient = useQueryClient();
   const [note, setNote] = useState("");
   const [count, setCount] = useState("1");

@@ -26,6 +26,7 @@ import {
 } from "src/gen";
 import { Dialog } from "src/overlays";
 import { Alert, Button, KeyValue, KV, Section, Tag, Tags, ui } from "src/ui";
+import { useHead } from "src/head";
 import { apiErrorMessage } from "src/api/errors";
 import { AdminErrorAlert, STATUS_TONE, timeAgo } from "src/pages/adminCommon";
 import { NotFoundPage } from "src/pages/NotFound";
@@ -41,6 +42,7 @@ export function AdminQueueMessagePage() {
   const [confirm, setConfirm] = useState<ConfirmKind | null>(null);
 
   const id = Number(messageId);
+  useHead({ title: `Queue #${id}` });
   const detail = useGetAdminQueueMessageId(id);
 
   const invalidate = () => {

@@ -6,11 +6,13 @@ import { Link } from "@tanstack/react-router";
 import { css } from "styled-system/css";
 import { useGetAdminOverview } from "src/gen";
 import { KeyValue, KV, Section, ui } from "src/ui";
+import { useHead } from "src/head";
 import { AdminErrorAlert } from "src/pages/adminCommon";
 
 const h2 = css({ marginTop: "2.5rem", marginBottom: "0.5rem" });
 
 export function AdminOverviewPage() {
+  useHead({ title: "Admin" });
   const overview = useGetAdminOverview();
 
   if (overview.isPending) {

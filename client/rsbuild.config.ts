@@ -18,7 +18,8 @@ const BASE = "/app";
 export default defineConfig({
   plugins: [pluginReact()],
   source: { entry: { index: "./src/index.tsx" } },
-  html: { title: "virtu" },
+  // Pre-hydration fallback; each page sets its own title (src/head.ts).
+  html: { title: "Zinc" },
   output: { distPath: { root: "dist" }, assetPrefix: `${BASE}/` },
   // Prefix dev asset URLs too, so <script>/<link> in the shell resolve under
   // /app at the unified origin (not / , which the proxy routes to the homepage).

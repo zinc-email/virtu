@@ -17,6 +17,7 @@ import {
 } from "src/gen";
 import { Dialog } from "src/overlays";
 import { Alert, Button, EntityList, EntityRow, Section, Tag, Tags, ui } from "src/ui";
+import { useHead } from "src/head";
 import { AdminErrorAlert, timeAgo } from "src/pages/adminCommon";
 
 function pausedFor(until: string): string {
@@ -27,6 +28,7 @@ function pausedFor(until: string): string {
 }
 
 export function AdminDestinationsPage() {
+  useHead({ title: "Destinations" });
   const queryClient = useQueryClient();
   const [resume, setResume] = useState<AdminDestination | null>(null);
   const list = useGetAdminDestinations();

@@ -10,8 +10,10 @@ import { css } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
 import { useGetNotifications, usePostNotificationsNotificationIdRead } from "src/gen";
 import { Alert, Button, EntityList, EntityRow, Section, Tag, ui } from "src/ui";
+import { useHead } from "src/head";
 
 export function NotificationsPage() {
+  useHead({ title: "Notifications" });
   const queryClient = useQueryClient();
   const [page, setPage] = useState(0);
 

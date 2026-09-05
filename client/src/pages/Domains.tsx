@@ -21,8 +21,10 @@ import {
   Tags,
   ui,
 } from "src/ui";
+import { useHead } from "src/head";
 
 export function DomainsPage() {
+  useHead({ title: "Domains" });
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [domain, setDomain] = useState("");

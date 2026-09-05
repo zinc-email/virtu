@@ -15,6 +15,7 @@ import { apiErrorMessage } from "src/api/errors";
 import { setApiKey } from "src/auth";
 import { usePostAuthLogin, usePostAuthVerify } from "src/gen";
 import { Alert, Button, Field, PinInput, Section, ui } from "src/ui";
+import { useHead } from "src/head";
 
 // Mirror the server's cheap guard (auth.ts) so obvious mistakes don't cost a
 // round trip. The real validation still lives on the server.
@@ -43,6 +44,7 @@ function isInviteRequired(err: unknown): boolean {
 }
 
 export function LoginPage() {
+  useHead({ title: "Log in" });
   const navigate = useNavigate();
   const search = useSearch({ from: "/login" });
   const [phase, setPhase] = useState<"email" | "code">("email");

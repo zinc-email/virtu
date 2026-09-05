@@ -17,6 +17,7 @@ import {
   usePutMailboxesMailboxId,
 } from "src/gen";
 import { Alert, Button, EmailBreak, KV, KVSwitch, KeyValue, Section, ui } from "src/ui";
+import { useHead } from "src/head";
 
 export function MailboxDetailPage() {
   const params = useParams({ strict: false });
@@ -28,6 +29,9 @@ export function MailboxDetailPage() {
 
   // There is no GET-one endpoint (SimpleLogin parity); the list is small.
   const mailboxes = useGetV2Mailboxes();
+  useHead({
+    title: mailboxes.data?.mailboxes.find((m) => m.id === mailboxId)?.email ?? "Mailbox",
+  });
   const invalidate = () =>
     void queryClient.invalidateQueries({ queryKey: getV2MailboxesQueryKey() });
 

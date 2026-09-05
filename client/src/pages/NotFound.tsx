@@ -8,8 +8,10 @@
 import { Link } from "@tanstack/react-router";
 import { css } from "styled-system/css";
 import { Section, ui } from "src/ui";
+import { useHead } from "src/head";
 
 export function NotFoundPage() {
+  useHead({ title: "Not found" });
   return (
     <Section narrow>
       <header className={css({ marginBottom: "2.11rem" })}>

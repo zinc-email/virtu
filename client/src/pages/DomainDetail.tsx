@@ -22,6 +22,7 @@ import {
 import { formatZoneFile } from "src/lib/zoneFile";
 import { Dialog } from "src/overlays";
 import { Alert, Button, CodeBlock, KV, KVSwitch, KeyValue, Section, ui } from "src/ui";
+import { useHead } from "src/head";
 
 // One published-record section: explainer, success state or the rows to
 // enter at the DNS provider, and what the last verify found when it failed.
@@ -158,6 +159,9 @@ export function DomainDetailPage() {
 
   // There is no GET-one endpoint (SimpleLogin parity); the list is small.
   const domains = useGetCustomDomains();
+  useHead({
+    title: domains.data?.custom_domains.find((d) => d.id === domainId)?.domain_name ?? "Domain",
+  });
   const dns = useGetCustomDomainsCustomDomainIdDns(domainId);
 
   const invalidate = () =>

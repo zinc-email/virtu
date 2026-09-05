@@ -13,6 +13,7 @@ import {
 } from "src/gen";
 import { isShell, shellPlatform } from "src/shell";
 import { Alert, KV, KVAction, KeyValue, Section, ui } from "src/ui";
+import { useHead } from "src/head";
 
 function isNotConfigured(err: unknown): boolean {
   return (
@@ -33,6 +34,7 @@ const fmtDate = (epochSeconds: number) =>
 const PLAN_LABEL = { premium: "Premium", trial: "Free trial", free: "Free" } as const;
 
 export function BillingPage() {
+  useHead({ title: "Account" });
   const status = useGetBillingStatus();
   const userInfo = useGetUserInfo();
 

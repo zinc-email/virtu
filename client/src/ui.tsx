@@ -90,16 +90,56 @@ const btnBase = css({
   _disabled: { opacity: 0.5, cursor: "not-allowed" },
 });
 
+// Optical centring. Both faces hang their cap band above the middle of a line
+// box, so a line of text centred by the box model reads high — visibly so on
+// the small controls. Each size that holds text therefore splits its vertical
+// padding to drop the cap band onto the true centre. The splits are MEASURED
+// (8x screenshots, ink box against a hairline on the box centre), because the
+// amount depends on the face: 0.08em for Fira Sans, 0.1em for DejaVu Sans
+// Mono. The total padding is unchanged, so no control changes height.
+//
+// An icon is not text and needs no such nudge, so wherever the split moves the
+// content box, a leading glyph is shifted back by the same amount. A relative
+// offset, not a margin: a margin would grow the flex line and with it the
+// control.
+
 const btnSize = {
-  md: css({ padding: "1rem 2rem 0.75rem 2rem" }),
+  md: css({
+    padding: "0.955rem 2rem 0.795rem 2rem", // 1.75rem, split 0.08rem
+    "& > svg": { position: "relative", top: "-0.08em" },
+  }),
   tiny: css({
     fontFamily: "mono",
     fontSize: "0.6rem",
     lineHeight: "1em",
     textTransform: "uppercase",
-    padding: "0.5em 1em",
+    padding: "0.6em 1em 0.4em 1em", // 1em, split 0.1em
+    "& > svg": { position: "relative", top: "-0.1em" },
+  }),
+  // `tiny` a step up, for a button that sits beside a value it acts on (the
+  // copy button next to an address) and has to stay readable there.
+  small: css({
+    fontFamily: "mono",
+    fontSize: "0.7rem",
+    lineHeight: "1em",
+    textTransform: "uppercase",
+    padding: "0.6em 1em 0.4em 1em",
+    "& > svg": { position: "relative", top: "-0.1em" },
+  }),
+  // Glyph only: a square box, and no nudge either way — there is no text.
+  icon: css({
+    fontFamily: "mono",
+    fontSize: "0.6rem",
+    lineHeight: "1em",
+    padding: "0.55em",
   }),
 };
+
+// One size owns a button's padding and font-size outright, because a caller
+// CANNOT override them from `className`: Panda emits one atomic class per
+// declaration, cx() only concatenates, and which class wins is decided by
+// stylesheet order rather than by the order they were passed. Anything that
+// needs a different box belongs here as its own size.
 
 const btnVariant: Record<ButtonVariant, string> = {
   outline: css({
@@ -539,8 +579,15 @@ const switchCss = css({
       "background-color 0.5s token(easings.spring), box-shadow 0.5s token(easings.spring)",
   },
   "& [data-part=label]": {
+    // Centred against the full height of the track rather than positioned by
+    // a hand-tuned offset, then split like every other control (see btnSize);
+    // the padding is doubled because only one side of the box carries it.
     position: "absolute",
-    top: "0.825em",
+    top: 0,
+    bottom: 0,
+    display: "flex",
+    alignItems: "center",
+    paddingTop: "0.16em",
     fontSize: "0.8em",
     lineHeight: "1em",
     textTransform: "uppercase",
@@ -628,7 +675,8 @@ const tagCss = css({
   lineHeight: "1em",
   textTransform: "uppercase",
   letterSpacing: "0.08em",
-  padding: "0.5em 0.9em 0.4em 0.9em",
+  // 0.9em of vertical padding, split 0.1em off-centre (see btnSize).
+  padding: "0.55em 0.9em 0.35em 0.9em",
   borderRadius: "0.111rem",
   backgroundColor: "color-mix(in srgb, currentColor 12%, transparent)",
   whiteSpace: "nowrap",
@@ -679,15 +727,12 @@ export function CopyButton({
   return (
     <Button
       type="button"
-      size="tiny"
+      size={iconOnly ? "icon" : "small"}
       aria-label={copied ? "Copied" : "Copy"}
       title="Copy"
       className={cx(
         // Never collapses or wraps, wherever a flex row squeezes it.
         css({ flexShrink: 0, whiteSpace: "nowrap" }),
-        iconOnly
-          ? css({ padding: "0.4rem" })
-          : css({ fontSize: "0.7rem", padding: "0.33rem 0.6rem" }),
         copied ? css({ color: "primary", borderColor: "primary" }) : undefined,
         className,
       )}
@@ -740,7 +785,8 @@ export function CodeBlock({ children, compact }: { children: string; compact?: b
         iconOnly
         className={cx(
           css({ position: "absolute", right: "0.5rem", backgroundColor: "bgDeep" }),
-          compact ? css({ top: "0.25rem", padding: "0.3rem" }) : css({ top: "0.5rem" }),
+          // Only the offset: the `icon` size owns the box (see btnSize).
+          compact ? css({ top: "0.25rem" }) : css({ top: "0.5rem" }),
         )}
       />
     </div>

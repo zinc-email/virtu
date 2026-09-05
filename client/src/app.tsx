@@ -17,7 +17,7 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { css, cx } from "styled-system/css";
 import { clearApiKey, getApiKey } from "src/auth";
 import { getColorScheme, setColorScheme } from "src/colorScheme";
@@ -45,20 +45,29 @@ import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
 
 // ── Header nav ───────────────────────────────────────────────────────────────
-// Below 1000px the inline links can't fit (5 items + logo + padding needs
-// ~830px at the 18px root) — they collapse into a hamburger + drawer.
+// Desktop: the three primary sections inline, then the bell, then a persona
+// button whose dropdown holds the account-ish pages. Below 1000px everything
+// collapses into a hamburger + drawer (one flat list — the drawer has room).
 
-const NAV_ITEMS = [
+interface NavItem {
+  to: string;
+  label: string;
+}
+
+const PRIMARY_NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Emails" },
   { to: "/mailboxes", label: "Mailboxes" },
   { to: "/domains", label: "Domains" },
+];
+
+const ACCOUNT_NAV_ITEMS: NavItem[] = [
   { to: "/settings", label: "Settings" },
   { to: "/billing", label: "Account" },
 ];
 
 // Appended for operators only (user_info.is_admin — the server enforces
 // regardless; hiding it is cosmetics, not security).
-const ADMIN_NAV_ITEM = { to: "/admin", label: "Admin" };
+const ADMIN_NAV_ITEM: NavItem = { to: "/admin", label: "Admin" };
 
 const navList = css({
   display: "flex",
@@ -120,7 +129,7 @@ function MobileMenu({
   opened: boolean;
   onClose: () => void;
   path: string;
-  items: typeof NAV_ITEMS;
+  items: NavItem[];
   onLogout: () => void;
 }) {
   const active = activeNavItem(path);
@@ -206,41 +215,54 @@ function MobileMenu({
 // The header bell: unread count from page 0 (unread sort first there, so the
 // first page sees every unread up to its size — plenty for a badge). One
 // cached fetch shared with the notifications page via the query key.
-function NotificationBell({ active }: { active: boolean }) {
+//
+// Two placements: in the desktop nav row it takes a text link's exact box
+// (navLinkCss: no top padding, 1rem + underline below) with the icon centred
+// on the links' line box — the row is align-items:center, so a bell with its
+// own padding would centre on the taller box and sit visibly below the text.
+// In the collapsed header it's a compact square next to the hamburger.
+const bellCompactCss = css({
+  display: "block",
+  padding: "0.5rem",
+  color: "navLink",
+  _hover: { color: "navLinkActive" },
+});
+const bellCompactActiveCss = css({ color: "navLinkActive" });
+// An icon standing in a text link's box: centred on the links' line box.
+const navIconCss = css({ display: "flex", alignItems: "center", gap: "0.3rem", height: "1.5em" });
+const badgeCss = css({
+  position: "absolute",
+  minWidth: "0.9rem",
+  height: "0.9rem",
+  padding: "0 0.2rem",
+  borderRadius: "0.45rem",
+  backgroundColor: "accent",
+  color: "bg",
+  fontSize: "0.55rem",
+  lineHeight: "0.9rem",
+  fontWeight: "bold",
+  textAlign: "center",
+});
+const badgeNavCss = css({ top: "-0.3rem", right: "-0.1rem" });
+const badgeCompactCss = css({ top: 0, right: 0 });
+
+function NotificationBell({ active, inNav = false }: { active: boolean; inNav?: boolean }) {
   const notifications = useGetNotifications({ page: "0" });
   const unread = notifications.data?.notifications.filter((n) => !n.read).length ?? 0;
+  const linkCss = inNav
+    ? cx(navLinkCss, active ? navLinkActiveCss : undefined)
+    : cx(bellCompactCss, active ? bellCompactActiveCss : undefined);
   return (
     <Link
       to="/notifications"
       aria-label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}
-      className={css({
-        position: "relative",
-        display: "block",
-        padding: "0.5rem",
-        color: active ? "navLinkActive" : "navLink",
-        _hover: { color: "navLinkActive" },
-      })}
+      className={cx(linkCss, css({ position: "relative" }))}
     >
-      <Icon name="bell" size="1.1rem" />
+      <span className={inNav ? navIconCss : undefined}>
+        <Icon name="bell" size="1.1rem" />
+      </span>
       {unread > 0 && (
-        <span
-          aria-hidden="true"
-          className={css({
-            position: "absolute",
-            top: 0,
-            right: 0,
-            minWidth: "0.9rem",
-            height: "0.9rem",
-            padding: "0 0.2rem",
-            borderRadius: "0.45rem",
-            backgroundColor: "accent",
-            color: "bg",
-            fontSize: "0.55rem",
-            lineHeight: "0.9rem",
-            fontWeight: "bold",
-            textAlign: "center",
-          })}
-        >
+        <span aria-hidden="true" className={cx(badgeCss, inNav ? badgeNavCss : badgeCompactCss)}>
           {unread > 20 ? "20+" : unread}
         </span>
       )}
@@ -285,6 +307,96 @@ const footerLink = css({
 
 // ── Shell ────────────────────────────────────────────────────────────────────
 
+// The persona dropdown: Settings / Account / Admin. A plain controlled menu
+// (no popover/top-layer: the panel must hang off its button, and anchor
+// positioning isn't universal yet) — light-dismiss on outside press, Esc,
+// and any item click.
+const navButtonCss = css({
+  background: "none",
+  borderTop: "none",
+  borderLeft: "none",
+  borderRight: "none",
+  cursor: "pointer",
+  fontFamily: "inherit",
+});
+const menuPanelCss = css({
+  position: "absolute",
+  top: "100%",
+  right: 0,
+  zIndex: 10,
+  minWidth: "9rem",
+  margin: 0,
+  padding: "0.4rem 0",
+  listStyle: "none",
+  backgroundColor: "surface",
+  border: "1px solid",
+  borderColor: "border",
+  borderRadius: "0.2rem",
+  boxShadow: "0 0.4rem 1.2rem rgba(0, 0, 0, 0.35)",
+});
+const menuItemCss = css({
+  display: "block",
+  padding: "0.5rem 1rem",
+  color: "navLink",
+  textDecoration: "none",
+  fontSize: "0.8rem",
+  whiteSpace: "nowrap",
+  _hover: { color: "navLinkActive", backgroundColor: "surfaceHover" },
+});
+const menuItemActiveCss = css({ color: "navLinkActive", fontWeight: "bold" });
+
+function AccountMenu({ items, active }: { items: NavItem[]; active: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onPress = (e: MouseEvent) => {
+      if (e.target instanceof Node && !ref.current?.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPress);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPress);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const isActive = items.some((item) => item.to === active);
+  return (
+    <li ref={ref} className={css({ position: "relative", marginLeft: "2rem" })}>
+      <button
+        type="button"
+        aria-label="Account menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className={cx(navLinkCss, navButtonCss, isActive ? navLinkActiveCss : undefined)}
+      >
+        <span className={navIconCss}>
+          <Icon name="user" size="1.1rem" />
+          <Icon name="chevron-down" size="0.6rem" />
+        </span>
+      </button>
+      <ul role="menu" hidden={!open} className={menuPanelCss}>
+        {items.map((item) => (
+          <li key={item.to} role="none">
+            <Link
+              to={item.to}
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className={cx(menuItemCss, item.to === active ? menuItemActiveCss : undefined)}
+            >
+              {item.label}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </li>
+  );
+}
+
 function Shell() {
   const navigate = useNavigate();
   const routerInstance = useRouter();
@@ -321,7 +433,11 @@ function Shell() {
   // The Admin nav item exists only for operators. One cached fetch per
   // session; while it loads (or for everyone else) the nav is the plain set.
   const userInfo = useGetUserInfo({ query: { enabled: authed && !isAuthPage } });
-  const navItems = userInfo.data?.is_admin ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
+  const accountItems = userInfo.data?.is_admin
+    ? [...ACCOUNT_NAV_ITEMS, ADMIN_NAV_ITEM]
+    : ACCOUNT_NAV_ITEMS;
+  // The drawer lists everything flat.
+  const navItems = [...PRIMARY_NAV_ITEMS, ...accountItems];
 
   const logout = async () => {
     try {
@@ -407,14 +523,15 @@ function Shell() {
               <ul
                 className={cx(navList, css({ "@media (max-width: 1000px)": { display: "none" } }))}
               >
-                {navItems.map((item) => (
+                {PRIMARY_NAV_ITEMS.map((item) => (
                   <NavItem key={item.to} to={item.to} active={item.to === active}>
                     {item.label}
                   </NavItem>
                 ))}
                 <li className={css({ marginLeft: "2rem" })}>
-                  <NotificationBell active={path.startsWith("/notifications")} />
+                  <NotificationBell active={path.startsWith("/notifications")} inNav />
                 </li>
+                <AccountMenu items={accountItems} active={active} />
               </ul>
               {/* Collapsed header: the bell stays out of the drawer, next to
                   the hamburger, so unread state is visible without a tap. */}

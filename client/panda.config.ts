@@ -70,6 +70,9 @@ export default defineConfig({
           },
           paper: {
             50: { value: "#f9f9f5" },
+            // Light-mode page ground: the same warm paper, a step deeper so the
+            // page reads as cream rather than a bare white screen.
+            100: { value: "hsl(50, 22%, 91%)" },
           },
         },
         fonts: {
@@ -88,7 +91,7 @@ export default defineConfig({
       semanticTokens: {
         colors: {
           // Surfaces
-          bg: { value: { base: "{colors.ink.800}", _light: "{colors.paper.50}" } },
+          bg: { value: { base: "{colors.ink.800}", _light: "{colors.paper.100}" } },
           bgDeep: { value: { base: "{colors.ink.900}", _light: "hsl(50, 12%, 87%)" } },
           surface: {
             // The navy row tint behind entity lists and key/value tables.

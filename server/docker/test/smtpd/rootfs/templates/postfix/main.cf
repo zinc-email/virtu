@@ -25,6 +25,11 @@ virtual_gid_maps = static:${MAILBOX_GID}
 # Per env
 inet_interfaces = ${POSTFIX_INET_INTERFACES}
 
+# Scripted RCPT replies for the misbehaving open.relay neighbor (inert on
+# other peers) — see scripted-replies.pcre. Relay control stays on the
+# default smtpd_relay_restrictions; this list is purely additive.
+smtpd_recipient_restrictions = check_recipient_access pcre:/etc/postfix/scripted-replies.pcre
+
 # Milters
 milter_protocol = 6
 milter_default_action = accept

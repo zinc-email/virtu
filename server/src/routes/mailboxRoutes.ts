@@ -30,7 +30,7 @@ import { transferAliasMailboxJoins } from "./aliasMailboxes";
 import { timestampOf } from "./aliasText";
 import { normalizeEmail } from "./auth";
 import { HttpError } from "./httpError";
-import { DeletedResponse, ErrorResponse, MailboxDto, UpdatedResponse } from "./schema";
+import { DeletedResponse, ErrorResponse, MailboxDto, OkResponse, UpdatedResponse } from "./schema";
 
 const MailboxIdParams = z.object({ mailbox_id: z.coerce.number().int() });
 
@@ -96,6 +96,7 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       creation_timestamp: timestampOf(mb.createdAt),
       nb_alias: aliasIds.size,
       trash: trashMailboxId === mb.id,
+      suppressed: mb.suppressedAt !== null,
     };
   }
 
@@ -216,7 +217,13 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       // Same string for "not yours" and "no such mailbox" (SimpleLogin's
       // verify_mailbox_code) — ownership is not probeable.
       if (!mb || mb.userId !== req.user.id) throw new HttpError(400, "Invalid mailbox");
-      if (mb.verified) return mailboxToDict(mb, req.user.defaultMailboxId, req.user.trashMailboxId);
+      // A bounce-suppressed mailbox is NOT a no-op even when verified: the
+      // code proof is exactly what lifts the suppression (ABUSE.md Tier 1 —
+      // resumption requires re-verification, never the domain answering
+      // again).
+      if (mb.verified && mb.suppressedAt === null) {
+        return mailboxToDict(mb, req.user.defaultMailboxId, req.user.trashMailboxId);
+      }
 
       const result = await consumeVerificationCode(db, {
         userId: req.user.id,
@@ -234,12 +241,60 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       }
       if (result === "wrong") throw new HttpError(400, "Invalid activation code");
 
-      await db.update(mailboxes).set({ verified: true }).where(eq(mailboxes.id, mb.id));
+      await db
+        .update(mailboxes)
+        .set({ verified: true, suppressedAt: null })
+        .where(eq(mailboxes.id, mb.id));
       return mailboxToDict(
-        { ...mb, verified: true },
+        { ...mb, verified: true, suppressedAt: null },
         req.user.defaultMailboxId,
         req.user.trashMailboxId,
       );
+    },
+  });
+
+  a.route({
+    method: "POST",
+    url: "/mailboxes/:mailbox_id/verify/request",
+    config: { rateLimit: { max: 10, timeWindow: "1 hour" } },
+    schema: {
+      description:
+        "Email a fresh 6-digit verification code for a mailbox that is unverified " +
+        "or bounce-suppressed (suppressed mailboxes resume forwarding only after " +
+        "re-verifying — proof the address receives mail again). 400 when the " +
+        "mailbox is already verified and not suppressed.",
+      tags: ["Mailbox"],
+      security: [{ apiKeyAuth: [] }],
+      params: MailboxIdParams,
+      response: { 200: OkResponse, 400: ErrorResponse, 401: ErrorResponse, 429: ErrorResponse },
+    },
+    handler: async (req) => {
+      const rows = await db
+        .select()
+        .from(mailboxes)
+        .where(eq(mailboxes.id, req.params.mailbox_id))
+        .limit(1);
+      const mb = rows[0];
+      if (!mb || mb.userId !== req.user.id) throw new HttpError(400, "Invalid mailbox");
+      if (mb.verified && mb.suppressedAt === null) {
+        throw new HttpError(400, "Mailbox is already verified");
+      }
+
+      const { code, row } = await createVerificationCode(db, {
+        userId: req.user.id,
+        purpose: "mailbox",
+        mailboxId: mb.id,
+      });
+      const { subject, textBody } = mailboxVerificationEmail(mb.email, code);
+      await sendWithRateLimit(db, {
+        userId: req.user.id,
+        alertType: mailboxVerificationAlertType(mb.id),
+        to: mb.email,
+        subject,
+        textBody,
+        refId: row.id,
+      });
+      return { ok: true };
     },
   });
 

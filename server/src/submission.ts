@@ -53,14 +53,23 @@ import {
   smtpConnectionsTotal,
   submissionAuthTotal,
   submissionEnqueuedTotal,
+  submissionQuotaRefusedTotal,
   submissionRcptRefusedTotal,
 } from "./metrics/index.ts";
+import { isPremium } from "./billing/premium.ts";
 import { mailboxMatchKey } from "./pipeline/addressMatch.ts";
 import { type AuthThrottle, authThrottleKey, createAuthThrottle } from "./pipeline/authThrottle.ts";
 import { findOrCreateContact, resolveReverseAlias } from "./pipeline/contacts.ts";
 import { selectReplyDkimKey } from "./pipeline/dkim.ts";
 import { createReplyLog, resolveOurMessageId, setMessageIdMap } from "./pipeline/emailLog.ts";
 import { senderOwnership } from "./pipeline/policy.ts";
+import { recordSmtpRejection } from "./pipeline/smtpRejection.ts";
+import {
+  countRecentSends,
+  dailySendLimit,
+  decideSendQuota,
+  type SendQuotaLimits,
+} from "./pipeline/sendQuota.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
 import { enqueue } from "./queue/index.ts";
 import {
@@ -84,6 +93,8 @@ export interface SubmissionOptions {
   tls?: SmtpTlsConfig;
   /** Failed-AUTH throttle override for tests; default {@link createAuthThrottle}. */
   authThrottle?: AuthThrottle;
+  /** Daily send quota plan defaults; omitted = quota not enforced (tests). */
+  sendQuota?: SendQuotaLimits;
   logger?: Logger;
 }
 
@@ -360,6 +371,34 @@ async function handleSubmissionData(
   if ("reject" in resolved) return resolved.reject;
   const { alias, plan, mode, sendingMailboxId } = resolved;
 
+  // Daily send quota (PLAN Lane K P2), pre-enqueue and pre-write: the cap on
+  // what a leaked device credential can blast through our IP. Counted per
+  // recipient over a rolling 24h; a multi-recipient message is refused whole
+  // rather than partially sent. 452/4.7.1 = transient, so a legitimate MUA
+  // retries tomorrow instead of erroring the message out of its outbox.
+  if (opts.sendQuota !== undefined) {
+    const limit = dailySendLimit(user, await isPremium(user), opts.sendQuota);
+    const quota = decideSendQuota(
+      limit,
+      await countRecentSends(opts.db, user.id, new Date()),
+      plan.length,
+    );
+    if (!quota.allowed) {
+      submissionQuotaRefusedTotal.inc();
+      log.info("quota_refused", {
+        from: envelope.mailFrom,
+        recipients: plan.length,
+        used: quota.used,
+        limit: quota.limit,
+      });
+      return rejectWith(
+        452,
+        "4.7.1",
+        `Daily send limit reached (${quota.limit}/day); try again later`,
+      );
+    }
+  }
+
   const parsed = parseMessage(event.raw);
   const aliasDomain = alias.email.slice(alias.email.indexOf("@") + 1);
 
@@ -507,6 +546,8 @@ async function handleSubmissionData(
       envelopeFrom,
       envelopeTo: target.contact.websiteEmail,
       maxRawBytes: opts.maxMessageSize,
+      userId: user.id,
+      emailLogId: emailLog.id,
     });
     submissionEnqueuedTotal.inc({ mode });
     log.info("submission_queued", {
@@ -548,12 +589,39 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
       const key = authThrottleKey(event.session.remoteAddress, event.username);
       if (throttle.isLimited(key)) {
         submissionAuthTotal.inc({ result: "throttled" });
-        return rejectWith(454, "4.7.0", "Too many failed authentication attempts; try again later");
+        const result = rejectWith(
+          454,
+          "4.7.0",
+          "Too many failed authentication attempts; try again later",
+        );
+        await recordSmtpRejection(
+          opts.db,
+          {
+            entrypoint: "submission",
+            phase: "auth",
+            remoteAddress: event.session.remoteAddress,
+            heloName: event.session.heloName,
+            reject: result.reject,
+          },
+          opts.logger ?? defaultSubmissionLogger(),
+        );
+        return result;
       }
       const ok = await verifyCredentials(opts, event.username, event.password);
       if (!ok) {
         throttle.recordFailure(key);
         submissionAuthTotal.inc({ result: "bad_credentials" });
+        await recordSmtpRejection(
+          opts.db,
+          {
+            entrypoint: "submission",
+            phase: "auth",
+            remoteAddress: event.session.remoteAddress,
+            heloName: event.session.heloName,
+            reject: BAD_CREDENTIALS.reject,
+          },
+          opts.logger ?? defaultSubmissionLogger(),
+        );
         return BAD_CREDENTIALS;
       }
       throttle.clear(key);
@@ -566,7 +634,21 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
       if (user === null) return BAD_CREDENTIALS;
       const ownership = await senderOwnership(opts.db, user.id, event.address);
       if (ownership.kind === "none") {
-        return rejectWith(553, "5.7.1", "Sender address rejected: not owned by user");
+        const result = rejectWith(553, "5.7.1", "Sender address rejected: not owned by user");
+        await recordSmtpRejection(
+          opts.db,
+          {
+            entrypoint: "submission",
+            phase: "mail_from",
+            remoteAddress: event.session.remoteAddress,
+            heloName: event.session.heloName,
+            mailFrom: event.address,
+            userId: user.id,
+            reject: result.reject,
+          },
+          opts.logger ?? defaultSubmissionLogger(),
+        );
+        return result;
       }
       return { accept: true };
     },
@@ -583,10 +665,49 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
       const address = event.address.trim().toLowerCase();
       const contact = await resolveReverseAlias(opts.db, address, user.id);
       if (contact !== null) return { accept: true };
-      if (await refusesLocalAddress(opts.db, opts.mailDomain, address)) return NOT_REVERSE_ALIAS;
+      if (await refusesLocalAddress(opts.db, opts.mailDomain, address)) {
+        await recordSmtpRejection(
+          opts.db,
+          {
+            entrypoint: "submission",
+            phase: "rcpt_to",
+            remoteAddress: event.session.remoteAddress,
+            heloName: event.session.heloName,
+            rcptTo: event.address,
+            userId: user.id,
+            reject: NOT_REVERSE_ALIAS.reject,
+          },
+          opts.logger ?? defaultSubmissionLogger(),
+        );
+        return NOT_REVERSE_ALIAS;
+      }
       return { accept: true };
     },
-    onData: (event) => handleSubmissionData(event, opts),
+    // Every DATA-phase refusal — mode rules, leak screens, the send quota —
+    // funnels through handleSubmissionData's return, so one wrapper records
+    // them all with the completed envelope. (The extra user lookup runs only
+    // on the reject path.)
+    onData: async (event) => {
+      const result = await handleSubmissionData(event, opts);
+      if ("reject" in result) {
+        const user = await authedUser(opts.db, event.envelope.authUser);
+        await recordSmtpRejection(
+          opts.db,
+          {
+            entrypoint: "submission",
+            phase: "data",
+            remoteAddress: event.session.remoteAddress,
+            heloName: event.envelope.heloName,
+            mailFrom: event.envelope.mailFrom,
+            rcptTo: event.envelope.rcptTo.map((r) => r.address).join(", "),
+            userId: user?.id,
+            reject: result.reject,
+          },
+          opts.logger ?? defaultSubmissionLogger(),
+        );
+      }
+      return result;
+    },
   };
 }
 
@@ -616,6 +737,10 @@ export function submissionOptionsFromConfig(): SubmissionOptions {
     verpSecret: config.verpSecret,
     maxMessageSize: config.smtpMaxMessageSize,
     tls: loadSmtpTls(config.smtpTlsCertFile, config.smtpTlsKeyFile),
+    sendQuota: {
+      freePerDay: config.sendQuotaFreePerDay,
+      premiumPerDay: config.sendQuotaPremiumPerDay,
+    },
   };
 }
 

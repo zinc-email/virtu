@@ -1,5 +1,5 @@
 // SMTP credential routes int tests (per-device submission passwords).
-// Prerequisites: `just up` + `just db push`.
+// Prerequisites: `just up` (migrates on boot).
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { App } from "../app/server";

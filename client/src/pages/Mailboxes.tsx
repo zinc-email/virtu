@@ -28,7 +28,15 @@ import {
 export function mailboxTags(mb: Mailbox) {
   return (
     <Tags>
-      {mb.verified ? <Tag tone="primary">Verified</Tag> : <Tag tone="accent">Not verified</Tag>}
+      {/* Paused (bounce-suppressed) outranks Verified: it's the state that
+          needs the user's attention — the detail page owns the fix. */}
+      {mb.suppressed ? (
+        <Tag tone="accent">Paused</Tag>
+      ) : mb.verified ? (
+        <Tag tone="primary">Verified</Tag>
+      ) : (
+        <Tag tone="accent">Not verified</Tag>
+      )}
       <Tag>{mb.nb_alias === 1 ? "1 alias" : `${mb.nb_alias} aliases`}</Tag>
       {mb.default && <Tag>Default</Tag>}
       {mb.trash && <Tag>Trash inbox</Tag>}

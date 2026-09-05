@@ -1,10 +1,19 @@
 # STATE — progress against PLAN.md
 
-Last updated: 2026-08-14 (observability + admin wave: Lane J foundation +
-Lane K P1 — structured logs, Prometheus metrics + Grafana Cloud shipping,
-queue reaper/retention/drop, the admin flag + `/api/admin` surface + first
-admin pages — PLAN decisions #15/#16). Companion to `PLAN.md` (the design
-doc); this file tracks what is built, how it was verified, and what remains.
+Last updated: 2026-09-02 (reputation guards before launch — per-alias/
+per-mailbox inbound rate limit, no-DSN-for-flagged-inbound backscatter
+guard, per-destination outbound backpressure with the deliverability
+Grafana board, RFC 2142 role addresses routed to opted-in operators, and
+`docs/reputation-telemetry.md`; details in the Lane K row). Previous:
+2026-09-01 (Lane K P2 first slice — durable queue
+attribution columns, per-user daily send quotas at submission pre-enqueue,
+the `smtp_rejections` refusal log + retention, notifications API + bell UI
+— PLUS the merge of the parked invite lane from 2026-08-22: ABUSE.md
+Tier 0, `invites` table, `SIGNUP_INVITE_ONLY` graduation gate in
+/auth/verify, `/api/admin/invites` mint/list/revoke + AdminInvites page +
+Login invite flow, `bin/invite-create`). Companion to `PLAN.md` (the
+design doc); this file tracks what is built, how it was verified, and
+what remains.
 
 ## TL;DR
 
@@ -24,15 +33,25 @@ and the entire production/deploy story, which has not been started.
 
 | Tier | Count | Command | Last state |
 |---|---|---|---|
-| Unit | ~462 tests / 33 files | `just test-unit` | green |
+| Unit | ~530 tests / 43 files | `just test-unit` | green |
 | Contract (bridge protocol) | 14 tests / 2 files | `just test-contract` | green |
 | CI gauntlet | format + 2× tsc + SDK gen + unit + contract | `just check` | green |
-| Integration (API vs real Postgres) | 136 tests / 10 files | `just up && just db push && just test-int` | green |
-| Client DOM (real React vs running stack) | 14 tests / 5 files | `just up && just db push && just test-client` | green |
-| Stories (simulated internet) | 24 stories / 13 files | `just test-net-up && just test-story` | green ×2 (2026-08-14, incl. the maild metrics assertion) |
+| Integration (API vs real Postgres) | 184 tests / 19 files | `just up && just test-int` | green |
+| Client DOM (real React vs running stack) | 18 tests / 7 files | `just up && just test-client` | green |
+| Stories (simulated internet) | 29 stories / 15 files | `just test-net-up && just test-story` | green (2026-09-02, incl. operator mail + inbound rate limit; 2026-09-01 suppression, async-DSN threshold, scripted open.relay wire replies) |
 | Live Stripe (test mode) | manual + watcher | see README billing section | verified 2026-08-08 |
 
-Test-net gotcha found 2026-08-14: the `pg_test` volume had survived since
+**Migrations (2026-09-02):** schema now ships as generated SQL in
+`server/drizzle/` (`just db-generate` → commit → applied by
+`src/scripts/dbMigrate.ts`: dev api boot, the serve stack's `db-migrate`
+one-shot ahead of api/maild, the test net's mail container). `drizzle-kit
+push` is out of the workflow; `just db-baseline` bridges a push-era DB once
+(each.email needs it before its first migrations-era deploy). The
+create-vs-rename question is answered at generate time on the workstation,
+so deploys are unattended and the tag-push deploy now carries schema.
+
+Test-net gotcha found 2026-08-14 (moot since generated migrations — the
+mail container applies committed SQL, no prompts to skip): the `pg_test` volume had survived since
 before the `domains` rename, and the mail container's boot-time
 `drizzle-kit push --force` silently skipped the interactive rename question
 (the same no-TTY exit-0 pitfall the deploy lane documents), so every story
@@ -57,9 +76,21 @@ initech + contact minted), Cc-of-own-mailbox refused, per-device SMTP
 password lifecycle (API create → real 587 send → revoke → 535), disabled
 alias → trash inbox with `X-Virtu-Trash` (and on-alias mail unmarked), and
 multi-mailbox fan-out (one send → both Maildirs, one email_log per mailbox;
-a dead extra mailbox detaches at the bounce threshold while the alias and
-its healthy primary keep going, and re-adding it starts a fresh bounce
-ledger — the detach writes a durable reset marker into sent_alerts).
+a dead extra mailbox SUPPRESSES on its first 5.1.1 bounce — stays attached,
+excluded from delivery — while the alias and its healthy primary keep
+going). Since 2026-09-01 the bounce loop is four stories: first-strike
+mailbox suppression (one 5.1.1 → paused mailbox, drop-not-bounce, in-app
+notification, alias stays enabled), threshold auto-disable driven by
+async 5.7.1 DSNs at the VERP return path (non-suppression codes still
+accumulate to >12/24h), and — via the **scripted open.relay neighbor**
+(`smtpd` template `scripted-replies.pcre`: a recipient
+`reply-<code>-<c>-<s>-<d>-<tag>@open.relay` is refused at RCPT with exactly
+that SMTP + enhanced code, `scriptedReplyAddress()` in `test/personas.ts`)
+— the same regimes as genuine SMTP-time wire replies: a 550 5.7.1
+threshold run through deliverd's permanent path, and a 450 tempfail pinning
+the retry/backoff path (row back to `pending`, tries counted, no bounce,
+no suppression). The detach-at-threshold decision table moved to
+`pipeline/bounce.int.test.ts`.
 
 The live Stripe pass caught a real bug the self-signed tests missed
 (out-of-order `subscription.created` regressing status — fixed in `fdf36a2`
@@ -74,13 +105,13 @@ with a regression test encoding the observed sequence).
 | B — Email auth (mailauth) | ✅ done | All verification in-process; table-driven verdicts; glts spf-milter documented as fallback, unused |
 | C — Rewrite core | ✅ done | VERP byte-compatible with SimpleLogin (CPython golden vector) + constant-time compare + real expiry; forward/reply whitelists; refuse-to-leak on replies |
 | D — Queue + deliverd | ✅ done* | SKIP LOCKED worker, backoff, RFC 3464 DSNs (null reverse path, rate-limited). *Gap: bounces OF transactional mail are log-only |
-| E — API (SimpleLogin-compat) | ~90% | 28+ spec paths incl. custom domains, billing extras, SMTP credentials (Virtu extension) + mailbox `trash` flag. Auth is passwordless (PLAN decision #13): `/auth/login` + `/auth/verify` replace SL's register/activate/reactivate/login, sudo is an emailed code. Deferred: MFA, PATCH user_info, DELETE /user, cookie_token, notifications, export, apple/phone (forgot_password is moot — no passwords) |
-| F — Client | ~85% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login (the passwordless single entrypoint — one email field for login AND signup, styled after the legacy 401 page, code step with PinInput; /register redirects here), alias detail (new/used states + activities + contacts/delete), **mailboxes (add/verify-by-code/default/trash/delete-with-transfer; full-width index + `/mailboxes/$mailboxId` detail page owning the controls as KeyValue switch rows — default is one-way so the holder's switch is ON+locked; index rows carry buttons only while unverified)**, settings (native selects + SMTP device passwords: create-with-one-time-reveal, revoke), billing (key/value + Stripe actions), domains index + detail (DNS records to publish, verify with per-check errors, catch-all switch, delete). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Responsive pass 2 (2026-08-10, screenshot-verified 360/700/1100/1440): index-row controls hide on small screens (aliases ≤480px, mailboxes ≤900px — the detail pages own them), drawers go full-width ≤650px, the hamburger demotes Log out to a bottom meta row (with the theme toggle), domain rows link instead of carrying a Verify button (verify lives top+bottom of the detail page), and `FieldRow` (ui.tsx) stacks every [input][button] pair ≤650px. Missing: notifications, search, per-alias mailbox picker UI (API supports `mailbox_ids`) |
+| E — API (SimpleLogin-compat) | ~90% | 28+ spec paths incl. custom domains, billing extras, SMTP credentials (Virtu extension) + mailbox `trash` flag. Auth is passwordless (PLAN decision #13): `/auth/login` + `/auth/verify` replace SL's register/activate/reactivate/login, sudo is an emailed code. Deferred: MFA, PATCH user_info, DELETE /user, cookie_token, export, apple/phone (forgot_password is moot — no passwords) |
+| F — Client | ~85% | Restyled to the legacy virtu design on Panda CSS (semantic tokens in `panda.config.ts`, primitives in `src/ui.tsx`: Button/Field/Select/Switch/KeyValue/EntityList/CopyButton/Logo; root font-size 18px→24px@1200px, everything rem-based). Pages: login (the passwordless single entrypoint — one email field for login AND signup, styled after the legacy 401 page, code step with PinInput; /register redirects here), alias detail (new/used states + activities + contacts/delete), **mailboxes (add/verify-by-code/default/trash/delete-with-transfer; full-width index + `/mailboxes/$mailboxId` detail page owning the controls as KeyValue switch rows — default is one-way so the holder's switch is ON+locked; index rows carry buttons only while unverified)**, settings (native selects + SMTP device passwords: create-with-one-time-reveal, revoke), billing (key/value + Stripe actions), domains index + detail (DNS records to publish, verify with per-check errors, catch-all switch, delete). Mantine is fully removed (banned — see CLAUDE.md): overlays are native `<dialog>` (`src/overlays.tsx`), PinInput/TextArea/CheckboxGroup are ours, color scheme is `src/colorScheme.ts` (`data-color-scheme` on html). Responsive pass 2 (2026-08-10, screenshot-verified 360/700/1100/1440): index-row controls hide on small screens (aliases ≤480px, mailboxes ≤900px — the detail pages own them), drawers go full-width ≤650px, the hamburger demotes Log out to a bottom meta row (with the theme toggle), domain rows link instead of carrying a Verify button (verify lives top+bottom of the detail page), and `FieldRow` (ui.tsx) stacks every [input][button] pair ≤650px. Missing: search, per-alias mailbox picker UI (API supports `mailbox_ids`) |
 | G — Homepage | ✅ done | 7 static Astro pages, verbatim legacy copy/tokens, zero client JS. Served at `/` behind the Caddy proxy; SPA under `/app`, API under `/api` — one origin, same topology dev and prod (dev proxy built; see below) |
 | H — Simulated internet | ✅ done | Subnets 192.168.34/43 (legacy stack owned 33/42; legacy now stopped — renumbering back is optional). Maildir + X-Virtu-Test-Id; no resets, parallel-safe |
 | I — Billing | ✅ done | SDK-free Stripe; live-verified checkout → webhook → premium flip; keys in gitignored `server/.env` |
 | J — Observability & queue hygiene | ✅ done | 2026-08-14, decision #15. First-party structured logger (`src/log.ts`, all 6 daemon files migrated off console.log) + Prometheus registry (`src/metrics/`, `virtu_*` set) — api at `/meta/metrics`, maild on `:9100` (also its liveness: listeners + worker heartbeat); `/meta/health` now probes the DB; compose healthchecks on api+maild. Queue: `claimed_at` lease + reaper, retention (raw cleared on sent; 7d/30d windows), status-guarded terminal writes, `dropMessages`/`requeueMessages`, retry horizon 6→25 tries (~4 days, 6h cap; test net pins fast values). Alloy → Grafana Cloud under compose profile `observe` (`alloy/config.alloy`); creds go in `/opt/virtu/.env`. **Not yet verified against a real Grafana Cloud stack** — needs the account + creds on lmnop first |
-| K — Admin & abuse | P1 ✅ | 2026-08-14, decision #16. `USER_FLAGS.admin` bit + `requireAdmin` nested `/api/admin` scope; endpoints: overview, queue list (status filter + limit + total), detail (allowlisted routing headers — never Subject/body — + VERP-decoded owner), drop, requeue, delete (terminal rows only, ahead of retention), bounce (operator DSN via the shared `pipeline/dsnDelivery.ts` — extracted from deliverd — then failed "bounced by operator"; NO recordBounce, so the auto-disable ledger never moves on an operator action; forward diagnostics sanitized as always); `is_admin` on user_info. Client: Admin nav item (admins only), AdminOverview/AdminQueue/AdminQueueMessage pages, in-kit, screenshot-verified 360/700/1100/1440. Break-glass CLI: `bin/admin-{grant,revoke}`, `bin/queue-{list,stats,drop,requeue}` + just recipes (verified live against the dev DB). `sudoGuard.ts` seam extracted (POST /api_key refactored onto it); admin ops NOT sudo-gated until P2. Roadmap P2–P4 in PLAN Lane K |
+| K — Admin & abuse | P1 ✅ | 2026-08-14, decision #16. `USER_FLAGS.admin` bit + `requireAdmin` nested `/api/admin` scope; endpoints: overview, queue list (status filter + limit + total), detail (allowlisted routing headers — never Subject/body — + VERP-decoded owner), drop, requeue, delete (terminal rows only, ahead of retention), bounce (operator DSN via the shared `pipeline/dsnDelivery.ts` — extracted from deliverd — then failed "bounced by operator"; NO recordBounce, so the auto-disable ledger never moves on an operator action; forward diagnostics sanitized as always); `is_admin` on user_info. Client: Admin nav item (admins only), AdminOverview/AdminQueue/AdminQueueMessage pages, in-kit, screenshot-verified 360/700/1100/1440. Break-glass CLI: `bin/admin-{grant,revoke}`, `bin/queue-{list,stats,drop,requeue}` + just recipes (verified live against the dev DB). `sudoGuard.ts` seam extracted (POST /api_key refactored onto it); admin ops NOT sudo-gated until P2. Roadmap P2–P4 in PLAN Lane K. **Invite lane** (2026-08-22, ABUSE.md Tier 0; merged 2026-09-01): `invites` table (code plaintext by design, created_by→used_by kept forever = the invite graph, SET NULL never CASCADE); `SIGNUP_INVITE_ONLY` env gates /auth/verify at graduation — invite consumed inside graduateUser's tx after code proof (no enumeration leak; a failed invite spends the login code, Login page offers the fresh-code retry); `/api/admin/invites` GET/POST/DELETE (revoke = unused only, 404 otherwise) riding the shared `auth/invites.ts` primitive with `bin/invite-create` + just recipe; AdminInvites page + Overview link + Login invite panel. Verified: 7 int tests (`invites.int.test.ts` — wall, lifecycle, gate incl. rollback/reuse/expiry/existing-user), full int tier + `just check` green, and a real-browser Playwright walk (fresh email → 403 → invite + resent code → app) + screenshots 360/700/1100/1440, no overflow. **P2 first slice ✅ 2026-09-01**: (1) durable attribution — `outbound_messages.user_id/email_log_id` written by every enqueue (mx forwards + trash copies, submission, transactional via sendWithRateLimit's userId, DSNs from the email_log), admin queue DTO carries `user_id`, `resolveQueueOwner` falls back to the columns when VERP doesn't decode (DSNs/trash/expired now name their user); (2) per-user daily send quota at submission pre-enqueue — counts `email_logs.is_reply` recipients over a rolling 24h (forwards never count), refuses whole messages 452/4.7.1, limits `users.max_daily_sends` override (0 = unlimited) else SEND_QUOTA_{FREE,PREMIUM}_PER_DAY (50/500); (3) `smtp_rejections` — every SMTP-time refusal from both daemons (auth/mail_from/rcpt_to/data phases) recorded fail-open with envelope context + the exact reply, aged out on the retention tick (SMTP_REJECTIONS_RETAIN_DAYS=30), metric `virtu_smtp_rejections_total`; (4) notifications — SL-compatible GET /notifications (unread-first, 20/page, humanized created_at via `routes/timeAgo.ts`) + POST /notifications/:id/read, header bell with unread badge + /notifications page (screenshot-verified 360–1440), `bin/notification-create` dev/announce tool. Still open from P2: sudo-gating the destructive ops, admin user views, notifications for quota hits. **Reputation guards ✅ 2026-09-02** (the pre-launch pass): (1) **inbound rate limit** — `pipeline/inboundRateLimit.ts`, per-alias distinct messages / per-mailbox copies over a trailing 60s off `email_logs`, `INBOUND_RATE_LIMIT_PER_{ALIAS,MAILBOX}_PER_MINUTE` (10/15, 0 = off), the last gate in `decideRcpt` → `450 4.7.1` (sender retries), `virtu_mx_rate_limited_total{scope}`, recorded in `smtp_rejections`; story pins RCPT 450 at the real MX and acceptance after the window; (2) **backscatter guard** — the mx persists the "flag" verdict on `email_logs.is_spam/spam_status` (forward + blocked rows), `sendFailureDsn` skips forward-phase DSNs for flagged rows (`flagged_inbound`, also an operator-bounce skip reason) while bounce accounting still runs; (3) **per-destination backpressure** — `destination_throttles` + `queue/destinationThrottle.ts`: `421` anywhere or `4.7.x` at greeting/EHLO/MAIL FROM/DATA (RCPT-time 4.7.x = greylisting, never) pauses the recipient DOMAIN base·2^strikes (`DESTINATION_PAUSE_{BASE,MAX}_MS` 5m/1h, 0 disables — the test net disables it), deliverd defers paused rows without an attempt or a try, a success resets strikes; `DeliveryOutcome` now carries the SMTP reply (step/code/enhanced) → `virtu_queue_destination_replies_total{provider,step,code,enhanced}`, `virtu_destination_pauses_total`, `virtu_queue_destination_deferred_total`, `virtu_destination_paused` gauge; `GET/DELETE /api/admin/destinations` + AdminDestinations page + `bin/destination-resume`; overview shows paused count; Grafana board `grafana/deliverability.json`; (4) **operator mail** — `pipeline/operatorMail.ts` + `mail/rewriteOperator.ts`: `OPERATOR_LOCALPARTS` (postmaster,abuse,hostmaster,security,dmarc) on the service domain resolve BEFORE the alias lookup to the opted-in admins (`USER_FLAGS.operatorMail`; first admin by default), one DKIM+ARC-signed copy per operator's deliverable default mailbox on the null reverse path, From aligned on our domain with the sender in Reply-To, `X-Virtu-Operator-Mail`; accepted-and-logged when nobody is deliverable (postmaster never bounces); reserved in `/v3/alias/custom/new`; `GET/PATCH /api/admin/operators` + AdminOperators page (KVSwitch rows) + `bin/operator-mail`; story pins dkim=pass header.d=virtu.email at qmail; (5) **`docs/reputation-telemetry.md`** — signup runbook (DMARC rua → `dmarc@`, Google Postmaster v2, Microsoft SNDS/JMRP, Yahoo CFL) with the automate-or-read verdict: ingest the mailed reports (rua, ARF), leave the dashboards to humans. Screenshot-verified 360–1440, no overflow. **Tier 1 mailbox suppression ✅ 2026-09-01** (ABUSE.md's "single highest-value control"): a forward-phase bounce with enhanced code 5.1.1/5.2.1 suppresses the MAILBOX first-strike (`mailboxes.suppressed_at`, `pipeline/suppression.ts`) — every alias delivering there pauses via the shared `policy.ts mailboxDeliverable` bar (delivery set, trash inbox, catch-all mint, detach survivors), inbound drops with `email_logs.blocked_reason="mailbox_suppressed"` (never bounces), in-app notification, metric `virtu_mailbox_suppressed_total`. Detected on BOTH bounce paths: deliverd SMTP-time (enhanced code now plumbed `classifySendResult → onPermanentFailure`) and the mx async-DSN intake (`extractDsnStatus` on the report's Status field). Resume = re-verification ONLY (never auto: recycled-domain-as-spamtrap looks like recovery): new `POST /mailboxes/:id/verify/request` emails a fresh code for unverified OR suppressed, the verify code-proof clears `suppressed_at`; Mailbox DTO gained `suppressed` (Virtu extension), client shows Paused tag + detail-page explainer + Re-verify flow (screenshot-verified 360–1440); `bin/mailbox-suppress` dev/operator tool + just recipe. Threshold auto-disable/detach still governs non-suppression codes — the M3 bounce story now drives it through fake async 5.7.1 DSNs at the VERP return path, the suppression story pins first-strike + drop-not-bounce, multiMailbox pins suppressed-extra-stays-attached-primary-delivers, and `pipeline/bounce.int.test.ts` pins the detach/disable/promote decision table (incl. suppressed-mailboxes-are-never-survivors) |
 
 Milestones M1–M4 (PLAN sequencing diagram): all reached.
 
@@ -102,10 +133,11 @@ Milestones M1–M4 (PLAN sequencing diagram): all reached.
    admin flag + a confirm dialog only; the `sudoGuard.ts` seam exists and
    P2 flips it on together with the SudoDialog the user-facing destructive
    deletes also need.
-7. **Queue ownership is VERP-only** — admin detail decodes the return path
-   (5-day validity; retention keeps rows younger), so trash copies and DSNs
-   show no owner. Durable `outbound_messages.user_id` attribution is the
-   Lane K P2 schema decision.
+7. ~~**Queue ownership is VERP-only**~~ (resolved 2026-09-01: durable
+   `outbound_messages.user_id`/`email_log_id` written at every enqueue;
+   admin detail falls back to them when the VERP doesn't decode. Rows
+   enqueued before the wave stay unattributed until retention ages them
+   out.)
 8. **Grafana Cloud shipping unverified** — the Alloy service + config are
    in the serve stack behind `COMPOSE_PROFILES=observe`, but no Grafana
    Cloud stack/credentials exist yet; first real scrape should happen on
@@ -246,6 +278,11 @@ for the next controller).
 
 ## Not started
 
+- **Backups** — planned 2026-09-02 in **`plans/backups.md`**: nightly
+  `pg_dump` → `age` (pubkey on the box, private key on the workstation) →
+  Backblaze B2 via rclone with a write-only key, gated on
+  `BACKUP_AGE_PUBKEY`; retention by B2 lifecycle rules; `bin/db-restore`
+  drill into a scratch container; `bin/backup-provision` for the bucket.
 - **Production/deploy story** — _mostly built (2026-08-10), first target
   each.email:_ the serve stack (`docker-compose.serve.yml`) now runs the whole
   app — db, api, built frontends behind the **universal `Caddyfile`**, and
@@ -256,11 +293,10 @@ for the next controller).
   bounces maild after renewals (listeners read certs once at startup — weekly
   cron on the box). Provisioning + deploy are `bin/host-provision` (swap,
   docker, virtu user) and `bin/host-deploy` (fetch + checkout, build, up,
-  cert sync — takes an optional ref, defaults origin/main; **never pushes
-  the schema** — unattended `push --force` auto-accepts data-loss SQL, and
-  drizzle-kit without a TTY errors yet exits 0, a silent skip). Schema
-  changes are manual: `just db push` (interactive drizzle push, no
-  --force, prompts on lossy statements); `bin/dkim-ensure`
+  cert sync — takes an optional ref, defaults origin/main; since 2026-09-02
+  the serve stack's `db-migrate` one-shot applies committed `server/drizzle/`
+  migrations before api/maild start, so schema rides the deploy; push-era
+  boxes are baselined once with `just db-baseline`); `bin/dkim-ensure`
   mints/prints the service-domain DKIM key.
   Runbook: README "Deploy"; annotated DNS record set: `each.email.zone`.
   Each-box facts (2026-08-10): each.email rDNS → mail.each.email, outbound 25
@@ -378,6 +414,42 @@ for the next controller).
   target. Verified on this box: JUnit heuristics suite authored (runs with
   `./gradlew test` on a JDK machine); on-device checklist items 13–15 added
   to mobile/android/README.md. No client or server changes.
+- **Browser extension (2026-09-05)** — the legacy Chrome/Firefox extension
+  (`tmp/virtu/browser-extension`, already Manifest V3) ported to `extension/`
+  as its own Bun package. The toolbar popup is the **built client SPA
+  verbatim** (`bin/extension-build` copies `client/dist` to `build/app/` and
+  injects the shim + a popup stylesheet into its `<head>`), so one client
+  build serves the site, the webviews, and the extension. The extension is a
+  third shell of the seam: `ShellPlatform` gained `"extension"`, `VirtuShell`
+  an optional `apiOrigin` (the popup is `chrome-extension://…`, where the
+  SDK's relative `/api` points nowhere — `api/client.ts` prefixes it), and
+  `isExtension()` switches the router to hash history with no basepath (the
+  popup is a file) and the 401 bounce to `#/login` — the one place the
+  platform changes routing rather than a capability (shell.md updated).
+  Shim `src/popup-shell.ts`: `apiKey.store/clear` ↔ `chrome.storage.local`,
+  `external.open` → new tab, `share` → Web Share API or `failed`, plus
+  localStorage healing from `chrome.storage` (the Android shell's Keystore
+  trick). Content script `src/content.ts` (the legacy inject.js on the
+  SimpleLogin API, Popper dropped, UI in a closed shadow root): the [Z]
+  button on email fields, a menu of aliases used on this site
+  (`POST /v2/aliases {query: hostname}` + `/v5/alias/options?hostname=`
+  recommendation first), "New alias for <host>" via `/alias/random/new
+  ?hostname=` with a `Used on <host>` note, right-click items (fill with
+  latest-or-mint / show button) routed to the right-clicked FRAME, per-site
+  cache in `chrome.storage.local`, 401 → "Sign in" opens the app in a tab.
+  API calls relay through the background worker (`src/background.ts`,
+  `src/api.ts`, `src/messages.ts`) — MV3 host permissions don't cover
+  content scripts. `VIRTU_ORIGIN` at build time picks the deployment (bakes
+  the API origin + the single host permission). Verified: `bin/check` green
+  (extension typecheck added to `bin/typecheck`; `extension/contract/
+  shim.contract.test.ts` — 7 tests — drives the real seam through the real
+  shim, now in `just test-contract`/`bin/check`/CI), `bin/extension-build`
+  produces a loadable `extension/build/`. **Not yet loaded in a real
+  browser** on this box — the load-unpacked walk in `extension/README.md`
+  is the next step; Firefox signing (`web-ext sign`) not wired. Login in
+  the popup is separate from the website's (own origin) and the pending
+  emailed-code step doesn't survive the popup closing (deliberately left
+  simple; a persisted pending-login is the follow-up).
 
 ## Upstream workarounds to revisit
 

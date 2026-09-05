@@ -44,6 +44,9 @@
           },
           "device": {
             "type": "string"
+          },
+          "invite": {
+            "type": "string"
           }
         },
         "required": [
@@ -363,6 +366,44 @@
         "required": [
           "ids"
         ]
+      },
+      "AdminInviteCreateBody": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          }
+        },
+        "example": {
+          "count": 1,
+          "note": "for jane"
+        }
+      },
+      "AdminOperatorUpdateBody": {
+        "type": "object",
+        "properties": {
+          "receives_operator_mail": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "receives_operator_mail"
+        ],
+        "example": {
+          "receives_operator_mail": true
+        }
       },
       "MsgResponse": {
         "type": "object",
@@ -1347,6 +1388,9 @@
           },
           "trash": {
             "type": "boolean"
+          },
+          "suppressed": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1356,7 +1400,8 @@
           "default",
           "creation_timestamp",
           "nb_alias",
-          "trash"
+          "trash",
+          "suppressed"
         ],
         "additionalProperties": false
       },
@@ -1369,6 +1414,74 @@
         },
         "required": [
           "updated"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationsResponse": {
+        "type": "object",
+        "properties": {
+          "more": {
+            "type": "boolean"
+          },
+          "notifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Notification"
+            }
+          }
+        },
+        "required": [
+          "more",
+          "notifications"
+        ],
+        "additionalProperties": false
+      },
+      "Notification": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "message",
+          "read",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationReadResponse": {
+        "type": "object",
+        "properties": {
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "done"
         ],
         "additionalProperties": false
       },
@@ -1754,12 +1867,18 @@
               "disabled"
             ],
             "additionalProperties": false
+          },
+          "destinations_paused": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
           }
         },
         "required": [
           "queue",
           "activity_24h",
-          "users"
+          "users",
+          "destinations_paused"
         ],
         "additionalProperties": false
       },
@@ -1846,6 +1965,18 @@
                 "type": "null"
               }
             ]
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1859,7 +1990,8 @@
           "last_error",
           "created_at",
           "size_bytes",
-          "verp_type"
+          "verp_type",
+          "user_id"
         ],
         "additionalProperties": false
       },
@@ -1921,12 +2053,26 @@
         "type": "object",
         "properties": {
           "verp_type": {
-            "$ref": "#/components/schemas/VerpType"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerpType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "verp_id": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "email_log_id": {
             "anyOf": [
@@ -2139,8 +2285,367 @@
           "email_log_missing",
           "originator_unresolvable",
           "alias_unresolvable",
+          "flagged_inbound",
           "in_flight"
         ]
+      },
+      "AdminInviteListResponse": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "unused": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "invites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminInvite"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "unused",
+          "invites"
+        ],
+        "additionalProperties": false
+      },
+      "AdminInvite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "code": {
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminUserRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminUserRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "note",
+          "created_by",
+          "used_by",
+          "used_at",
+          "expires_at",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "AdminUserRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email"
+        ],
+        "additionalProperties": false
+      },
+      "AdminInviteCreatedResponse": {
+        "type": "object",
+        "properties": {
+          "invites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminInvite"
+            }
+          }
+        },
+        "required": [
+          "invites"
+        ],
+        "additionalProperties": false
+      },
+      "AdminInviteDeletedResponse": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "additionalProperties": false
+      },
+      "AdminOperatorListResponse": {
+        "type": "object",
+        "properties": {
+          "localparts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminOperator"
+            }
+          }
+        },
+        "required": [
+          "localparts",
+          "operators"
+        ],
+        "additionalProperties": false
+      },
+      "AdminOperator": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "email": {
+            "type": "string"
+          },
+          "receives_operator_mail": {
+            "type": "boolean"
+          },
+          "effective": {
+            "type": "boolean"
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mailbox_deliverable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "receives_operator_mail",
+          "effective",
+          "mailbox",
+          "mailbox_deliverable"
+        ],
+        "additionalProperties": false
+      },
+      "AdminDestinationListResponse": {
+        "type": "object",
+        "properties": {
+          "paused": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "destinations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminDestination"
+            }
+          }
+        },
+        "required": [
+          "paused",
+          "destinations"
+        ],
+        "additionalProperties": false
+      },
+      "AdminDestination": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "paused_until": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strikes": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "pauses": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "last_code": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_enhanced": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_step": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliveryStep"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_deferred_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "domain",
+          "provider",
+          "paused_until",
+          "strikes",
+          "pauses",
+          "last_code",
+          "last_enhanced",
+          "last_step",
+          "last_reply",
+          "last_deferred_at"
+        ],
+        "additionalProperties": false
+      },
+      "DeliveryStep": {
+        "type": "string",
+        "enum": [
+          "greeting",
+          "ehlo",
+          "starttls",
+          "mail_from",
+          "rcpt_to",
+          "data"
+        ]
+      },
+      "AdminDestinationClearedResponse": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "cleared": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "domain",
+          "cleared"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -2200,7 +2705,7 @@
         "tags": [
           "Account"
         ],
-        "description": "Enter the emailed login code to finish authenticating: a first-time email is graduated to a full account (trial started, self-mailbox created), and an api_key for the Authentication header is minted either way, with sudo mode already fresh. 400 on a wrong email/code, 410 once the code has been tried wrongly too many times (request a new one via /auth/login). MFA is not implemented: mfa_enabled is always false and mfa_key null.",
+        "description": "Enter the emailed login code to finish authenticating: a first-time email is graduated to a full account (trial started, self-mailbox created), and an api_key for the Authentication header is minted either way, with sudo mode already fresh. 400 on a wrong email/code, 410 once the code has been tried wrongly too many times (request a new one via /auth/login). MFA is not implemented: mfa_enabled is always false and mfa_key null. On an invite-only deployment a FIRST-TIME email additionally needs a valid `invite` code or the response is 403 — sent only after code proof (so whether an address is registered still never leaks), which spends the login code: fix the invite, request a fresh code via /auth/login, and verify again. Existing accounts never need an invite.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2223,6 +2728,16 @@
             }
           },
           "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -3970,6 +4485,73 @@
         }
       }
     },
+    "/mailboxes/{mailbox_id}/verify/request": {
+      "post": {
+        "tags": [
+          "Mailbox"
+        ],
+        "description": "Email a fresh 6-digit verification code for a mailbox that is unverified or bounce-suppressed (suppressed mailboxes resume forwarding only after re-verifying — proof the address receives mail again). 400 when the mailbox is already verified and not suppressed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "mailbox_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/mailboxes/{mailbox_id}": {
       "put": {
         "tags": [
@@ -4138,6 +4720,117 @@
             }
           },
           "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "tags": [
+          "Notification"
+        ],
+        "description": "List the account's in-app notifications (bounce auto-disables, mailbox problems, …), unread first then newest first, 20 per page. `page` starts at 0; `more` says whether another page exists. `created_at` is a humanized phrase ('2 minutes ago'), as in SimpleLogin.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "page"
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/{notification_id}/read": {
+      "post": {
+        "tags": [
+          "Notification"
+        ],
+        "description": "Mark one notification as read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "notification_id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -4805,7 +5498,7 @@
         "tags": [
           "Admin"
         ],
-        "description": "Operator landing numbers: queue depth by status, oldest due pending row, 24h activity (forwards/replies/bounces/blocked), user counts.",
+        "description": "Operator landing numbers: queue depth by status, oldest due pending row, 24h activity (forwards/replies/bounces/blocked), user counts, destinations currently paused by the outbound throttle.",
         "security": [
           {
             "apiKeyAuth": []
@@ -4924,7 +5617,7 @@
         "tags": [
           "Admin"
         ],
-        "description": "One queue row: envelope, error state, an allowlisted set of ROUTING headers (never Subject, never the body — the message is the user's mail), and the owning user/alias decoded from the VERP return path (null for null-reverse-path rows and expired VERP).",
+        "description": "One queue row: envelope, error state, an allowlisted set of ROUTING headers (never Subject, never the body — the message is the user's mail), and the owning user/alias — decoded from the VERP return path when it verifies, else from the durable attribution columns (so DSNs, trash copies and expired-VERP rows still name their user).",
         "parameters": [
           {
             "schema": {
@@ -5194,6 +5887,405 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invites": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "List invites, newest first (up to 200), with total and unused counts. Used invites carry the used_by linkage — the permanent invite graph.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Mint invite codes (up to 100 at once), optionally with a note and an expiry. Codes are returned here and remain readable in the list.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminInviteCreateBody"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteCreatedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invites/{id}": {
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Revoke an UNUSED invite. Used invites are the invite graph and can never be deleted — 404 covers both a missing and a used id.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInviteDeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/operators": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Operators (admins) and who receives operator mail — postmaster@, abuse@ and the other role addresses on the service domain. `effective` marks the current recipients: the opted-in operators, or the first operator when nobody has opted in.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperatorListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/operators/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Opt an operator in to (or out of) operator mail. 404 unless the id is an active operator. Returns the recomputed list.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminOperatorUpdateBody"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperatorListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/destinations": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Recipient domains the outbound throttle has heard a deferral signal from (421, or a 4.7.x policy deferral at a non-recipient step), paused ones first, with the reply that caused the latest pause.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDestinationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/destinations/{domain}": {
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "description": "Lift a destination's pause now and reset its strikes (history stays). 404 when the domain has no throttle row.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "in": "path",
+            "name": "domain",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDestinationClearedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
             "description": "Default Response",
             "content": {
               "application/json": {

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# invite-create — mint signup invite codes (ABUSE.md Tier 0).
+#
+# The break-glass mint, direct DB via the server's drizzle; works with the
+# API down. The admin UI/API (POST /api/admin/invites) rides the same
+# primitive. Prints one code per line.
+#
+# Usage: bin/invite-create [count] [--note "text"] [--expires-days N]
+
+set -euo pipefail
+
+cd "$(dirname "$0")/../server"
+exec bun run src/scripts/inviteCreate.ts "$@"

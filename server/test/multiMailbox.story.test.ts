@@ -8,7 +8,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import { db } from "../src/db/index.ts";
-import { aliasMailboxes, emailLogs } from "../src/db/schema.ts";
+import { aliasMailboxes, emailLogs, mailboxes } from "../src/db/schema.ts";
 import {
   createAlias,
   ensureDkimKey,
@@ -88,10 +88,13 @@ describe("multi-mailbox delivery", () => {
     expect(mailboxIds.has(second.id)).toBe(true);
   }, 120_000);
 
-  test("a dead extra mailbox detaches after repeated bounces; the alias survives", async () => {
-    // The per-(alias, mailbox) bounce ledger: a broken EXTRA mailbox must
-    // not auto-disable the whole alias — past the threshold it is detached
-    // and the healthy primary keeps receiving (PLAN #12).
+  test("a dead extra mailbox suppresses on its FIRST bounce; the alias survives", async () => {
+    // ABUSE.md Tier 1: a nonexistent qmail localpart 550 5.1.1s the dead
+    // copy, and one strike suppresses that MAILBOX. The healthy primary
+    // keeps receiving; the dead extra stays a member of the alias (unlike
+    // the old detach-at-threshold) but is excluded from the delivery set
+    // until the user re-verifies it. (Threshold detach still exists for
+    // non-suppression bounce codes — pinned in pipeline/bounce.int.test.ts.)
     const alias = await createAlias(fixture);
     const dead = await ensureMailbox(fixture.user.id, `nobody.${randomTag()}@qmail.com`);
     await db
@@ -99,51 +102,8 @@ describe("multi-mailbox delivery", () => {
       .values({ aliasId: alias.id, mailboxId: dead.id })
       .onConflictDoNothing();
 
-    // Each send's dead copy 550s at qmail (unknown localpart) → permanent
-    // failure → one bounce on (alias, dead). The 13th trips >12/24h.
-    for (let i = 0; i < 13; i++) {
-      const testId = newTestId();
-      await smtpSend({
-        host: milton.submission.host,
-        port: milton.submission.port,
-        from: milton.email,
-        to: alias.email,
-        data: buildMessage({
-          from: milton.email,
-          to: alias.email,
-          subject: `Bounce fodder ${i + 1}/13`,
-          testId,
-        }),
-      });
-      // The healthy primary receives every copy throughout.
-      await waitForMail(wes, testId, { timeoutMs: 60_000 });
-    }
-
-    // The dead mailbox is detached from the alias…
-    await pollUntil(
-      async () => {
-        const rows = await db
-          .select({ id: aliasMailboxes.id })
-          .from(aliasMailboxes)
-          .where(and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, dead.id)));
-        return rows.length === 0 ? true : undefined;
-      },
-      { timeoutMs: 60_000, what: `dead mailbox ${dead.id} detached from alias ${alias.id}` },
-    );
-
-    // …and the alias itself stays enabled on its healthy primary.
-    const after = await getAlias(alias.id);
-    expect(after?.enabled).toBe(true);
-    expect(after?.mailboxId).toBe(fixture.mailbox.id);
-
-    // Re-adding the mailbox starts a FRESH ledger: the 13 old bounces sit
-    // behind the detach's reset marker, so one more bounce must NOT
-    // instantly re-detach it (the user was told to re-add once fixed).
-    await db
-      .insert(aliasMailboxes)
-      .values({ aliasId: alias.id, mailboxId: dead.id })
-      .onConflictDoNothing();
-    const extraId = newTestId();
+    // One send: the primary's copy delivers, the dead copy 550s.
+    const firstId = newTestId();
     await smtpSend({
       host: milton.submission.host,
       port: milton.submission.port,
@@ -152,33 +112,54 @@ describe("multi-mailbox delivery", () => {
       data: buildMessage({
         from: milton.email,
         to: alias.email,
-        subject: "One fresh bounce after re-add",
-        testId: extraId,
+        subject: "First strike on the dead extra",
+        testId: firstId,
       }),
     });
-    await waitForMail(wes, extraId, { timeoutMs: 60_000 });
-    // Wait for the 14th bounce to be recorded on the (alias, dead) ledger…
+    await waitForMail(wes, firstId, { timeoutMs: 60_000 });
+
+    // The dead mailbox suppresses on that single bounce.
     await pollUntil(
       async () => {
-        const rows = await db
-          .select({ id: emailLogs.id })
-          .from(emailLogs)
-          .where(
-            and(
-              eq(emailLogs.aliasId, alias.id),
-              eq(emailLogs.mailboxId, dead.id),
-              eq(emailLogs.bounced, true),
-            ),
-          );
-        return rows.length >= 14 ? true : undefined;
+        const rows = await db.select().from(mailboxes).where(eq(mailboxes.id, dead.id)).limit(1);
+        return rows[0]?.suppressedAt != null;
       },
-      { timeoutMs: 60_000, what: `the 14th bounce for alias ${alias.id}` },
+      { timeoutMs: 120_000, what: `dead mailbox ${dead.id} to suppress` },
     );
-    // …the join row survives: one fresh bounce, not 13 stale ones.
-    const stillAttached = await db
+
+    // Alias enabled, primary untouched, dead extra STILL attached (paused,
+    // not removed — resuming is a re-verify away, not a re-add).
+    const after = await getAlias(alias.id);
+    expect(after?.enabled).toBe(true);
+    expect(after?.mailboxId).toBe(fixture.mailbox.id);
+    const attached = await db
       .select({ id: aliasMailboxes.id })
       .from(aliasMailboxes)
       .where(and(eq(aliasMailboxes.aliasId, alias.id), eq(aliasMailboxes.mailboxId, dead.id)));
-    expect(stillAttached).toHaveLength(1);
+    expect(attached).toHaveLength(1);
+
+    // A second send fans out to the PRIMARY ONLY: one new email_log, none
+    // for the suppressed extra, and exactly the one original bounce.
+    const secondId = newTestId();
+    await smtpSend({
+      host: milton.submission.host,
+      port: milton.submission.port,
+      from: milton.email,
+      to: alias.email,
+      data: buildMessage({
+        from: milton.email,
+        to: alias.email,
+        subject: "Primary only now",
+        testId: secondId,
+      }),
+    });
+    await waitForMail(wes, secondId, { timeoutMs: 60_000 });
+
+    const deadLogs = await db
+      .select({ id: emailLogs.id, bounced: emailLogs.bounced })
+      .from(emailLogs)
+      .where(and(eq(emailLogs.aliasId, alias.id), eq(emailLogs.mailboxId, dead.id)));
+    expect(deadLogs).toHaveLength(1); // only the first strike ever targeted it
+    expect(deadLogs[0]!.bounced).toBe(true);
   }, 300_000);
 });

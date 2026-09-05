@@ -25,7 +25,7 @@ import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { isPremium } from "../billing/premium";
-import { MAX_ALIAS_FREE_PLAN } from "../config";
+import { config, MAX_ALIAS_FREE_PLAN } from "../config";
 import { db } from "../db";
 import {
   type Alias,
@@ -51,6 +51,7 @@ import {
   prefixSuggestionFromHostname,
   randomString,
 } from "./aliasText";
+import { operatorLocalpart } from "../pipeline/operatorMail";
 import { HttpError } from "./httpError";
 import { CreatedAliasResponse, ErrorResponse } from "./schema";
 import { signSuffix, verifySignedSuffix } from "./signedSuffix";
@@ -333,6 +334,14 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
       }
 
       const fullAlias = (aliasPrefix + aliasSuffix).toLowerCase();
+      // Role addresses on our domains (postmaster@, abuse@ …) route to the
+      // operators (pipeline/operatorMail.ts) and can never be minted.
+      if (
+        domainId === null &&
+        operatorLocalpart(fullAlias, config.mailDomain, config.operatorLocalparts) !== null
+      ) {
+        throw new HttpError(400, "Email alias is reserved");
+      }
       if (fullAlias.includes("..")) {
         throw new HttpError(400, "2 consecutive dot signs aren't allowed in an email address");
       }

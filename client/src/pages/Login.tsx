@@ -27,6 +27,21 @@ function looksLikeEmail(email: string): boolean {
 // clicks and makes "you can't resend yet" visible instead of surprising.
 const RESEND_COOLDOWN_S = 60;
 
+// An invite-only deployment answers /auth/verify with 403 when a NEW email
+// verifies without a valid invite (never before code proof, so the flow
+// stays enumeration-safe — see server routes/auth.ts).
+function isInviteRequired(err: unknown): boolean {
+  return (
+    err !== null &&
+    typeof err === "object" &&
+    "response" in err &&
+    err.response !== null &&
+    typeof err.response === "object" &&
+    "status" in err.response &&
+    err.response.status === 403
+  );
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
   const search = useSearch({ from: "/login" });
@@ -35,6 +50,8 @@ export function LoginPage() {
   const [email, setEmail] = useState(search.email ?? "");
   const [code, setCode] = useState("");
   const [cooldown, setCooldown] = useState(0);
+  const [invite, setInvite] = useState("");
+  const [inviteNeeded, setInviteNeeded] = useState(false);
 
   useEffect(() => {
     if (cooldown === 0) return;
@@ -62,6 +79,16 @@ export function LoginPage() {
           else void navigate({ to: "/" });
         }
       },
+      onError: (err) => {
+        if (isInviteRequired(err)) {
+          // The 403 spent the login code (server design — the gate answers
+          // only after code proof). Surface the invite field and unlock the
+          // resend button so the retry isn't stuck behind the cooldown.
+          setInviteNeeded(true);
+          setCode("");
+          setCooldown(0);
+        }
+      },
     },
   });
 
@@ -86,12 +113,21 @@ export function LoginPage() {
 
   const submitCode = (value: string) => {
     if (value.length !== 6 || verify.isPending) return;
-    verify.mutate({ data: { email: email.trim(), code: value, device: "virtu-web" } });
+    verify.mutate({
+      data: {
+        email: email.trim(),
+        code: value,
+        device: "virtu-web",
+        invite: invite.trim() === "" ? undefined : invite.trim(),
+      },
+    });
   };
 
   const changeEmail = () => {
     setPhase("email");
     setCode("");
+    setInvite("");
+    setInviteNeeded(false);
     request.reset();
     verify.reset();
   };
@@ -179,9 +215,36 @@ export function LoginPage() {
             </p>
           </header>
 
-          {verify.isError && <Alert>{apiErrorMessage(verify.error)}</Alert>}
-          {request.isSuccess && !verify.isError && !verify.isSuccess && code === "" && (
-            <Alert kind="success">A log-in code is on its way.</Alert>
+          {/* The first invite-403 is explained by the invite panel below;
+              the server message only adds signal once an invite was tried
+              (wrong/used/expired code). */}
+          {verify.isError && (!isInviteRequired(verify.error) || invite.trim() !== "") && (
+            <Alert>{apiErrorMessage(verify.error)}</Alert>
+          )}
+          {request.isSuccess &&
+            !verify.isError &&
+            !verify.isSuccess &&
+            !inviteNeeded &&
+            code === "" && <Alert kind="success">A log-in code is on its way.</Alert>}
+
+          {inviteNeeded && (
+            <div className={css({ textAlign: "left", marginBottom: "1.6rem" })}>
+              <Alert>
+                Sign-ups are currently invite-only, and verifying used up your log-in code. Enter
+                your invite code here, press &ldquo;Resend code&rdquo; below for a fresh log-in
+                code, then enter that code.
+              </Alert>
+              <Field
+                label="Invite code"
+                name="invite"
+                placeholder="your invite code"
+                value={invite}
+                onChange={(e) => {
+                  setInvite(e.currentTarget.value);
+                  if (verify.isError) verify.reset();
+                }}
+              />
+            </div>
           )}
 
           <div className={css({ display: "flex", justifyContent: "center", marginBottom: "2rem" })}>

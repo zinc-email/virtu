@@ -1,5 +1,5 @@
 // Alias surface int tests via app.inject() against the dockerized postgres.
-// Prerequisites: `just up` + `just db push`. Parallel-safe: unique user per test.
+// Prerequisites: `just up` (migrates on boot). Parallel-safe: unique user per test.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";

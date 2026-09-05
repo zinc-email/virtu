@@ -121,3 +121,14 @@ export const spammer: Persona = {
 };
 
 export const personas = { wes, alec, bart, milton, spammer } as const;
+
+/**
+ * The open.relay peer doubles as the simulated internet's misbehaving
+ * neighbor: this address is refused at RCPT with exactly `code` and
+ * `enhanced` — a genuine wire reply, not a faked DSN. See
+ * server/docker/test/smtpd/.../scripted-replies.pcre for the grammar. Pass a
+ * unique `tag` per test (parallel-safe convention).
+ */
+export function scriptedReplyAddress(code: number, enhanced: string, tag: string): string {
+  return `reply-${code}-${enhanced.replaceAll(".", "-")}-${tag}@open.relay`;
+}

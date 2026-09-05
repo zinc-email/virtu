@@ -31,6 +31,11 @@ const ConfigSchema = z.object({
   // Requests/minute per IP across the auth routes (register/activate/login).
   // The dev compose raises it: the DOM test tier registers users freely.
   authRateLimitMax: z.coerce.number().int().default(10),
+  // Invite-only signup (ABUSE.md Tier 0): when true, /auth/verify refuses to
+  // graduate a provisional user without a valid invite code. Existing
+  // (activated) users log in unaffected. Off by default so dev/lmnop stay
+  // open; zinc sets it until the Tier 2 detector is proven.
+  signupInviteOnly: booleanString(false),
 
   // ── Mail path (mx / submission / deliverd — PLAN Milestones 1-3) ─────────
   // The domain aliases + reverse aliases + VERP addresses live on.
@@ -39,6 +44,18 @@ const ConfigSchema = z.object({
   mailHostname: z.string().default("mail.virtu.email"),
   // DKIM selector for our signing key in dkim_keys ({selector}._domainkey.{domain}).
   dkimSelector: z.string().default("mail"),
+  // Role addresses on the service domain (RFC 2142) routed to the operators
+  // (pipeline/operatorMail.ts) — comma-separated localparts. `dmarc` is the
+  // rua= target the telemetry runbook points receivers at.
+  operatorLocalparts: z
+    .string()
+    .default("postmaster,abuse,hostmaster,security,dmarc")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s !== ""),
+    ),
   // HMAC secret for VERP bounce addresses (>= 32 chars, SimpleLogin invariant).
   // The default is a dev-only value; production must override.
   verpSecret: z.string().min(32).default("insecure-dev-verp-secret-change-me-00"),
@@ -54,6 +71,19 @@ const ConfigSchema = z.object({
     .number()
     .int()
     .default(25 * 1024 * 1024),
+  // Per-user outbound send quota (submission pre-enqueue, Lane K P2):
+  // recipients per rolling 24h, by plan. 0 = unlimited. Overridable per user
+  // via users.max_daily_sends. Caps what a leaked device credential can
+  // blast through our IP; forwards never count.
+  sendQuotaFreePerDay: z.coerce.number().int().default(50),
+  sendQuotaPremiumPerDay: z.coerce.number().int().default(500),
+  // Inbound rate limit at the MX (pipeline/inboundRateLimit.ts): trailing
+  // 60s budgets, tempfailed 450 4.7.1 at RCPT so the sender retries. Per
+  // alias = distinct messages; per mailbox = forward copies (the rate the
+  // mailbox provider sees from our IP). 0 = unlimited. SimpleLogin's
+  // defaults (10 / 15).
+  inboundRateLimitPerAliasPerMinute: z.coerce.number().int().default(10),
+  inboundRateLimitPerMailboxPerMinute: z.coerce.number().int().default(15),
   // deliverd egress guard: when false (the default), deliverd refuses to open
   // an SMTP connection to a recipient domain whose MX (or implicit-MX A record)
   // resolves to a private/loopback/link-local address — the SSRF where an
@@ -73,6 +103,18 @@ const ConfigSchema = z.object({
     .number()
     .int()
     .default(6 * 60 * 60_000),
+  // Per-destination backpressure (queue/destinationThrottle.ts): a 421 or a
+  // 4.7.x policy deferral at a non-recipient step pauses the whole recipient
+  // DOMAIN for base·2^strikes (capped), rows for it wait without attempts.
+  // Base 0 disables. The test network disables it (shared peer domains).
+  destinationPauseBaseMs: z.coerce
+    .number()
+    .int()
+    .default(5 * 60_000),
+  destinationPauseMaxMs: z.coerce
+    .number()
+    .int()
+    .default(60 * 60_000),
   // ── Queue hygiene (reaper + retention, run inside the worker loop) ───────
   // A `sending` row whose claim is older than this is presumed orphaned by a
   // crashed worker and returned to `pending` (at-least-once delivery).
@@ -87,6 +129,9 @@ const ConfigSchema = z.object({
     .default(60 * 60_000),
   queueRetainSentDays: z.coerce.number().int().default(7),
   queueRetainFailedDays: z.coerce.number().int().default(30),
+  // smtp_rejections rows (Lane K P2 forensics) age out on the same retention
+  // tick; 0 keeps them forever.
+  smtpRejectionsRetainDays: z.coerce.number().int().default(30),
 });
 
 export const config = loadConfigFromEnv(ConfigSchema);

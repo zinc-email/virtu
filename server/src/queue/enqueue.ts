@@ -20,6 +20,10 @@ export interface EnqueueInput {
   envelopeTo: string;
   /** Override the size cap (config.smtpMaxMessageSize). */
   maxRawBytes?: number;
+  /** Owning user (durable attribution, Lane K P2); omit for unowned system mail. */
+  userId?: number;
+  /** The email_logs row this delivery serves, when one exists. */
+  emailLogId?: number;
 }
 
 /** Insert one queue row; resolves to its id. */
@@ -34,6 +38,8 @@ export async function enqueue(db: Db, input: EnqueueInput): Promise<number> {
       raw: input.raw,
       envelopeFrom: input.envelopeFrom,
       envelopeTo: input.envelopeTo,
+      userId: input.userId ?? null,
+      emailLogId: input.emailLogId ?? null,
     })
     .returning({ id: outboundMessages.id });
   return rows[0]!.id;

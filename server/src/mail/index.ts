@@ -46,6 +46,13 @@ export {
 } from "./rewriteForward.ts";
 
 export {
+  OPERATOR_HEADER_WHITELIST,
+  type OperatorContext,
+  type OperatorResult,
+  rewriteOperator,
+} from "./rewriteOperator.ts";
+
+export {
   type NonReverseAliasRefusal,
   REPLY_HEADER_WHITELIST,
   type ReplyActions,

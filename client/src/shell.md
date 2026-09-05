@@ -1,22 +1,33 @@
 # The shell bridge protocol (v1)
 
-How the web app and the native mobile shells (iOS/Android, `plans/mobile.md`)
-talk to each other. This doc and `shell.ts` beside it are one unit: a change to
-either is a change to both, in the same review. The vocabulary is deliberately
-small and enumerable — adding a message is a protocol change, reviewed like a
-schema change (PLAN.md decision #7: never a generic eval channel).
+How the web app and the shells that host it — the native mobile apps
+(iOS/Android, `plans/mobile.md`) and the browser extension's popup
+(`extension/`) — talk to each other. This doc and `shell.ts` beside it are one
+unit: a change to either is a change to both, in the same review. The
+vocabulary is deliberately small and enumerable — adding a message is a
+protocol change, reviewed like a schema change (PLAN.md decision #7: never a
+generic eval channel).
 
 ## How a shell announces itself
 
 A shell injects a `window.virtuShell` object at **document start** (before any
 page script runs). Plain browsers never have it; every web-side helper in
 `shell.ts` feature-detects it and falls back to normal web behavior. The object
-carries three static facts and one function:
+carries three static facts, one optional fact, and one function:
 
-- `platform` — `"ios"` or `"android"`.
-- `shellVersion` — the native app's version string, for diagnostics.
+- `platform` — `"ios"`, `"android"`, or `"extension"`.
+- `shellVersion` — the native app's (or extension's) version string, for
+  diagnostics.
 - `protocol` — the integer protocol version the shell implements (currently 1).
   A shell declaring version N implements **every** message of version N.
+- `apiOrigin` (optional) — the absolute origin the API lives on, declared only
+  by a shell that serves the app from somewhere other than the web origin.
+  The webviews load the production URL and leave it unset; the extension
+  packages the built SPA inside itself (`chrome-extension://…`), where the
+  SDK's relative `/api` would point nowhere, so it declares the deployment it
+  was built for. The extension is also the one shell where the platform
+  changes routing: the popup is a file, so the app routes by hash there
+  (`isExtension()` in `shell.ts`, used by `app.tsx` and `api/client.ts`).
 - `request(message)` — send one JSON-encoded message; resolves with one
   JSON-encoded reply. Always resolves (errors come back as error replies, see
   below); rejection means the bridge itself is broken.
@@ -25,7 +36,9 @@ On iOS the shell backs `request` with a promise-returning script message
 handler (`WKScriptMessageHandlerWithReply`). On Android the injected shim wraps
 the origin-allowlisted `WebMessageListener` port and correlates replies to
 requests by an internal id — the web app never sees that plumbing, only the
-uniform `request` function.
+uniform `request` function. In the extension the shim is a plain script the
+build injects into the popup's `<head>` ahead of the app bundles, and it
+answers in-process from the extension APIs.
 
 ## Messages
 
@@ -34,9 +47,10 @@ Every reply is a JSON object with `ok: true` or `ok: false, error: "<slug>"`.
 
 **`apiKey.store`** — sent right after login succeeds. Carries `key`, the
 long-lived API key the SPA just received. The shell stores it in the iOS
-Keychain (shared access-group, so the share/autofill extensions can read it)
-or Android Keystore-encrypted storage. Also the shell's cue that a user is
-logged in.
+Keychain (shared access-group, so the share/autofill extensions can read it),
+Android Keystore-encrypted storage, or the browser extension's
+`chrome.storage.local` (so the content script's alias menu can call the API
+through the background worker). Also the shell's cue that a user is logged in.
 
 **`apiKey.clear`** — sent on logout and on the 401 bounce. No fields. The
 shell wipes the stored key; extensions lose API access with it.
@@ -45,7 +59,9 @@ shell wipes the stored key; extensions lose API access with it.
 (at least one of `text`/`url` present). Replies `ok: true` once the sheet was
 presented; the protocol does not report whether the user completed or canceled
 the share (iOS reports it, Android can't — we keep the contract to the common
-denominator).
+denominator). The extension has no sheet of its own: it uses the Web Share
+API where the desktop browser offers one and replies `failed` where it
+doesn't, so the app keeps its copy-to-clipboard UI there.
 
 **`external.open`** — open `url` (http/https only) outside the app: Safari /
 the default browser. Used for links that must not navigate the webview, e.g.

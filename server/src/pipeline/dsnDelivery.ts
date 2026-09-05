@@ -71,11 +71,32 @@ export interface FailureDsnInput {
 export type FailureDsnOutcome =
   | { outcome: "sent"; queueId: number }
   | { outcome: "suppressed" }
-  | { outcome: "skipped"; reason: "originator_unresolvable" | "alias_unresolvable" };
+  | {
+      outcome: "skipped";
+      reason: "originator_unresolvable" | "alias_unresolvable" | "flagged_inbound";
+    };
 
 /** Compose, sign and enqueue the DSN for one failed row. */
 export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<FailureDsnOutcome> {
   const { row, verp, emailLog } = input;
+
+  // Backscatter guard: a forward the MX accepted only under a "flag" verdict
+  // (SPF hard-fail with no DMARC, DMARC quarantine fail) has a sender we
+  // could not authenticate — the classic forged envelope. Bouncing it back
+  // would mail an innocent third party a copy of spam under our signature,
+  // which is exactly what lands an IP on backscatter lists. The bounce
+  // ledger has already counted the failure (mailbox health is real either
+  // way); only the outbound DSN is withheld. Reply-phase DSNs go to our own
+  // user and are never affected.
+  if (verp.type === "bounce_forward" && emailLog.isSpam) {
+    dsnTotal.inc({ outcome: "skipped" });
+    logger.info("dsn_skipped", {
+      queueId: row.id,
+      reason: "flagged_inbound",
+      flag: emailLog.spamStatus,
+    });
+    return { outcome: "skipped", reason: "flagged_inbound" };
+  }
 
   const recipient = await resolveDsnRecipient(db, emailLog, verp);
   if (recipient === null) {
@@ -150,6 +171,10 @@ export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<Fa
     envelopeFrom: "", // RFC 5321 §4.5.5: DSNs use the null reverse path
     envelopeTo: recipient,
     maxRawBytes: config.smtpMaxMessageSize,
+    // Null reverse path defeats VERP decoding, so the DSN's owner is
+    // recorded durably here (the user whose message failed).
+    userId: emailLog.userId,
+    emailLogId: emailLog.id,
   });
   dsnTotal.inc({ outcome: "sent" });
   logger.info("dsn_enqueued", { queueId, to: recipient, failedQueueId: row.id });

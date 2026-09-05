@@ -42,6 +42,29 @@ describe("classifySendResult", () => {
     expect(classifySendResult(r)).toMatchObject({ kind: "transient" });
   });
 
+  test("permanent outcomes carry the refusing reply's enhanced code (suppression signal)", () => {
+    const rcpt = sendResult({
+      rcptTo: [
+        { address: "nx@qmail.com", reply: reply(550, "User unknown", "5.1.1"), accepted: false },
+      ],
+      data: undefined,
+    });
+    expect(classifySendResult(rcpt)).toMatchObject({ kind: "permanent", enhancedCode: "5.1.1" });
+
+    const data = sendResult({
+      rcptTo: [{ address: "a@qmail.com", reply: reply(250, "ok"), accepted: true }],
+      data: reply(554, "rejected", "5.7.1"),
+    });
+    expect(classifySendResult(data)).toMatchObject({ kind: "permanent", enhancedCode: "5.7.1" });
+
+    // No enhanced code from the remote → none invented.
+    const bare = sendResult({
+      rcptTo: [{ address: "b@qmail.com", reply: reply(550, "nope"), accepted: false }],
+      data: undefined,
+    });
+    expect(classifySendResult(bare)).toMatchObject({ kind: "permanent", enhancedCode: undefined });
+  });
+
   test("550 on the only recipient: permanent, error carries the reply", () => {
     const r = sendResult({
       rcptTo: [
@@ -131,6 +154,8 @@ function outboundRow(over: Partial<OutboundMessage>): OutboundMessage {
     nextAttemptAt: new Date("2026-08-11T00:00:00Z"),
     claimedAt: null,
     lastError: null,
+    userId: null,
+    emailLogId: null,
     createdAt: new Date("2026-08-11T00:00:00Z"),
     updatedAt: new Date("2026-08-11T00:00:00Z"),
     ...over,

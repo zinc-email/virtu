@@ -1,0 +1,232 @@
+{
+  "__comment": "virtu deliverability — how the big receivers are treating our IP. Import into Grafana (Dashboards → New → Import) against the Prometheus datasource Alloy ships maild's :9100 metrics to (alloy/config.alloy, compose profile `observe`). Every series here is emitted by server/src/metrics/index.ts; the per-destination ones come from queue/worker.ts + queue/destinationThrottle.ts.",
+  "title": "virtu · deliverability",
+  "uid": "virtu-deliverability",
+  "tags": ["virtu", "mail"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": { "type": "prometheus" },
+        "query": "label_values(virtu_queue_destination_deliveries_total, provider)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Destinations paused now",
+      "description": "Recipient domains the per-destination throttle is holding back (queue/destinationThrottle.ts). Anything above 0 on gmail/microsoft/yahoo means that receiver told us to back off within the last pause window.",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 5 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider) (virtu_destination_paused)",
+          "legendFormat": "{{provider}}"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Deferral rate (all providers, 1h)",
+      "description": "Share of delivery attempts answered 4xx over the last hour. A cold IP sits near 0; a rise here precedes a pause.",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 5 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(virtu_queue_deliveries_total{result=\"transient\"}[1h])) / clamp_min(sum(increase(virtu_queue_deliveries_total[1h])), 1)",
+          "legendFormat": "deferred"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.05 },
+              { "color": "red", "value": 0.2 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Mailboxes suppressed (24h)",
+      "description": "First-strike 5.1.1/5.2.1 suppressions (ABUSE.md Tier 1). Each one is a dead mailbox we stopped bouncing into.",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 5 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(virtu_mailbox_suppressed_total[24h]))",
+          "legendFormat": "suppressed"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Delivery outcomes by provider",
+      "description": "virtu_queue_destination_deliveries_total — sent / transient (4xx, retried) / permanent (5xx, bounced) per provider bucket. The shape to watch: transient climbing on one provider while sent stays flat.",
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider, result) (rate(virtu_queue_destination_deliveries_total{provider=~\"$provider\"}[5m]))",
+          "legendFormat": "{{provider}} {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "stacking": { "mode": "normal" }, "fillOpacity": 25 }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "How angry is each receiver — failed replies by code",
+      "description": "virtu_queue_destination_replies_total — every failed attempt by provider × SMTP reply code. 421 = the receiver closed the door on us (rate/reputation); 450/451 = try later (greylisting, busy); 550 = refused outright. Enhanced class.subject is in the legend: 4.7 = policy (reputation-shaped), 4.2 = mailbox (recipient-shaped), 5.1 = no such user.",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider, code, enhanced) (rate(virtu_queue_destination_replies_total{provider=~\"$provider\"}[5m]))",
+          "legendFormat": "{{provider}} {{code}} {{enhanced}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pauses triggered and rows held back",
+      "description": "virtu_destination_pauses_total (a receiver said back off) vs virtu_queue_destination_deferred_total (rows we did NOT attempt because of it). The second line is the damage the throttle prevented.",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (provider) (increase(virtu_destination_pauses_total{provider=~\"$provider\"}[15m]))",
+          "legendFormat": "{{provider}} pauses"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (provider) (increase(virtu_queue_destination_deferred_total{provider=~\"$provider\"}[15m]))",
+          "legendFormat": "{{provider}} rows held"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Failed replies by SMTP step",
+      "description": "Where in the conversation receivers stop us. greeting/ehlo = connection-level (IP reputation, connection limits); mail_from = sender-level (SPF/DMARC/return-path); rcpt_to = recipient-level (unknown user, greylisting); data = content-level (spam filtering).",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (step) (rate(virtu_queue_destination_replies_total{provider=~\"$provider\"}[5m]))",
+          "legendFormat": "{{step}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "stacking": { "mode": "normal" }, "fillOpacity": 25 }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Inbound pressure we refused",
+      "description": "virtu_mx_rate_limited_total — RCPTs tempfailed 450 by the per-alias / per-mailbox inbound rate limit (pipeline/inboundRateLimit.ts), i.e. floods kept on the sender's side of the wire instead of becoming our outbound burst. Plus DSNs withheld from flagged (unauthenticated) senders.",
+      "gridPos": { "x": 0, "y": 22, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scope) (increase(virtu_mx_rate_limited_total[15m]))",
+          "legendFormat": "rate-limited ({{scope}})"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(virtu_dsn_total{outcome=\"skipped\"}[15m]))",
+          "legendFormat": "DSNs skipped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 60 } }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue depth and oldest due",
+      "description": "virtu_queue_depth by status + virtu_queue_oldest_pending_age_seconds. A pause shows up as pending rising while sending stays flat — expected; the throttle is the thing holding them.",
+      "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (virtu_queue_depth{status=~\"pending|sending|failed\"})",
+          "legendFormat": "{{status}}"
+        },
+        {
+          "refId": "B",
+          "expr": "virtu_queue_oldest_pending_age_seconds / 60",
+          "legendFormat": "oldest due (min)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "oldest due (min)" },
+            "properties": [{ "id": "custom.axisPlacement", "value": "right" }]
+          }
+        ]
+      }
+    }
+  ]
+}

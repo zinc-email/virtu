@@ -1,6 +1,6 @@
 // Route tests via app.inject() against the dockerized postgres.
 //
-// Prerequisites: `just up` (db on localhost:5432) + `just db push`.
+// Prerequisites: `just up` (db on localhost:5432, migrated on boot).
 // Run: `just test-int` (or `cd server && bun test int.test`).
 //
 // Parallel-safe by construction (madi RFC 0003): every test registers its own

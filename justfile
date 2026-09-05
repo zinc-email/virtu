@@ -54,10 +54,24 @@ preview-logs *args="-f":
   bin/compose -p virtu-serve -f docker-compose.serve.yml logs {{args}}
 
 # ----------------------------------------------------------------------------
-# Database — Drizzle Kit (push-based migrations)
+# Database — generated migrations (server/drizzle/, committed)
 # ----------------------------------------------------------------------------
 
-# Drizzle Kit inside the stack (`just db push` — prompts on lossy SQL, wants a TTY).
+# Diff src/db/schema.ts against the last snapshot into a new server/drizzle/*.sql
+# (interactive: answers rename-vs-recreate HERE, once). Commit the output.
+db-generate *args="":
+  bin/server-run bun drizzle-kit generate {{args}}
+
+# Apply pending server/drizzle/ migrations (non-interactive; also runs on api boot).
+db-migrate:
+  bin/server-run bun run src/scripts/dbMigrate.ts
+
+# One-time bridge for a DB created by the old `drizzle-kit push`: mark every
+# committed migration applied without running it (schema must already match).
+db-baseline:
+  bin/server-run bun run src/scripts/dbBaseline.ts
+
+# Raw Drizzle Kit inside the stack (`just db check`, `just db studio`, …).
 db *args="--help":
   bin/server-run bun drizzle-kit {{args}}
 
@@ -82,20 +96,21 @@ test-unit *args="":
   cd server && bun test unit.test {{args}}
 
 # Fastify routes via app.inject() against the dockerized postgres.
-# Requires `just up` + `just db push` first. See bin/test-int.
+# Requires `just up` first (the api migrates the dev DB on boot). See bin/test-int.
 test-int *args="":
   bin/test-int {{args}}
 
 # Client DOM tests (*.dom.test.tsx): real React pages driving the running
-# stack over HTTP. Requires `just up` + `just db push` first. See bin/test-client.
+# stack over HTTP. Requires `just up` first (migrates on boot). See bin/test-client.
 test-client *args="":
   bin/test-client {{args}}
 
 # Bridge contract tests (*.contract.test.ts): the real client shell seam
-# driven through each shell's real shim (mobile/*/contract/). Pure bun — no
-# JDK, Xcode, SDK, docker, or device. Also part of `just check`.
+# driven through each shell's real shim (mobile/*/contract/,
+# extension/contract/). Pure bun — no JDK, Xcode, SDK, docker, or device.
+# Also part of `just check`.
 test-contract *args="":
-  bun test mobile {{args}}
+  bun test mobile extension/contract {{args}}
 
 # Start the simulated internet (fake DNS, peer MTAs, test-runner).
 # Fully isolated from the dev stack; no published host ports.
@@ -136,6 +151,22 @@ operator-create email="ops@qmail.com":
 login-code email:
   bin/login-code {{email}}
 
+# Bounce-suppress a mailbox by address (dev/operator tooling, ABUSE.md Tier 1).
+mailbox-suppress email code="5.1.1":
+  bin/mailbox-suppress {{email}} {{code}}
+
+# Opt an operator in/out of operator mail (postmaster@/abuse@ routing): --on|--off.
+operator-mail email flag="--on":
+  bin/operator-mail {{email}} {{flag}}
+
+# Lift a recipient domain's outbound pause now (per-destination throttle).
+destination-resume domain:
+  bin/destination-resume {{domain}}
+
+# Insert one in-app notification for a user (dev/announce tooling).
+notification-create email title message:
+  bin/notification-create {{email}} {{title}} {{message}}
+
 # ----------------------------------------------------------------------------
 # Ops — queue + admin break-glass (direct DB; work with the API down)
 # ----------------------------------------------------------------------------
@@ -147,6 +178,10 @@ admin-grant email:
 # Clear the admin flag on a user.
 admin-revoke email:
   bin/admin-revoke {{email}}
+
+# Mint signup invite codes (ABUSE.md Tier 0); prints one code per line.
+invite-create *args="":
+  bin/invite-create {{args}}
 
 # DSN the originator, then fail the row ("bounced by operator") — polite drop.
 queue-bounce +ids:
@@ -183,6 +218,18 @@ www-build:
 # Astro dev server for the homepage
 www-dev:
   cd www && bun run dev
+
+# ----------------------------------------------------------------------------
+# Browser extension — the built SPA as the popup + the alias menu (extension/)
+# ----------------------------------------------------------------------------
+
+# Assemble extension/build/ (load it unpacked). VIRTU_ORIGIN picks the deployment.
+extension-build *args="":
+  bin/extension-build {{args}}
+
+# Zip extension/build/ into extension/dist/ for the web stores.
+extension-pack:
+  bin/extension-pack
 
 # ----------------------------------------------------------------------------
 # Checks — format, typecheck, and the CI gauntlet

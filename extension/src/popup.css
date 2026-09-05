@@ -1,0 +1,8 @@
+/* Injected into the popup page's <head> by bin/extension-build. The popup
+   sizes itself to its content, so give the SPA a phone-sized viewport; the
+   browser caps popups at 800×600 CSS px and scrolls beyond that. Sized in
+   rem so it tracks the app's root font-size (client/src/styles.css). */
+html {
+  width: 26rem;
+  min-height: 32rem;
+}

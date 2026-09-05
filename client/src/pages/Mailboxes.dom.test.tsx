@@ -14,7 +14,7 @@ import { MailboxDetailPage } from "src/pages/MailboxDetail";
 import { MailboxesPage } from "src/pages/Mailboxes";
 import { SettingsPage } from "src/pages/Settings";
 import { renderPage } from "../../test/render";
-import { createUser, latestLoginCode } from "../../test/tooling";
+import { createUser, latestLoginCode, suppressMailbox } from "../../test/tooling";
 
 const uniqueEmail = () => `dom-${crypto.randomUUID()}@qmail.com`;
 
@@ -166,4 +166,43 @@ describe("Settings SMTP passwords — real transport against the running stack",
       { timeout: 15_000 },
     );
   }, 60_000);
+});
+
+describe("bounce-suppressed mailbox (ABUSE.md Tier 1) — resume by re-verifying", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  test("Paused state shows; Re-verify emails a code that clears it", async () => {
+    const user = userEvent.setup();
+    const email = uniqueEmail();
+    const apiKey = await createUser(email);
+    localStorage.setItem("virtu.apiKey", apiKey);
+    // The pipeline's suppression, minted on demand (same function, over the
+    // process boundary).
+    await suppressMailbox(email);
+
+    renderPage(MailboxesPage, "/mailboxes", "", [DETAIL_ROUTE]);
+
+    // Index: the registration mailbox reads Paused, not Verified.
+    await screen.findByText("Paused");
+    expect(screen.queryByText("Verified")).toBeNull();
+
+    // Detail page owns the fix.
+    await user.click(screen.getByText(email));
+    await screen.findByText("Paused — mail was bouncing");
+    await user.click(screen.getByRole("button", { name: "Re-verify this mailbox" }));
+    await screen.findByText("Check your inbox.");
+
+    const code = await latestLoginCode(email);
+    await fillCode(user, code);
+    await waitFor(
+      () => {
+        expect(screen.queryByText("Check your inbox.")).toBeNull();
+        expect(screen.getByText("Verified")).toBeTruthy();
+      },
+      { timeout: 15_000 },
+    );
+    expect(screen.queryByText("Paused — mail was bouncing")).toBeNull();
+  });
 });

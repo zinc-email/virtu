@@ -27,10 +27,14 @@ jobs:
         run: bun install --frozen-lockfile
         working-directory: client
 
+      - name: Install extension deps
+        run: bun install --frozen-lockfile
+        working-directory: extension
+
       - name: Format check
         run: bin/format-check
 
-      - name: Typecheck (server + client, regenerates client SDK from the committed spec)
+      - name: Typecheck (server + client + extension, regenerates client SDK from the committed spec)
         run: bin/typecheck
 
       - name: Unit tests
@@ -38,4 +42,4 @@ jobs:
         working-directory: server
 
       - name: Bridge contract tests (client shell seam ↔ each shell's shim)
-        run: bun test mobile
+        run: bun test mobile extension/contract

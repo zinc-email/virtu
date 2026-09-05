@@ -203,6 +203,18 @@ export function looksLikeDsn(facts: DsnShapeFacts): boolean {
   return auto === undefined || !auto.startsWith("auto-replied");
 }
 
+/**
+ * The RFC 3464 per-recipient `Status:` field from a DSN body, when present
+ * ("5.1.1" from `Status: 5.1.1`). The async-bounce counterpart of the
+ * SMTP-time enhanced code deliverd sees directly — feeds the same
+ * mailbox-suppression check (pipeline/suppression.ts).
+ */
+export function extractDsnStatus(body: string | undefined): string | undefined {
+  if (body === undefined) return undefined;
+  const m = /^status:\s*([245]\.\d{1,3}\.\d{1,3})\b/im.exec(body);
+  return m?.[1];
+}
+
 /** Result of {@link recordTransactionalBounce}. */
 export interface TransactionalBounceResult {
   /**
@@ -402,15 +414,16 @@ export async function recordBounce(
         .innerJoin(mailboxes, eq(aliasMailboxes.mailboxId, mailboxes.id))
         .where(eq(aliasMailboxes.aliasId, alias.id))
         .orderBy(mailboxes.id);
-      // Survivors must be deliverable (the delivery set's own predicate):
-      // promoting an unverified/disabled mailbox would leave an enabled
-      // alias that silently drops everything.
+      // Survivors must be deliverable (the delivery set's own predicate —
+      // policy.ts mailboxDeliverable, inlined to keep this module
+      // dependency-light): promoting an unverified/disabled/suppressed
+      // mailbox would leave an enabled alias that silently drops everything.
       const seen = new Set<number>();
       const survivors: Mailbox[] = [];
       for (const mb of [primaryRow, ...extraRows.map((r) => r.mailbox)]) {
         if (mb === undefined || mb.id === deadMailboxId || seen.has(mb.id)) continue;
         seen.add(mb.id);
-        if (!mb.verified || mb.disabled) continue;
+        if (!mb.verified || mb.disabled || mb.suppressedAt !== null) continue;
         survivors.push(mb);
       }
       if (survivors.length === 0) return false; // nothing healthy left → disable below

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# extension-pack — zip extension/build/ (from bin/extension-build) into
+# extension/dist/zinc-extension-<version>.zip, the artifact the Chrome Web
+# Store dashboard takes. Firefox needs a signed .xpi from AMO instead
+# (extension/README.md); the same zip is what gets uploaded there.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [ ! -f extension/build/manifest.json ]; then
+  echo "extension-pack: no extension/build — run bin/extension-build first" >&2
+  exit 1
+fi
+
+version="$(cd extension && bun -p 'require("./package.json").version')"
+out="dist/zinc-extension-$version.zip"
+mkdir -p extension/dist
+rm -f "extension/$out"
+(cd extension/build && zip -qr "../$out" .)
+echo "extension-pack: extension/$out" >&2

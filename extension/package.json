@@ -1,0 +1,18 @@
+{
+  "name": "virtu-extension",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser extension: the built client SPA as the toolbar popup, plus the alias menu on email fields (content script) and the API relay (background worker).",
+  "scripts": {
+    "build": "../bin/extension-build",
+    "pack": "../bin/extension-pack",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test contract"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/chrome": "^0.1.32",
+    "typescript": "^5.9.3"
+  }
+}

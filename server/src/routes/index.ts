@@ -6,6 +6,9 @@
 import rateLimit from "@fastify/rate-limit";
 import type { FastifyInstance } from "fastify";
 import { withAccountRoutes } from "./account";
+import { withAdminDestinationRoutes } from "./admin/destinations";
+import { withAdminInviteRoutes } from "./admin/invites";
+import { withAdminOperatorRoutes } from "./admin/operators";
 import { withAdminOverviewRoutes } from "./admin/overview";
 import { withAdminQueueRoutes } from "./admin/queue";
 import { requireAdmin } from "./adminAuth";
@@ -18,6 +21,7 @@ import { withContactRoutes } from "./contacts";
 import { withCustomDomainRoutes } from "./customDomains";
 import { errorEnvelopeHandler, HttpError } from "./httpError";
 import { withMailboxRoutes } from "./mailboxRoutes";
+import { withNotificationRoutes } from "./notificationRoutes";
 import { withSmtpCredentialRoutes } from "./smtpCredentialRoutes";
 import { withUserInfoRoutes } from "./userInfo";
 
@@ -44,6 +48,7 @@ export async function withApiRoutes(app: FastifyInstance) {
         await withContactRoutes(authed);
         await withCustomDomainRoutes(authed);
         await withMailboxRoutes(authed);
+        await withNotificationRoutes(authed);
         await withSmtpCredentialRoutes(authed);
         await withAccountRoutes(authed);
         await withBillingRoutes(authed);
@@ -57,6 +62,9 @@ export async function withApiRoutes(app: FastifyInstance) {
             admin.addHook("onRequest", requireAdmin);
             await withAdminOverviewRoutes(admin);
             await withAdminQueueRoutes(admin);
+            await withAdminInviteRoutes(admin);
+            await withAdminOperatorRoutes(admin);
+            await withAdminDestinationRoutes(admin);
           },
           { prefix: "/admin" },
         );

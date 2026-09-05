@@ -6,7 +6,7 @@
 # (queued; no deliverd runs in dev), bin/login-code pulls it off the queue,
 # POST /auth/verify graduates/logs-in and mints the API key. Idempotent —
 # rerunning just logs the user in again. Prints the API key. Requires the
-# dev stack (`just up` + `just db push`).
+# dev stack (`just up`).
 #
 # Usage: bin/user-create [email]
 # Default: wes@qmail.com (the story-world persona, dev only)

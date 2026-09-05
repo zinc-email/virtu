@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   Outlet,
+  createHashHistory,
   createRootRoute,
   createRoute,
   createRouter,
@@ -20,7 +21,11 @@ import { useState } from "react";
 import { css, cx } from "styled-system/css";
 import { clearApiKey, getApiKey } from "src/auth";
 import { getColorScheme, setColorScheme } from "src/colorScheme";
-import { getLogout, useGetUserInfo } from "src/gen";
+import { isExtension } from "src/shell";
+import { getLogout, useGetNotifications, useGetUserInfo } from "src/gen";
+import { AdminDestinationsPage } from "src/pages/AdminDestinations";
+import { AdminInvitesPage } from "src/pages/AdminInvites";
+import { AdminOperatorsPage } from "src/pages/AdminOperators";
 import { AdminOverviewPage } from "src/pages/AdminOverview";
 import { AdminQueuePage } from "src/pages/AdminQueue";
 import { AdminQueueMessagePage } from "src/pages/AdminQueueMessage";
@@ -34,6 +39,7 @@ import { LoginPage } from "src/pages/Login";
 import { MailboxDetailPage } from "src/pages/MailboxDetail";
 import { MailboxesPage } from "src/pages/Mailboxes";
 import { NotFoundPage } from "src/pages/NotFound";
+import { NotificationsPage } from "src/pages/Notifications";
 import { SettingsPage } from "src/pages/Settings";
 import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
@@ -197,6 +203,51 @@ function MobileMenu({
   );
 }
 
+// The header bell: unread count from page 0 (unread sort first there, so the
+// first page sees every unread up to its size — plenty for a badge). One
+// cached fetch shared with the notifications page via the query key.
+function NotificationBell({ active }: { active: boolean }) {
+  const notifications = useGetNotifications({ page: "0" });
+  const unread = notifications.data?.notifications.filter((n) => !n.read).length ?? 0;
+  return (
+    <Link
+      to="/notifications"
+      aria-label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}
+      className={css({
+        position: "relative",
+        display: "block",
+        padding: "0.5rem",
+        color: active ? "navLinkActive" : "navLink",
+        _hover: { color: "navLinkActive" },
+      })}
+    >
+      <Icon name="bell" size="1.1rem" />
+      {unread > 0 && (
+        <span
+          aria-hidden="true"
+          className={css({
+            position: "absolute",
+            top: 0,
+            right: 0,
+            minWidth: "0.9rem",
+            height: "0.9rem",
+            padding: "0 0.2rem",
+            borderRadius: "0.45rem",
+            backgroundColor: "accent",
+            color: "bg",
+            fontSize: "0.55rem",
+            lineHeight: "0.9rem",
+            fontWeight: "bold",
+            textAlign: "center",
+          })}
+        >
+          {unread > 20 ? "20+" : unread}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 function ThemeToggle() {
   const [scheme, setScheme] = useState(getColorScheme);
   const isDark = scheme === "dark";
@@ -259,7 +310,10 @@ function Shell() {
         ? "/mailboxes"
         : isAdminQueueDetail
           ? "/admin/queue"
-          : path === "/admin/queue"
+          : path === "/admin/queue" ||
+              path === "/admin/invites" ||
+              path === "/admin/operators" ||
+              path === "/admin/destinations"
             ? "/admin"
             : null;
   const authed = Boolean(getApiKey());
@@ -358,26 +412,38 @@ function Shell() {
                     {item.label}
                   </NavItem>
                 ))}
+                <li className={css({ marginLeft: "2rem" })}>
+                  <NotificationBell active={path.startsWith("/notifications")} />
+                </li>
               </ul>
-              <button
-                type="button"
-                aria-label="Menu"
-                aria-expanded={menuOpen}
-                onClick={() => setMenuOpen(true)}
+              {/* Collapsed header: the bell stays out of the drawer, next to
+                  the hamburger, so unread state is visible without a tap. */}
+              <div
                 className={css({
                   display: "none",
-                  "@media (max-width: 1000px)": { display: "block" },
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: "navLink",
-                  padding: "1rem",
-                  marginRight: "0.5rem",
-                  _hover: { color: "navLinkActive" },
+                  "@media (max-width: 1000px)": { display: "flex", alignItems: "center" },
                 })}
               >
-                <Icon name="bars" size="1.4rem" />
-              </button>
+                <NotificationBell active={path.startsWith("/notifications")} />
+                <button
+                  type="button"
+                  aria-label="Menu"
+                  aria-expanded={menuOpen}
+                  onClick={() => setMenuOpen(true)}
+                  className={css({
+                    display: "block",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "navLink",
+                    padding: "1rem",
+                    marginRight: "0.5rem",
+                    _hover: { color: "navLinkActive" },
+                  })}
+                >
+                  <Icon name="bars" size="1.4rem" />
+                </button>
+              </div>
             </>
           )}
         </nav>
@@ -506,6 +572,13 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const notificationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/notifications",
+  beforeLoad: requireAuth,
+  component: NotificationsPage,
+});
+
 // Admin section (operators only). requireAuth guards key presence like every
 // page; the admin check itself is server-side — each page renders the 403 as
 // a not-authorized state, so deep-linking non-admins leaks nothing.
@@ -536,6 +609,27 @@ const adminQueueMessageRoute = createRoute({
   component: AdminQueueMessagePage,
 });
 
+const adminInvitesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/invites",
+  beforeLoad: requireAuth,
+  component: AdminInvitesPage,
+});
+
+const adminOperatorsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/operators",
+  beforeLoad: requireAuth,
+  component: AdminOperatorsPage,
+});
+
+const adminDestinationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/destinations",
+  beforeLoad: requireAuth,
+  component: AdminDestinationsPage,
+});
+
 interface LoginSearch {
   /** Prefill from the www homepage CTA (GET /app/login?email=…). */
   email?: string;
@@ -552,6 +646,8 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 // turns the login page into an open redirect (credible phishing from a trusted
 // origin). Reject anything that resolves off-origin or outside /app; return a
 // safe RELATIVE path (assign resolves it against our origin, no double-prefix).
+// The extension popup passes too: its href is …/app/index.html#/route, an
+// /app path on its own (extension) origin.
 const safeRedirect = (v: unknown): string | undefined => {
   if (typeof v !== "string" || v === "") return undefined;
   try {
@@ -590,8 +686,12 @@ const registerRoute = createRoute({
 
 export const router = createRouter({
   // The SPA is served under /app behind the reverse proxy; must match
-  // rsbuild's server.base / output.assetPrefix (rsbuild.config.ts).
-  basepath: "/app",
+  // rsbuild's server.base / output.assetPrefix (rsbuild.config.ts). The
+  // extension popup loads the same build as a file (…/app/index.html) and
+  // routes by hash instead, with no basepath — the file's own path is not a
+  // route (src/shell.ts, extension/README.md).
+  basepath: isExtension() ? "/" : "/app",
+  history: isExtension() ? createHashHistory() : undefined,
   // Going back to an index page lands where you left off, not at the top.
   scrollRestoration: true,
   // Styled 404 — and the admin pages render this same component on a 403,
@@ -608,9 +708,13 @@ export const router = createRouter({
     domainDetailRoute,
     billingRoute,
     settingsRoute,
+    notificationsRoute,
     adminRoute,
     adminQueueRoute,
     adminQueueMessageRoute,
+    adminInvitesRoute,
+    adminOperatorsRoute,
+    adminDestinationsRoute,
     loginRoute,
     registerRoute,
   ]),

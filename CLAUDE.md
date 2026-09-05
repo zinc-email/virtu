@@ -24,7 +24,9 @@ of a legacy PHP/postfix stack, with a SimpleLogin-compatible API. Open source
 Bun runtime · one `server/` package with several entrypoints (`api`, `mx`,
 `submission`, `deliverd`, and `maild` = all three mail processes in one) ·
 Fastify + `fastify-zod-openapi` · Drizzle over Bun's native postgres
-(`drizzle-orm/bun-sql`, push-based migrations) · `mailauth` for all
+(`drizzle-orm/bun-sql`, generated migrations committed in `server/drizzle/`,
+applied unattended by `src/scripts/dbMigrate.ts` on api boot, in the serve
+stack's `db-migrate` one-shot, and in the test net) · `mailauth` for all
 DKIM/ARC/SPF/DMARC (verify and sign, in-process — no milters) · a plain
 `outbound_messages` Postgres table as the delivery queue · React SPA (rsbuild
 + TanStack Router/Query + Panda CSS) with a Kubb-generated SDK · Astro static
@@ -66,10 +68,12 @@ prod/staging.
   to `bin/` scripts; anything with a loop/conditional/env munging is a
   `bin/` script (`#!/usr/bin/env bash`, `set -euo pipefail`, `chmod +x`). If a
   recipe grows past one line, extract it.
-- **No Bun workspaces.** Each of `server/`, `client/`, `www/` owns its own
-  `package.json` + lockfile; the root holds only biome + lefthook. Run
-  `bun install` per package. Server↔client couple only through the committed
-  `server/spec/openapi.json`, never a code import.
+- **No Bun workspaces.** Each of `server/`, `client/`, `www/`, `extension/`
+  owns its own `package.json` + lockfile; the root holds only biome +
+  lefthook. Run `bun install` per package. Server↔client couple only through
+  the committed `server/spec/openapi.json`, never a code import. The
+  extension couples to the client only by packaging its built `dist/`
+  (`bin/extension-build`) and by the contract test importing the shell seam.
 - **Formatter is Biome** (`just format-write`); **linter is per-package
   ESLint**. Pre-commit runs biome on staged files — install once per machine
   with `bunx lefthook install`. Worktrees need the root `bun install` or the
@@ -87,20 +91,21 @@ prod/staging.
 
 - `*.unit.test.ts` — pure, no DB/network/docker. `just test-unit`.
 - `*.int.test.ts` — Fastify routes via `app.inject()` against the dockerized
-  Postgres. `just up && just db push`, then `just test-int`. Parallel-safe by
+  Postgres. `just up`, then `just test-int`. Parallel-safe by
   unique-data-per-test; no truncation.
 - `*.story.test.ts` — end-to-end mail through the **simulated internet**
   (fake DNS + peer MTAs, `docker-compose.test.yml`). `just test-net-up`, then
   `just test-story`; `just test-net-logs` to watch the mail pipeline,
   `just test-net-down` to tear down. Messages are located by an
   `X-Virtu-Test-Id` header in Maildir — no resets, run in any order.
-- `*.contract.test.ts` (`mobile/*/contract/`) — the bridge-protocol pin: the
-  real client shell seam (`client/src/shell.ts`) driven through each shell's
-  real shim against a fake native side. Pure bun — no JDK/Xcode/SDK/docker.
-  `just test-contract`; also runs in `just check` and CI.
+- `*.contract.test.ts` (`mobile/*/contract/`, `extension/contract/`) — the
+  bridge-protocol pin: the real client shell seam (`client/src/shell.ts`)
+  driven through each shell's real shim against a fake native/extension
+  side. Pure bun — no JDK/Xcode/SDK/docker. `just test-contract`; also runs
+  in `just check` and CI.
 - `*.dom.test.tsx` (client) — real React pages rendered in happy-dom, driving
   the **running stack over real HTTP** (transport is *not* mocked; happy-dom's
-  document origin is the API). `just up && just db push`, then
+  document origin is the API). `just up`, then
   `just test-client`. Parallel-safe by unique-data-per-test, like the int tier.
   When a test needs something only the server can produce (the emailed
   activation code today; DNS zone edits for custom domains later) it invokes a
@@ -108,8 +113,9 @@ prod/staging.
   client→server code import or a client DB reach-in. Harness:
   `client/test/{happydom,setup,render,tooling}.ts` + `client/bunfig.toml`.
 
-`just check` = format + both typechecks (regenerates the SDK) + unit tests +
-bridge contract tests; green here means CI passes. The int/story/dom tiers need docker and run
+`just check` = format + the typechecks (server, client — regenerating the
+SDK — and extension) + unit tests + bridge contract tests; green here means
+CI passes. The int/story/dom tiers need docker and run
 separately (like `just test-int`), so they're **not** in `just check` or CI.
 
 ## Code-gen pipeline (one direction) — the type-safety spine
@@ -120,7 +126,11 @@ DB column rename surfaces as a client compile error. See PLAN.md "The
 type-safety spine" for the full rationale. **Never edit generated code or start
 downstream with a stale spec.**
 
-1. Change `server/src/db/schema.ts`, `routes/`, or response schemas.
+1. Change `server/src/db/schema.ts`, `routes/`, or response schemas. A
+   schema change also needs `just db-generate` (writes the migration into
+   `server/drizzle/`, asking rename-vs-recreate interactively — never
+   `drizzle-kit push`, which is gone from the workflow) and `just db-migrate`;
+   commit the generated SQL + snapshot with the schema change.
 2. `bin/openapi-gen` writes `server/spec/openapi.json` (**committed artifact**).
 3. `cd client && bun run kubb` regenerates `client/src/gen` (gitignored).
 4. Update the client against the new SDK. `just gen` chains 2–3.
@@ -170,3 +180,6 @@ Mail: `server/src/{smtp,mailauth,mail,pipeline,queue}/` + `src/*.ts`
 entrypoints. API + committed spec: `server/src/routes/`, `server/spec/`.
 Simulated internet: `docker-compose.test.yml`, `server/docker/test/`, harness
 + stories in `server/test/`. Client: `client/src/`. Homepage: `www/`.
+Browser extension: `extension/` (the built client as the popup + the alias
+menu content script; `just extension-build`, README there for loading it
+unpacked). Mobile shells: `mobile/`.

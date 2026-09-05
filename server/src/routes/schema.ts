@@ -123,6 +123,10 @@ export const MailboxDto = z
     // Virtu extension (not in SimpleLogin): true when this mailbox is the
     // account's trash inbox — mail for disabled ("off") aliases lands here.
     trash: z.boolean(),
+    // Virtu extension: true when the mailbox is bounce-suppressed (it
+    // rejected a forward with 5.1.1/5.2.1 — ABUSE.md Tier 1). Forwarding to
+    // it is paused for every alias; re-verify with a fresh code to resume.
+    suppressed: z.boolean(),
   })
   .meta({ id: "Mailbox" });
 
@@ -146,6 +150,33 @@ export const SmtpCredentialCreatedDto = z
     password: z.string(),
   })
   .meta({ id: "SmtpCredentialCreated" });
+
+// ---------------------------------------------------------------------------
+// Notifications (GET /notifications shape — docs/api.md)
+// ---------------------------------------------------------------------------
+
+export const NotificationDto = z
+  .object({
+    id: z.number().int(),
+    title: z.string().nullable(),
+    message: z.string(),
+    read: z.boolean(),
+    // SimpleLogin humanizes ("2 minutes ago") — a phrase, not a timestamp.
+    created_at: z.string(),
+  })
+  .meta({ id: "Notification" });
+
+export const NotificationsResponse = z
+  .object({
+    // Whether another page exists (SL loads PAGE_LIMIT+1 to peek).
+    more: z.boolean(),
+    notifications: z.array(NotificationDto),
+  })
+  .meta({ id: "NotificationsResponse" });
+
+export const NotificationReadResponse = z
+  .object({ done: z.boolean() })
+  .meta({ id: "NotificationReadResponse" });
 
 // ---------------------------------------------------------------------------
 // Small envelopes shared across route groups

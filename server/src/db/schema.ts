@@ -6,7 +6,8 @@
 // snake_case in Postgres via the drizzle `casing: "snake_case"` option (set
 // in db/index.ts and drizzle.config.ts) — never name columns explicitly.
 //
-// Migrations are push-based: `just db push` (drizzle-kit push).
+// Migrations are generated and committed (server/drizzle/): after changing
+// this file run `just db-generate`, review the SQL, commit it with the change.
 
 import { sql } from "drizzle-orm";
 import {
@@ -81,6 +82,10 @@ export const users = pgTable(
     defaultAliasDomain: varchar({ length: 128 }),
     // Bitfield for misc account flags (SimpleLogin User.flags).
     flags: bigint({ mode: "number" }).default(0).notNull(),
+    // Per-user override of the daily outbound send quota (submission
+    // pre-enqueue, Lane K P2). Null = the plan default from config
+    // (SEND_QUOTA_FREE_PER_DAY / SEND_QUOTA_PREMIUM_PER_DAY); 0 = unlimited.
+    maxDailySends: integer(),
     // The "trash inbox": mail for a disabled ("off") alias is forwarded here
     // instead of being dropped. Null = accept-and-drop (the default).
     trashMailboxId: integer().references((): AnyPgColumn => mailboxes.id, { onDelete: "set null" }),
@@ -135,6 +140,34 @@ export const apiKeys = pgTable(
   (t) => [index("api_keys_user_id_idx").on(t.userId)],
 );
 
+// Signup invite codes (ABUSE.md Tier 0). When SIGNUP_INVITE_ONLY is set the
+// /auth/verify graduation step refuses to activate a provisional user
+// without consuming a valid invite; existing users are untouched. Used rows
+// are kept forever — the created_by -> used_by linkage is the invite graph
+// (accountability when abuse re-enters through a leaked invite), so invites
+// only reference users with SET NULL, never CASCADE.
+export const invites = pgTable(
+  "invites",
+  {
+    id: id(),
+    // The code itself, shown to the operator at mint time. A capability
+    // token an admin hands out, not a proof of identity — stored plaintext
+    // (unlike login codes / API keys) so it can be re-read from the list.
+    code: varchar({ length: 64 }).unique().notNull(),
+    // Operator bookkeeping: who this invite is meant for.
+    note: varchar({ length: 256 }),
+    // Admin who minted it; null when minted by the break-glass CLI.
+    createdBy: integer().references(() => users.id, { onDelete: "set null" }),
+    // Set once, atomically, by the graduation that consumed it.
+    usedBy: integer().references(() => users.id, { onDelete: "set null" }),
+    usedAt: timestamp({ withTimezone: true, mode: "date" }),
+    // Null = never expires.
+    expiresAt: timestamp({ withTimezone: true, mode: "date" }),
+    ...timestamps,
+  },
+  (t) => [index("invites_used_by_idx").on(t.usedBy)],
+);
+
 // Per-device SMTP submission passwords ("app passwords"): one row per device
 // ("my phone", "my laptop"), each revocable/replaceable independently of the
 // others. The account itself has no password, so these are the ONLY
@@ -172,6 +205,13 @@ export const mailboxes = pgTable(
     verified: boolean().default(false).notNull(),
     // A mailbox can be disabled if it can't be reached.
     disabled: boolean().default(false).notNull(),
+    // Bounce suppression (ABUSE.md Tier 1): set on the FIRST forward-phase
+    // bounce whose enhanced code says the mailbox is gone (5.1.1 no such
+    // user / 5.2.1 account disabled). While set, no alias delivers here —
+    // inbound is dropped, never bounced. Cleared ONLY by re-verification
+    // (a fresh emailed code); never auto-cleared when the domain answers
+    // again, because a recycled domain looks exactly like a recovery.
+    suppressedAt: timestamp({ withTimezone: true, mode: "date" }),
     // Incremented when a delivery/DNS check fails; alert past a threshold.
     nbFailedChecks: integer().default(0).notNull(),
     ...timestamps,
@@ -378,6 +418,9 @@ export const emailLogs = pgTable(
     isReply: boolean().default(false).notNull(),
     // E.g. alias disabled — the forward was blocked.
     blocked: boolean().default(false).notNull(),
+    // Why a blocked row was dropped: "alias_disabled" | "mailbox_unavailable"
+    // | "mailbox_suppressed" (ABUSE.md Tier 1). Null on pre-existing rows.
+    blockedReason: varchar({ length: 32 }),
     bounced: boolean().default(false).notNull(),
     // When the bounce was recorded (wave 2): the auto-disable thresholds
     // (>12/day, >10/week, 9-of-10 days — PLAN Lane C) count on this, not on
@@ -431,14 +474,99 @@ export const outboundMessages = pgTable(
     // (queue/reaper.ts) returns rows whose lease is stale to "pending".
     claimedAt: timestamp({ withTimezone: true, mode: "date" }),
     lastError: text(),
+    // Durable attribution (Lane K P2 schema decision): who a row belongs to,
+    // outliving VERP's 5-day decode window. Purely informational — deliverd
+    // never reads these; the queue stays dumb. Null on rows that predate the
+    // columns and on system mail with no owner. userId cascades: deleting an
+    // account withdraws its queued mail; emailLogId detaches (delivery of an
+    // in-flight message must survive its log row's deletion).
+    userId: integer().references(() => users.id, { onDelete: "cascade" }),
+    emailLogId: integer().references(() => emailLogs.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (t) => [
     index("outbound_messages_status_next_attempt_at_idx").on(t.status, t.nextAttemptAt),
     // Retention scans terminal rows by age (updatedAt = terminal-write time).
     index("outbound_messages_status_updated_at_idx").on(t.status, t.updatedAt),
+    // FK maintenance (user cascade / email_log set-null) + per-user listing.
+    index("outbound_messages_user_id_idx").on(t.userId),
+    index("outbound_messages_email_log_id_idx").on(t.emailLogId),
   ],
 );
+
+/** Which SMTP daemon refused (Lane K P2). */
+export type SmtpRejectionEntrypoint = "mx" | "submission";
+/** SMTP conversation phase the refusal happened in. */
+export type SmtpRejectionPhase = "connect" | "auth" | "mail_from" | "rcpt_to" | "data";
+
+// Every SMTP-time refusal, from both listeners (Lane K P2 — RCPT/DATA rejects
+// previously wrote nothing). Append-only forensics: probing/dictionary
+// traffic shows up here first, and Lane K P3's per-IP mx throttling feeds on
+// (remoteAddress, createdAt). Aged out by the retention pass
+// (queue/retention.ts) after SMTP_REJECTIONS_RETAIN_DAYS.
+export const smtpRejections = pgTable(
+  "smtp_rejections",
+  {
+    id: id(),
+    entrypoint: varchar({ length: 16 }).$type<SmtpRejectionEntrypoint>().notNull(),
+    phase: varchar({ length: 16 }).$type<SmtpRejectionPhase>().notNull(),
+    remoteAddress: varchar({ length: 64 }).notNull(),
+    heloName: varchar({ length: 256 }),
+    // Envelope context as far as the session got (null before that phase).
+    mailFrom: text(),
+    rcptTo: text(),
+    smtpCode: integer().notNull(),
+    enhancedCode: varchar({ length: 16 }),
+    // The reply text sent to the peer — our reject messages are stable
+    // constants, so this doubles as the machine-groupable reason.
+    reason: varchar({ length: 256 }).notNull(),
+    // The authenticated user, when the session had one (submission only).
+    // SET NULL: the row is abuse forensics and outlives the account.
+    userId: integer().references(() => users.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    // Retention scans by age; throttling (P3) counts per peer per window.
+    index("smtp_rejections_created_at_idx").on(t.createdAt),
+    index("smtp_rejections_remote_address_created_at_idx").on(t.remoteAddress, t.createdAt),
+    index("smtp_rejections_user_id_idx").on(t.userId),
+  ],
+);
+
+/** Which outbound SMTP step the destination answered at (queue/worker.ts). */
+export type DeliveryStep = "greeting" | "ehlo" | "starttls" | "mail_from" | "rcpt_to" | "data";
+
+// Per-destination outbound backpressure (queue/destinationThrottle.ts,
+// ABUSE.md Tier 3). One row per recipient DOMAIN that has told us to slow
+// down — a 421, or a 4.7.x policy deferral at a non-recipient step — with
+// an escalating pause. deliverd defers every row bound for a paused domain
+// without an attempt (the pause is the point: a cold IP hammering Gmail
+// through a 421 is how a temporary deferral becomes a reputation hit).
+// Rows persist across workers and restarts; a successful delivery to the
+// domain resets the strike count, an operator can clear the pause early.
+export const destinationThrottles = pgTable(
+  "destination_throttles",
+  {
+    domain: varchar({ length: 256 }).primaryKey(),
+    // Null = not paused (history only). deliverd checks `pausedUntil > now`.
+    pausedUntil: timestamp({ withTimezone: true, mode: "date" }),
+    // Consecutive deferral signals since the last success; drives the
+    // exponential pause length. Reset to 0 by a successful delivery.
+    strikes: integer().default(0).notNull(),
+    // Lifetime count of pauses — how often this destination has pushed back.
+    pauses: integer().default(0).notNull(),
+    // The reply that caused the latest pause (first line only).
+    lastCode: integer(),
+    lastEnhanced: varchar({ length: 16 }),
+    lastStep: varchar({ length: 16 }).$type<DeliveryStep>(),
+    lastReply: varchar({ length: 512 }),
+    lastDeferredAt: timestamp({ withTimezone: true, mode: "date" }),
+    ...timestamps,
+  },
+  (t) => [index("destination_throttles_paused_until_idx").on(t.pausedUntil)],
+);
+
+export type DestinationThrottle = typeof destinationThrottles.$inferSelect;
 
 // ---------------------------------------------------------------------------
 // Billing (PLAN Lane I — Stripe only, fully offloaded)
@@ -535,9 +663,11 @@ export type Contact = typeof contacts.$inferSelect;
 export type AliasUsedOn = typeof aliasUsedOn.$inferSelect;
 export type AliasMailbox = typeof aliasMailboxes.$inferSelect;
 export type VerificationCode = typeof verificationCodes.$inferSelect;
+export type Invite = typeof invites.$inferSelect;
 export type Domain = typeof domains.$inferSelect;
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type OutboundMessage = typeof outboundMessages.$inferSelect;
+export type SmtpRejection = typeof smtpRejections.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type SentAlert = typeof sentAlerts.$inferSelect;

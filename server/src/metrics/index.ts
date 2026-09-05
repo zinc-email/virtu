@@ -12,6 +12,8 @@
 import { count, eq, min } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { outboundMessages } from "../db/schema.ts";
+import { countPaused } from "../queue/destinationThrottle.ts";
+import { providerFor } from "./provider.ts";
 import { Registry } from "./registry.ts";
 
 export { providerFor } from "./provider.ts";
@@ -51,6 +53,12 @@ export const mxAuthVerdictsTotal = registry.counter(
   ["verdict"], // pass | flag | reject
 );
 
+export const mxRateLimitedTotal = registry.counter(
+  "virtu_mx_rate_limited_total",
+  "RCPT TO tempfailed by the per-alias / per-mailbox inbound rate limit",
+  ["scope"], // alias | mailbox
+);
+
 export const mxMessagesTotal = registry.counter(
   "virtu_mx_messages_total",
   "Inbound message outcomes at the MX",
@@ -77,6 +85,25 @@ export const submissionEnqueuedTotal = registry.counter(
   ["mode"], // reply | send
 );
 
+export const submissionQuotaRefusedTotal = registry.counter(
+  "virtu_submission_quota_refused_total",
+  "Messages refused by the per-user daily send quota",
+);
+
+// Shared by mx and submission (pipeline/smtpRejection.ts).
+export const smtpRejectionsTotal = registry.counter(
+  "virtu_smtp_rejections_total",
+  "SMTP-time refusals recorded to smtp_rejections",
+  ["entrypoint", "phase"],
+);
+
+// Mailbox-level bounce suppression (pipeline/suppression.ts, ABUSE.md Tier 1).
+export const mailboxSuppressedTotal = registry.counter(
+  "virtu_mailbox_suppressed_total",
+  "Mailboxes suppressed on a first-strike bounce code",
+  ["code"], // 5.1.1 | 5.2.1
+);
+
 // ── delivery queue / deliverd ───────────────────────────────────────────────
 
 export const queueClaimedTotal = registry.counter(
@@ -101,6 +128,25 @@ export const queueDestinationDeliveriesTotal = registry.counter(
   "virtu_queue_destination_deliveries_total",
   "Delivery attempt outcomes by destination provider bucket",
   ["provider", "result"],
+);
+
+export const queueDestinationRepliesTotal = registry.counter(
+  "virtu_queue_destination_replies_total",
+  "Failed delivery attempts by destination provider, SMTP step, reply code and enhanced class.subject",
+  ["provider", "step", "code", "enhanced"],
+);
+
+// Per-destination backpressure (queue/destinationThrottle.ts).
+export const destinationPausesTotal = registry.counter(
+  "virtu_destination_pauses_total",
+  "Domain pauses triggered by a deferral signal (421 / 4.7.x), by provider bucket",
+  ["provider"],
+);
+
+export const queueDestinationDeferredTotal = registry.counter(
+  "virtu_queue_destination_deferred_total",
+  "Rows returned to pending without an attempt because their destination was paused",
+  ["provider"],
 );
 
 export const queueReapedTotal = registry.counter(
@@ -183,6 +229,21 @@ export function registerQueueCollectors(db: Db): void {
       const oldest = rows[0]?.oldest ?? null;
       const age = oldest === null ? 0 : (Date.now() - oldest.getTime()) / 1000;
       gauge.set(Math.max(0, age));
+    },
+  );
+
+  // Destinations currently paused by the throttle, by provider bucket —
+  // the "is Gmail refusing us right now" panel.
+  const PROVIDER_BUCKETS = ["gmail", "microsoft", "yahoo", "icloud", "proton", "other"];
+  registry.gauge(
+    "virtu_destination_paused",
+    "Recipient domains currently paused by the per-destination throttle",
+    ["provider"],
+    async (gauge) => {
+      const domains = await countPaused(db);
+      const counts = new Map<string, number>();
+      for (const d of domains) counts.set(providerFor(d), (counts.get(providerFor(d)) ?? 0) + 1);
+      for (const provider of PROVIDER_BUCKETS) gauge.set({ provider }, counts.get(provider) ?? 0);
     },
   );
 }

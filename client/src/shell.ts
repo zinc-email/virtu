@@ -1,15 +1,23 @@
-// The shell seam — the ONE place the web app talks to a native mobile shell.
-// Protocol spec: shell.md beside this file (change them together); background:
-// plans/mobile.md. Shells inject `window.virtuShell` at document start; plain
+// The shell seam — the ONE place the web app talks to a shell that hosts it:
+// the native mobile apps (plans/mobile.md) and the browser extension's popup
+// (extension/). Protocol spec: shell.md beside this file (change them
+// together). Shells inject `window.virtuShell` at document start; plain
 // browsers never have it, and every helper here degrades to web behavior when
 // it's absent.
 
-export type ShellPlatform = "ios" | "android";
+export type ShellPlatform = "ios" | "android" | "extension";
 
 export interface VirtuShell {
   platform: ShellPlatform;
   shellVersion: string;
   protocol: number;
+  /**
+   * Absolute origin of the API, set only by a shell that serves the app from
+   * a non-web origin (the extension packages the built SPA at
+   * chrome-extension://…, where the SDK's relative /api would point nowhere).
+   * Webviews load the production URL and leave it unset.
+   */
+  apiOrigin?: string;
   /** One JSON-encoded message in, one JSON-encoded reply out (shell.md). */
   request(message: string): Promise<string>;
 }
@@ -42,6 +50,23 @@ export function isShell(): boolean {
 /** Which shell, for the few UI decisions that differ by store policy. */
 export function shellPlatform(): ShellPlatform | null {
   return shell()?.platform ?? null;
+}
+
+/**
+ * Prefix for the SDK's relative `/api` base: "" on the web and in webviews
+ * (same origin), the shell-declared origin in the extension popup.
+ */
+export function shellApiOrigin(): string {
+  return shell()?.apiOrigin ?? "";
+}
+
+/**
+ * The extension popup is a file inside the extension package, so the app
+ * routes by hash there instead of by path (src/app.tsx) — the one place the
+ * platform changes routing rather than a capability.
+ */
+export function isExtension(): boolean {
+  return shellPlatform() === "extension";
 }
 
 function isReply(value: unknown): value is ShellReply {

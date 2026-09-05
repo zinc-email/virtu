@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# extension-build — assemble the browser extension into extension/build/
+# (load that directory unpacked in the browser, or bin/extension-pack it):
+#
+#   1. the client SPA (client/dist, built here first unless --no-client-build)
+#      copied to build/app/, with the popup shell script + popup stylesheet
+#      injected into its <head> — window.virtuShell must exist before the
+#      app's bundles run (client/src/shell.md)
+#   2. the extension's own scripts (extension/src/*.ts) bundled by bun into
+#      build/*.js — classic scripts, so content.js and the worker load as-is
+#   3. static files (icons, images, popup.css) copied, and the manifest
+#      stamped with the package version and the target origin
+#
+# VIRTU_ORIGIN (default https://zinc.email) is the deployment the extension
+# talks to: the API origin baked into the scripts and the manifest's host
+# permission. Against the dev stack: VIRTU_ORIGIN=http://localhost:8080.
+#
+# Assumes deps are installed (bun install in client/ and extension/).
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+ORIGIN="${VIRTU_ORIGIN:-https://zinc.email}"
+BUILD=extension/build
+build_client=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-client-build) build_client=0 ;;
+    *) echo "extension-build: unknown option $arg" >&2; exit 2 ;;
+  esac
+done
+
+case "$ORIGIN" in
+  http://*|https://*) ;;
+  *) echo "extension-build: VIRTU_ORIGIN must be an http(s) origin, got '$ORIGIN'" >&2; exit 2 ;;
+esac
+if [[ "$ORIGIN" == */ ]]; then
+  echo "extension-build: VIRTU_ORIGIN must have no trailing slash" >&2
+  exit 2
+fi
+
+if [ "$build_client" = 1 ]; then
+  echo "extension-build: building client" >&2
+  (cd client && bun run build)
+fi
+if [ ! -f client/dist/index.html ]; then
+  echo "extension-build: client/dist/index.html missing — run without --no-client-build" >&2
+  exit 1
+fi
+
+rm -rf "$BUILD"
+mkdir -p "$BUILD/app"
+
+# 1. the SPA, with the shim + popup stylesheet ahead of the app bundles.
+cp -R client/dist/. "$BUILD/app/"
+inject='<head><script src="/popup-shell.js"></script><link rel="stylesheet" href="/popup.css">'
+sed -i "s|<head>|$inject|" "$BUILD/app/index.html"
+if [ "$(grep -c 'popup-shell.js' "$BUILD/app/index.html")" != 1 ]; then
+  echo "extension-build: expected exactly one <head> in client/dist/index.html to inject into" >&2
+  exit 1
+fi
+
+# 2. the extension scripts.
+echo "extension-build: bundling for $ORIGIN" >&2
+(cd extension && bun build src/background.ts src/content.ts src/popup-shell.ts \
+  --outdir build --target browser --format iife \
+  --define "VIRTU_API_ORIGIN=\"$ORIGIN\"" >/dev/null)
+
+# 3. static files + the stamped manifest.
+cp -R extension/icons extension/images "$BUILD/"
+cp extension/src/popup.css "$BUILD/"
+version="$(cd extension && bun -p 'require("./package.json").version')"
+sed -e "s|__VERSION__|$version|g" -e "s|__ORIGIN__|$ORIGIN|g" extension/manifest.json > "$BUILD/manifest.json"
+
+echo "extension-build: $BUILD ready (v$version → $ORIGIN)" >&2

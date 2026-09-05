@@ -26,6 +26,24 @@ export interface EmailLogInput {
   mailboxId: number | null;
   /** Original Message-ID header of the inbound message, if any. */
   messageId?: string | null;
+  /**
+   * The inbound auth verdict's "flag" reason (SPF hard-fail without DMARC,
+   * DMARC quarantine fail — mailauth/verify.ts) when the message was
+   * delivered annotated rather than clean. Persisted as is_spam/spam_status
+   * so downstream decisions can see it: a flagged message that later
+   * bounces at the mailbox must NOT earn its (likely forged) sender a DSN.
+   */
+  spamFlag?: string | null;
+}
+
+/** is_spam/spam_status columns from the optional flag. */
+function spamColumns(flag: string | null | undefined): {
+  isSpam: boolean;
+  spamStatus: string | null;
+} {
+  return flag === undefined || flag === null
+    ? { isSpam: false, spamStatus: null }
+    : { isSpam: true, spamStatus: flag.slice(0, 256) };
 }
 
 /** Create the log row for a forward (phase: contact → alias → mailbox). */
@@ -39,6 +57,7 @@ export async function createForwardLog(db: Db, input: EmailLogInput): Promise<Em
       mailboxId: input.mailboxId,
       isReply: false,
       messageId: clip(input.messageId, MAX_MESSAGE_ID),
+      ...spamColumns(input.spamFlag),
     })
     .returning();
   return rows[0]!;
@@ -61,7 +80,13 @@ export async function createReplyLog(db: Db, input: EmailLogInput): Promise<Emai
 }
 
 /** Create a blocked-drop log row (disabled alias accept-and-drop etc.). */
-export async function createBlockedLog(db: Db, input: EmailLogInput): Promise<EmailLog> {
+export async function createBlockedLog(
+  db: Db,
+  input: EmailLogInput & {
+    /** Why the drop happened ("alias_disabled" | "mailbox_suppressed" | …). */
+    blockedReason?: string;
+  },
+): Promise<EmailLog> {
   const rows = await db
     .insert(emailLogs)
     .values({
@@ -71,7 +96,9 @@ export async function createBlockedLog(db: Db, input: EmailLogInput): Promise<Em
       mailboxId: input.mailboxId,
       isReply: false,
       blocked: true,
+      blockedReason: clip(input.blockedReason, 32),
       messageId: clip(input.messageId, MAX_MESSAGE_ID),
+      ...spamColumns(input.spamFlag),
     })
     .returning();
   return rows[0]!;

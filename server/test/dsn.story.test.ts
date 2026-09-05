@@ -14,14 +14,16 @@
  * diagnostic must not echo the mailbox either. Leaking it would de-anonymize
  * the alias to anyone who can make a forward hard-bounce.
  *
- * A second doomed message to the same alias must NOT produce a second DSN:
- * DSNs are rate-limited per (user, sender, alias) through sent_alerts.
+ * A second doomed message to the same alias must NOT produce a second DSN —
+ * and since the 5.1.1 first strike suppressed the mailbox (ABUSE.md Tier 1),
+ * it never even reaches the queue: accept-and-drop with a
+ * "mailbox_suppressed" blocked log. Drop, never bounce.
  */
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import { db } from "../src/db/index.ts";
-import { emailLogs, sentAlerts } from "../src/db/schema.ts";
+import { emailLogs, mailboxes, sentAlerts } from "../src/db/schema.ts";
 import {
   createAlias,
   ensureDkimKey,
@@ -140,7 +142,21 @@ describe("story: DSN on permanent forward failure", () => {
     expect(bounced.length).toBe(1);
     expect(bounced[0]!.bouncedAt).not.toBeNull();
 
-    // ── rate limit: a second failure gets no second DSN ───────────────
+    // ── after the first strike: drop, never bounce ────────────────────
+    // The 5.1.1 suppressed the mailbox (ABUSE.md Tier 1); wait for the flag
+    // so the second send deterministically hits the suppressed path.
+    await pollUntil(
+      async () => {
+        const rows = await db
+          .select()
+          .from(mailboxes)
+          .where(eq(mailboxes.id, deadMailbox.id))
+          .limit(1);
+        return rows[0]?.suppressedAt != null;
+      },
+      { timeoutMs: 60_000, what: `mailbox ${deadMailbox.email} to suppress` },
+    );
+
     const secondId = newTestId();
     await smtpSend({
       host: milton.submission.host,
@@ -156,17 +172,23 @@ describe("story: DSN on permanent forward failure", () => {
     });
     await pollUntil(
       async () => {
-        const rows = await db
+        const blocked = await db
           .select({ id: emailLogs.id })
           .from(emailLogs)
-          .where(and(eq(emailLogs.aliasId, alias.id), eq(emailLogs.bounced, true)));
-        return rows.length >= 2;
+          .where(
+            and(eq(emailLogs.aliasId, alias.id), eq(emailLogs.blockedReason, "mailbox_suppressed")),
+          );
+        return blocked.length > 0;
       },
-      { timeoutMs: 120_000, pollMs: 500, what: "second bounce to be recorded" },
+      { timeoutMs: 120_000, pollMs: 500, what: "the drop to be logged mailbox_suppressed" },
     );
-    // The DSN claim happens right after the bounce is recorded; give the
-    // pipeline a beat, then assert the claim ledger held at one.
-    await Bun.sleep(3_000);
+    // Still exactly one bounce, one DSN claim, and no DSN for the second
+    // message — the drop never touched the queue, so nothing could bounce.
+    const bounced2 = await db
+      .select()
+      .from(emailLogs)
+      .where(and(eq(emailLogs.aliasId, alias.id), eq(emailLogs.bounced, true)));
+    expect(bounced2.length).toBe(1);
     const claims = await db
       .select()
       .from(sentAlerts)

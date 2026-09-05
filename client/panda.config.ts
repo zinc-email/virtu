@@ -103,6 +103,8 @@ export default defineConfig({
 
           // Lines
           border: { value: { base: "{colors.navy.500}", _light: "hsl(217, 35%, 72%)" } },
+          // The ghost of a border: a select's top and sides.
+          borderFaint: { value: { base: "rgba(46, 74, 119, 0.4)", _light: "hsl(217, 30%, 85%)" } },
           borderBright: { value: { base: "{colors.navy.400}", _light: "{colors.navy.500}" } },
           hairline: {
             // The faint hover underline (legacy $c8: 50% paper).

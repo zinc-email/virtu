@@ -170,7 +170,11 @@ const controlCss = css({
   boxSizing: "border-box",
   fontFamily: "sans",
   fontSize: "1rem",
-  padding: "1rem 1.1rem",
+  // Same line-height and total vertical padding as the md button (1.4rem +
+  // 1.75rem), so an input and a button on one FieldRow come out the same
+  // height and their bottoms meet.
+  lineHeight: "1.4rem",
+  padding: "0.875rem 1.1rem",
   backgroundColor: "transparent",
   color: "control",
   border: "0.111rem solid",
@@ -187,6 +191,17 @@ const controlCss = css({
 });
 const fieldHint = css({
   marginTop: "0.5rem",
+  lineHeight: "1.3em",
+  opacity: 0.75,
+  fontSize: "0.9rem",
+  color: "label",
+});
+// Title → detail → control, the settings-row order: the explanation belongs
+// with the title it qualifies, and the control closes the group. The label
+// tightens up so the pair reads as one heading.
+const fieldLabelTitled = css({ marginBottom: "0.2rem" });
+const fieldDetail = css({
+  marginBottom: "0.75rem",
   lineHeight: "1.3em",
   opacity: 0.75,
   fontSize: "0.9rem",
@@ -233,14 +248,21 @@ export function SelectField({
   ...props
 }: SelectFieldProps) {
   const selectId = id ?? props.name ?? label.toLowerCase();
+  const detailId = hint ? `${selectId}-detail` : undefined;
   return (
     <div className={fieldWrap}>
-      <label className={fieldLabel} htmlFor={selectId}>
+      <label className={cx(fieldLabel, hint && fieldLabelTitled)} htmlFor={selectId}>
         {label}
       </label>
+      {hint && (
+        <div id={detailId} className={fieldDetail}>
+          {hint}
+        </div>
+      )}
       <div className={css({ position: "relative" })}>
         <select
           id={selectId}
+          aria-describedby={detailId}
           className={cx(
             controlCss,
             // The native option popup takes its chrome from color-scheme and
@@ -248,10 +270,15 @@ export function SelectField({
             // light popup against the dark theme. The native arrow sits flush
             // against the border, so it's replaced with our own chevron at the
             // control's 1.1rem inset.
+            // Only the bottom edge of the box is drawn at full strength: a
+            // select is a value on a rule you can change, not a field you
+            // type into. Hover/focus bring the full box back.
             css({
               cursor: "pointer",
               appearance: "none",
               paddingRight: "2.8rem",
+              borderColor: "borderFaint",
+              borderBottomColor: "border",
               colorScheme: "dark",
               _light: { colorScheme: "light" },
               "& option": { backgroundColor: "bg", color: "text" },
@@ -281,7 +308,6 @@ export function SelectField({
           <Icon name={saved ? "check" : "chevron-down"} size="0.9rem" />
         </span>
       </div>
-      {hint && <div className={fieldHint}>{hint}</div>}
     </div>
   );
 }
@@ -854,7 +880,9 @@ export function KVAction({ children }: { children: ReactNode }) {
         kvRow,
         css({
           backgroundColor: "transparent",
-          border: "none",
+          // Longhand, to beat kvRow's border-bottom: a `border: none`
+          // shorthand is emitted before it and loses.
+          borderBottom: "none",
           padding: "0.5rem 0.5rem 0.5rem 0.1rem",
         }),
       )}
@@ -1087,6 +1115,9 @@ export const ui = {
     padding: 0,
     font: "inherit",
     _hover: { color: "accentHover" },
+    // A link-button is disabled while its request is in flight (e.g. the
+    // Stripe redirects): fade it so the click visibly took.
+    _disabled: { opacity: 0.5, cursor: "progress" },
   }),
   mono: css({ fontFamily: "mono" }),
   dim: css({ color: "textDim" }),

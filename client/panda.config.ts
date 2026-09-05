@@ -64,6 +64,14 @@ export default defineConfig({
             500: { value: "hsl(43, 97%, 54%)" }, // #fcbc17
             600: { value: "hsl(43, 90%, 40%)" }, // light-mode accent
           },
+          // Light mode's accent. Amber is the brand's "pop" on near-black, but
+          // on the cream ground it goes muddy — too little contrast to read as
+          // a link. A bright lavender carries against cream what amber carries
+          // against ink.
+          violet: {
+            500: { value: "hsl(282, 74%, 58%)" }, // light-mode accent
+            600: { value: "hsl(282, 68%, 46%)" }, // hover — deeper, not lighter
+          },
           ink: {
             800: { value: "#19191c" },
             900: { value: "#0f0f11" },
@@ -134,8 +142,10 @@ export default defineConfig({
           primaryGlow: {
             value: { base: "rgba(18, 160, 170, 0.4)", _light: "rgba(18, 160, 170, 0.35)" },
           },
-          accent: { value: { base: "{colors.amber.500}", _light: "{colors.amber.600}" } },
-          accentHover: { value: { base: "{colors.amber.400}", _light: "{colors.amber.500}" } },
+          // Amber on ink, violet on cream: the hue changes with the ground so
+          // the accent keeps the same pop in both (see the violet scale).
+          accent: { value: { base: "{colors.amber.500}", _light: "{colors.violet.500}" } },
+          accentHover: { value: { base: "{colors.amber.400}", _light: "{colors.violet.600}" } },
           onAccent: { value: { base: "{colors.ink.800}", _light: "{colors.paper.50}" } },
         },
       },

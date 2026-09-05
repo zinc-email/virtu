@@ -774,22 +774,25 @@ virtu-checkbox {
 }
 
 // ---------------------------------------------------------------------------
-// CTA block (legacy views/hello/cta.scss; class "views/hello/cta" renamed
-// to "hello-cta" for the static site)
+// CTA block (legacy views/hello/cta.scss; the static site's form is
+// components/CtaForm.astro, class "auth-login-form")
 // ---------------------------------------------------------------------------
 
-.hello-cta {
-  &.hasAccount,
-  &.isMinimal {
-    text-align: center;
-  }
-  &.noUser {
-    .field {
-      text-align: center;
-    }
-  }
+.auth-login-form {
+  // The signed-in button is an <a> (public/cta.js swaps it in): inline-block
+  // so its padding takes up space like the <button> it replaces — as an
+  // inline element the padding bleeds upward and the button hugs the text.
   a.button.submit {
     display: inline-block;
+  }
+  // Signed in the hero is h1 → paragraph → button; give the button the same
+  // breath above it as the paragraph has (section#hello header margin), so
+  // the three blocks share one rhythm. Margins collapse, so this is the gap.
+  &.hasAccount {
+    margin-top: 2.8rem;
+    .field {
+      margin-bottom: 0;
+    }
   }
 }
 

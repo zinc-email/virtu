@@ -25,6 +25,5 @@
   link.href = "/app/";
   link.textContent = "Protect My Inbox";
   form.querySelector("button.submit").replaceWith(link);
-  const cta = form.closest(".hello-cta");
-  if (cta) cta.classList.replace("noUser", "hasAccount");
+  form.classList.add("hasAccount"); // spacing for the signed-in hero (global.scss)
 })();

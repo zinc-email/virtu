@@ -27,6 +27,12 @@ git checkout --detach "${1:-origin/main}"
 # (frontend build, server deps, mail-certs) against the pulled tree.
 bin/compose -f docker-compose.serve.yml up --build -d
 
+# api runs the bind-mounted tree on a stock oven/bun image, so `up` sees no
+# config/image change and leaves the old process running — the checkout
+# above changed the code on disk, not in memory. Bounce it every deploy.
+# (maild is bounced by mail-certs-sync below for the same reason.)
+bin/compose -f docker-compose.serve.yml restart api
+
 # Pick up the (possibly fresh) mail cert and restart maild on top of it.
 bin/mail-certs-sync
 

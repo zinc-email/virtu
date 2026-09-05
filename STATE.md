@@ -293,7 +293,10 @@ for the next controller).
   bounces maild after renewals (listeners read certs once at startup — weekly
   cron on the box). Provisioning + deploy are `bin/host-provision` (swap,
   docker, virtu user) and `bin/host-deploy` (fetch + checkout, build, up,
-  cert sync — takes an optional ref, defaults origin/main; since 2026-09-02
+  **explicit `restart api`** — api is a stock bun image over the bind-mounted
+  tree, so `up` alone left the old process running (caught 2026-09-05 at
+  v0.3.5: two-day-old api, new code on disk; fixed v0.3.6), cert sync (which
+  bounces maild) — takes an optional ref, defaults origin/main; since 2026-09-02
   the serve stack's `db-migrate` one-shot applies committed `server/drizzle/`
   migrations before api/maild start, so schema rides the deploy; push-era
   boxes are baselined once with `just db-baseline`); `bin/dkim-ensure`

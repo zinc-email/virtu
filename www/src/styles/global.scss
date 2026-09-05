@@ -793,6 +793,12 @@ virtu-checkbox {
     .field {
       margin-bottom: 0;
     }
+    // Fine print under the swapped-in button ("You are already logged in."):
+    // quieter than a form note and tucked close under the button it annotates.
+    .note {
+      margin: 0.9rem 0 0;
+      opacity: 0.5;
+    }
   }
 }
 

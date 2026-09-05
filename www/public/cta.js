@@ -25,5 +25,10 @@
   link.href = "/app/";
   link.textContent = "Protect My Inbox";
   form.querySelector("button.submit").replaceWith(link);
+  // Fine print under the button, so the changed CTA explains itself.
+  const note = document.createElement("div");
+  note.className = "note";
+  note.textContent = "You are already logged in.";
+  link.after(note);
   form.classList.add("hasAccount"); // spacing for the signed-in hero (global.scss)
 })();

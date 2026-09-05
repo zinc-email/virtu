@@ -414,6 +414,42 @@ for the next controller).
   target. Verified on this box: JUnit heuristics suite authored (runs with
   `./gradlew test` on a JDK machine); on-device checklist items 13–15 added
   to mobile/android/README.md. No client or server changes.
+- **Browser extension (2026-09-05)** — the legacy Chrome/Firefox extension
+  (`tmp/virtu/browser-extension`, already Manifest V3) ported to `extension/`
+  as its own Bun package. The toolbar popup is the **built client SPA
+  verbatim** (`bin/extension-build` copies `client/dist` to `build/app/` and
+  injects the shim + a popup stylesheet into its `<head>`), so one client
+  build serves the site, the webviews, and the extension. The extension is a
+  third shell of the seam: `ShellPlatform` gained `"extension"`, `VirtuShell`
+  an optional `apiOrigin` (the popup is `chrome-extension://…`, where the
+  SDK's relative `/api` points nowhere — `api/client.ts` prefixes it), and
+  `isExtension()` switches the router to hash history with no basepath (the
+  popup is a file) and the 401 bounce to `#/login` — the one place the
+  platform changes routing rather than a capability (shell.md updated).
+  Shim `src/popup-shell.ts`: `apiKey.store/clear` ↔ `chrome.storage.local`,
+  `external.open` → new tab, `share` → Web Share API or `failed`, plus
+  localStorage healing from `chrome.storage` (the Android shell's Keystore
+  trick). Content script `src/content.ts` (the legacy inject.js on the
+  SimpleLogin API, Popper dropped, UI in a closed shadow root): the [Z]
+  button on email fields, a menu of aliases used on this site
+  (`POST /v2/aliases {query: hostname}` + `/v5/alias/options?hostname=`
+  recommendation first), "New alias for <host>" via `/alias/random/new
+  ?hostname=` with a `Used on <host>` note, right-click items (fill with
+  latest-or-mint / show button) routed to the right-clicked FRAME, per-site
+  cache in `chrome.storage.local`, 401 → "Sign in" opens the app in a tab.
+  API calls relay through the background worker (`src/background.ts`,
+  `src/api.ts`, `src/messages.ts`) — MV3 host permissions don't cover
+  content scripts. `VIRTU_ORIGIN` at build time picks the deployment (bakes
+  the API origin + the single host permission). Verified: `bin/check` green
+  (extension typecheck added to `bin/typecheck`; `extension/contract/
+  shim.contract.test.ts` — 7 tests — drives the real seam through the real
+  shim, now in `just test-contract`/`bin/check`/CI), `bin/extension-build`
+  produces a loadable `extension/build/`. **Not yet loaded in a real
+  browser** on this box — the load-unpacked walk in `extension/README.md`
+  is the next step; Firefox signing (`web-ext sign`) not wired. Login in
+  the popup is separate from the website's (own origin) and the pending
+  emailed-code step doesn't survive the popup closing (deliberately left
+  simple; a persisted pending-login is the follow-up).
 
 ## Upstream workarounds to revisit
 

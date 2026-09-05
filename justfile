@@ -106,10 +106,11 @@ test-client *args="":
   bin/test-client {{args}}
 
 # Bridge contract tests (*.contract.test.ts): the real client shell seam
-# driven through each shell's real shim (mobile/*/contract/). Pure bun — no
-# JDK, Xcode, SDK, docker, or device. Also part of `just check`.
+# driven through each shell's real shim (mobile/*/contract/,
+# extension/contract/). Pure bun — no JDK, Xcode, SDK, docker, or device.
+# Also part of `just check`.
 test-contract *args="":
-  bun test mobile {{args}}
+  bun test mobile extension/contract {{args}}
 
 # Start the simulated internet (fake DNS, peer MTAs, test-runner).
 # Fully isolated from the dev stack; no published host ports.
@@ -217,6 +218,18 @@ www-build:
 # Astro dev server for the homepage
 www-dev:
   cd www && bun run dev
+
+# ----------------------------------------------------------------------------
+# Browser extension — the built SPA as the popup + the alias menu (extension/)
+# ----------------------------------------------------------------------------
+
+# Assemble extension/build/ (load it unpacked). VIRTU_ORIGIN picks the deployment.
+extension-build *args="":
+  bin/extension-build {{args}}
+
+# Zip extension/build/ into extension/dist/ for the web stores.
+extension-pack:
+  bin/extension-pack
 
 # ----------------------------------------------------------------------------
 # Checks — format, typecheck, and the CI gauntlet

@@ -1,0 +1,107 @@
+/* Styles for the content script's shadow root (content.ts). Nothing here
+   reaches the host page and nothing of the page's reaches in. The two
+   image placeholders are replaced with chrome.runtime.getURL() at runtime. */
+
+:host {
+  all: initial;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.btn {
+  position: fixed;
+  z-index: 2147483647;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: url("__BUTTON__") center / contain no-repeat;
+  cursor: pointer;
+}
+
+.btn.loading {
+  background-image: url("__BUTTON_LOADING__");
+}
+
+.menu {
+  position: fixed;
+  z-index: 2147483647;
+  width: 264px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #fff;
+  color: #19191c;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  font:
+    13px / 1.3 Verdana,
+    "Helvetica Neue",
+    Helvetica,
+    Arial,
+    sans-serif;
+  text-align: left;
+}
+
+.list {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid #eee;
+  background: none;
+  color: #333;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.item:last-child {
+  border-bottom: 0;
+}
+
+.item:hover,
+.item:focus-visible {
+  outline: none;
+  background: #19191c;
+  color: #16dde6;
+}
+
+.item:hover .date {
+  color: #ccc;
+}
+
+.item:disabled {
+  background: none;
+  color: #888;
+  cursor: default;
+}
+
+.create {
+  color: #12a0aa;
+  font-weight: bold;
+}
+
+.email {
+  display: block;
+  overflow: hidden;
+  font-size: 1.1em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date {
+  display: block;
+  color: #666;
+  font-size: 90%;
+}
+
+.note {
+  padding: 8px 12px;
+  color: #666;
+}

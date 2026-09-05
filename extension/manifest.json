@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Zinc Email",
+  "version": "__VERSION__",
+  "description": "Protect your inbox from evil.",
+  "homepage_url": "__ORIGIN__/",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Zinc Email",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_popup": "app/index.html"
+  },
+  "permissions": ["contextMenus", "storage"],
+  "host_permissions": ["__ORIGIN__/*"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["images/*.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{dee1a281-9f69-41cb-8c77-f9d021dd73a5}"
+    }
+  }
+}

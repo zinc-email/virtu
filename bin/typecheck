@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # typecheck — run `tsc --noEmit` across the TypeScript workspaces (server,
-# client). Non-zero exit on any type error. Used by CI, `just typecheck`,
-# and `just check`.
+# client, extension). Non-zero exit on any type error. Used by CI,
+# `just typecheck`, and `just check`.
 #
 # The client typecheck descends into the generated SDK (client/src/gen), a
 # gitignored build artifact regenerated here when absent or older than the
@@ -11,7 +11,8 @@
 # code that ships. The generator reads the committed spec — no network, no
 # running server.
 #
-# Assumes workspace deps are installed (bun install in server/ and client/).
+# Assumes workspace deps are installed (bun install in server/, client/, and
+# extension/).
 
 set -euo pipefail
 
@@ -31,5 +32,8 @@ echo "typecheck: server" >&2
 
 echo "typecheck: client" >&2
 (cd client && ./node_modules/.bin/tsc --noEmit)
+
+echo "typecheck: extension" >&2
+(cd extension && ./node_modules/.bin/tsc --noEmit)
 
 echo "typecheck: all workspaces clean" >&2

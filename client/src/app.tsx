@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   Outlet,
+  createHashHistory,
   createRootRoute,
   createRoute,
   createRouter,
@@ -20,6 +21,7 @@ import { useState } from "react";
 import { css, cx } from "styled-system/css";
 import { clearApiKey, getApiKey } from "src/auth";
 import { getColorScheme, setColorScheme } from "src/colorScheme";
+import { isExtension } from "src/shell";
 import { getLogout, useGetNotifications, useGetUserInfo } from "src/gen";
 import { AdminDestinationsPage } from "src/pages/AdminDestinations";
 import { AdminInvitesPage } from "src/pages/AdminInvites";
@@ -644,6 +646,8 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 // turns the login page into an open redirect (credible phishing from a trusted
 // origin). Reject anything that resolves off-origin or outside /app; return a
 // safe RELATIVE path (assign resolves it against our origin, no double-prefix).
+// The extension popup passes too: its href is …/app/index.html#/route, an
+// /app path on its own (extension) origin.
 const safeRedirect = (v: unknown): string | undefined => {
   if (typeof v !== "string" || v === "") return undefined;
   try {
@@ -682,8 +686,12 @@ const registerRoute = createRoute({
 
 export const router = createRouter({
   // The SPA is served under /app behind the reverse proxy; must match
-  // rsbuild's server.base / output.assetPrefix (rsbuild.config.ts).
-  basepath: "/app",
+  // rsbuild's server.base / output.assetPrefix (rsbuild.config.ts). The
+  // extension popup loads the same build as a file (…/app/index.html) and
+  // routes by hash instead, with no basepath — the file's own path is not a
+  // route (src/shell.ts, extension/README.md).
+  basepath: isExtension() ? "/" : "/app",
+  history: isExtension() ? createHashHistory() : undefined,
   // Going back to an index page lands where you left off, not at the top.
   scrollRestoration: true,
   // Styled 404 — and the admin pages render this same component on a 403,

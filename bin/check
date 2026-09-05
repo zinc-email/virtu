@@ -25,7 +25,7 @@ echo "- unit tests" >&2
 (cd server && bun test unit.test "$@")
 
 echo "- bridge contract tests" >&2
-bun test mobile
+bun test mobile extension/contract
 
 echo >&2
 echo "all checks passed" >&2

@@ -68,10 +68,12 @@ prod/staging.
   to `bin/` scripts; anything with a loop/conditional/env munging is a
   `bin/` script (`#!/usr/bin/env bash`, `set -euo pipefail`, `chmod +x`). If a
   recipe grows past one line, extract it.
-- **No Bun workspaces.** Each of `server/`, `client/`, `www/` owns its own
-  `package.json` + lockfile; the root holds only biome + lefthook. Run
-  `bun install` per package. Server↔client couple only through the committed
-  `server/spec/openapi.json`, never a code import.
+- **No Bun workspaces.** Each of `server/`, `client/`, `www/`, `extension/`
+  owns its own `package.json` + lockfile; the root holds only biome +
+  lefthook. Run `bun install` per package. Server↔client couple only through
+  the committed `server/spec/openapi.json`, never a code import. The
+  extension couples to the client only by packaging its built `dist/`
+  (`bin/extension-build`) and by the contract test importing the shell seam.
 - **Formatter is Biome** (`just format-write`); **linter is per-package
   ESLint**. Pre-commit runs biome on staged files — install once per machine
   with `bunx lefthook install`. Worktrees need the root `bun install` or the
@@ -96,10 +98,11 @@ prod/staging.
   `just test-story`; `just test-net-logs` to watch the mail pipeline,
   `just test-net-down` to tear down. Messages are located by an
   `X-Virtu-Test-Id` header in Maildir — no resets, run in any order.
-- `*.contract.test.ts` (`mobile/*/contract/`) — the bridge-protocol pin: the
-  real client shell seam (`client/src/shell.ts`) driven through each shell's
-  real shim against a fake native side. Pure bun — no JDK/Xcode/SDK/docker.
-  `just test-contract`; also runs in `just check` and CI.
+- `*.contract.test.ts` (`mobile/*/contract/`, `extension/contract/`) — the
+  bridge-protocol pin: the real client shell seam (`client/src/shell.ts`)
+  driven through each shell's real shim against a fake native/extension
+  side. Pure bun — no JDK/Xcode/SDK/docker. `just test-contract`; also runs
+  in `just check` and CI.
 - `*.dom.test.tsx` (client) — real React pages rendered in happy-dom, driving
   the **running stack over real HTTP** (transport is *not* mocked; happy-dom's
   document origin is the API). `just up`, then
@@ -110,8 +113,9 @@ prod/staging.
   client→server code import or a client DB reach-in. Harness:
   `client/test/{happydom,setup,render,tooling}.ts` + `client/bunfig.toml`.
 
-`just check` = format + both typechecks (regenerates the SDK) + unit tests +
-bridge contract tests; green here means CI passes. The int/story/dom tiers need docker and run
+`just check` = format + the typechecks (server, client — regenerating the
+SDK — and extension) + unit tests + bridge contract tests; green here means
+CI passes. The int/story/dom tiers need docker and run
 separately (like `just test-int`), so they're **not** in `just check` or CI.
 
 ## Code-gen pipeline (one direction) — the type-safety spine
@@ -176,3 +180,6 @@ Mail: `server/src/{smtp,mailauth,mail,pipeline,queue}/` + `src/*.ts`
 entrypoints. API + committed spec: `server/src/routes/`, `server/spec/`.
 Simulated internet: `docker-compose.test.yml`, `server/docker/test/`, harness
 + stories in `server/test/`. Client: `client/src/`. Homepage: `www/`.
+Browser extension: `extension/` (the built client as the popup + the alias
+menu content script; `just extension-build`, README there for loading it
+unpacked). Mobile shells: `mobile/`.

@@ -9,11 +9,13 @@
 // here. Presence ≈ logged in: if the key was revoked, /app/ just bounces to
 // the login page.
 (() => {
+  let key;
   try {
-    if (!localStorage.getItem("virtu.apiKey")) return;
+    key = localStorage.getItem("virtu.apiKey");
   } catch {
     return; // storage blocked (privacy mode) — keep the login form
   }
+  if (!key) return;
   // Keep the <form> in place (page CSS hooks layout on it, e.g.
   // section#hello form { text-align: center }): hide the email field and
   // swap only the button for a link into the app. style.display, not
@@ -25,10 +27,32 @@
   link.href = "/app/";
   link.textContent = "Protect My Inbox";
   form.querySelector("button.submit").replaceWith(link);
-  // Fine print under the button, so the changed CTA explains itself.
+  // Fine print under the button, so the changed CTA explains itself — with
+  // the way out, since this is the only place a signed-in visitor sees the
+  // marketing site. Logging out revokes the key server-side (GET /api/logout,
+  // routes/account.ts) the way the app's own footer does, then reloads into
+  // the logged-out form.
   const note = document.createElement("div");
   note.className = "note";
-  note.textContent = "You are already logged in.";
+  note.append("You are logged in. ");
+  const out = document.createElement("button");
+  out.type = "button";
+  out.textContent = "Log out?";
+  out.addEventListener("click", async () => {
+    out.disabled = true;
+    try {
+      await fetch("/api/logout", { headers: { Authentication: key } });
+    } catch {
+      // network down or key already dead — the local logout still stands
+    }
+    try {
+      localStorage.removeItem("virtu.apiKey");
+    } catch {
+      // unreachable: we only got here because reading it worked
+    }
+    location.reload();
+  });
+  note.append(out);
   link.after(note);
   form.classList.add("hasAccount"); // spacing for the signed-in hero (global.scss)
 })();

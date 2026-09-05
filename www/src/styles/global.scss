@@ -793,11 +793,24 @@ virtu-checkbox {
     .field {
       margin-bottom: 0;
     }
-    // Fine print under the swapped-in button ("You are already logged in."):
+    // Fine print under the swapped-in button ("You are logged in. Log out?"):
     // quieter than a form note and tucked close under the button it annotates.
     .note {
       margin: 0.9rem 0 0;
       opacity: 0.5;
+      // "Log out?" is an action, not a destination, so it is a <button> —
+      // strip the chrome so it reads as the inline link it looks like.
+      button {
+        padding: 0;
+        border: 0;
+        background: none;
+        font: inherit;
+        color: var(--c-cta);
+        cursor: pointer;
+        &:hover {
+          color: color.adjust($c5, $lightness: 15%);
+        }
+      }
     }
   }
 }

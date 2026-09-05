@@ -495,7 +495,12 @@ const switchCss = css({
   borderRadius: "1.5em",
   cursor: "pointer",
   transition: "background-color 0.5s token(easings.spring)",
-  _disabled: { opacity: 0.6, cursor: "not-allowed" },
+  // Disabled covers two cases — a save in flight (every page passes the
+  // mutation's isPending) and a real lock (the default-mailbox switch is held
+  // ON) — so the cursor is the neutral default, not the forbidding
+  // not-allowed one: a click during a save is simply ignored, and the dim says
+  // "not right now" in both cases.
+  _disabled: { opacity: 0.6, cursor: "default" },
 
   "& [data-part=track]": {
     display: "block",

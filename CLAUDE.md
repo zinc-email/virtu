@@ -19,6 +19,13 @@ of a legacy PHP/postfix stack, with a SimpleLogin-compatible API. Open source
    what's stubbed, what's not started, and the upstream workarounds. Keep it
    current as you land work.
 
+Program docs for one subject live at the root (`ABUSE.md`) with their
+evidence under `docs/`. **Forward-looking plans for work not yet started go
+in `plans/YYYY-MM-DD-plan-name.md`**, dated the day they're written — they
+record the decisions that are cheap now and expensive later. When a plan
+lands, its settled decisions move into PLAN.md and its progress into
+STATE.md; the dated file stays as the reasoning trail.
+
 ## Stack
 
 Bun runtime · one `server/` package with several entrypoints (`api`, `mx`,

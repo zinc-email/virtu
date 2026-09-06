@@ -276,6 +276,32 @@ DNS-re-check cron (writes debounced `verified_*` flags; `name` + capabilities
 auto-derive — demotes a domain whose ownership TXT lapses, freeing the name
 for the next controller).
 
+### Pre-launch review batch (2026-09-05)
+
+Red-team pass a week before zinc goes live; findings and the fix plan in
+`plans/2026-09-05-security-review.md`. The two P0s landed; P1/P2 are open.
+
+1. **SMTP smuggling closed** (was High, CVE-2023-51764 class).
+   `smtp/wire.ts:DataDecoder` ended DATA on a lone "." line after ANY line
+   break, so `<LF>.<LF>` (and the mixed forms) let a bare-LF-passing relay
+   end our DATA early and pipeline a second envelope that the mx then
+   authenticated against the relay's IP. End-of-data is now `<CRLF>.<CRLF>`
+   only; a dot line off a bare LF is content (unstuffed to an empty line),
+   bare LF elsewhere still normalizes to CRLF. Pinned in
+   `wire.unit.test.ts` (each terminator variant) and at the socket level in
+   `server.unit.test.ts` (the smuggled envelope lands in the one message's
+   body, no second transaction runs).
+2. **Forwarding loop closed** (was High). A mailbox on a domain whose MX is
+   us (a trial user's own catch-all domain, or a stranger's) looped
+   mx → queue → deliverd → mx forever, retried for four days, with nothing
+   surviving the forward whitelist to count hops. Two doors:
+   `routes/mailboxRoutes.ts` refuses a mailbox on any `domains` row with
+   `verified_mx` (int test), and `mail/rewriteForward.ts` stamps
+   `X-Virtu-Hops` (whitelisted, +1 per forward; `MAX_FORWARD_HOPS = 2`) —
+   the mx accept-and-drops at the limit with a `forward_loop` blocked log
+   and a `loop_dropped` outcome, and logs `forward_chained` at the second
+   hop so telemetry shows who chains. `loop.story.test.ts` pins both sides.
+
 ## Not started
 
 - **Backups** — planned 2026-09-02 in **`plans/backups.md`**: nightly

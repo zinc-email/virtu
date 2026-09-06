@@ -2,6 +2,7 @@
 // SimpleLogin equivalent — SL has no SMTP submission). One credential per
 // device ("Phone", "Laptop"), each revocable independently of the account
 // password and of each other:
+//   GET    /smtp/settings                    host/ports/username to paste
 //   GET    /smtp/credentials                 list (never the secret)
 //   POST   /smtp/credentials                 create; plaintext returned ONCE
 //   DELETE /smtp/credentials/:credential_id  revoke immediately
@@ -11,6 +12,7 @@ import { and, count, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
+import { config } from "../config";
 import { db } from "../db";
 import { type SmtpCredential, smtpCredentials } from "../db/schema";
 import { timestampOf } from "./aliasText";
@@ -20,6 +22,7 @@ import {
   ErrorResponse,
   SmtpCredentialCreatedDto,
   SmtpCredentialDto,
+  SmtpSettingsDto,
 } from "./schema";
 
 /** Keep runaway scripted creation in check (well past any real device count). */
@@ -61,6 +64,28 @@ function credentialToDict(row: SmtpCredential) {
 
 export async function withSmtpCredentialRoutes(authed: FastifyInstance) {
   const a = authed.withTypeProvider<FastifyZodOpenApiTypeProvider>();
+
+  a.route({
+    method: "GET",
+    url: "/smtp/settings",
+    schema: {
+      description:
+        "The server half of a mail-client setup: submission hostname, both ports " +
+        "(587 STARTTLS / 465 implicit TLS) and the SMTP username to use — the " +
+        "account's own email address, never an alias. Deployment config, so the " +
+        "client must ask rather than hardcode it.",
+      tags: ["SmtpCredential"],
+      security: [{ apiKeyAuth: [] }],
+      response: { 200: SmtpSettingsDto, 401: ErrorResponse },
+    },
+    handler: async (req) => ({
+      hostname: config.mailHostname,
+      port_starttls: config.submissionPort,
+      port_tls: config.submissionTlsPort,
+      username: req.user.email,
+      mail_domain: config.mailDomain,
+    }),
+  });
 
   a.route({
     method: "GET",

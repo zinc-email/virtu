@@ -41,6 +41,7 @@ import { MailboxesPage } from "src/pages/Mailboxes";
 import { NotFoundPage } from "src/pages/NotFound";
 import { NotificationsPage } from "src/pages/Notifications";
 import { SettingsPage } from "src/pages/Settings";
+import { SmtpPage } from "src/pages/Smtp";
 import { Drawer } from "src/overlays";
 import { Icon, Logo } from "src/ui";
 
@@ -61,6 +62,7 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
 ];
 
 const ACCOUNT_NAV_ITEMS: NavItem[] = [
+  { to: "/smtp", label: "Mail client" },
   { to: "/settings", label: "Settings" },
   { to: "/billing", label: "Account" },
 ];
@@ -111,6 +113,7 @@ function activeNavItem(path: string): string {
   if (path.startsWith("/mailboxes")) return "/mailboxes";
   if (path.startsWith("/domains")) return "/domains";
   if (path.startsWith("/settings")) return "/settings";
+  if (path.startsWith("/smtp")) return "/smtp";
   if (path.startsWith("/billing")) return "/billing";
   if (path.startsWith("/admin")) return "/admin";
   return "";
@@ -682,6 +685,13 @@ const billingRoute = createRoute({
   component: BillingPage,
 });
 
+const smtpRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/smtp",
+  beforeLoad: requireAuth,
+  component: SmtpPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -825,6 +835,7 @@ export const router = createRouter({
     domainDetailRoute,
     billingRoute,
     settingsRoute,
+    smtpRoute,
     notificationsRoute,
     adminRoute,
     adminQueueRoute,

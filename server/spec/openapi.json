@@ -1485,6 +1485,38 @@
         ],
         "additionalProperties": false
       },
+      "SmtpSettings": {
+        "type": "object",
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "port_starttls": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "port_tls": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "username": {
+            "type": "string"
+          },
+          "mail_domain": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname",
+          "port_starttls",
+          "port_tls",
+          "username",
+          "mail_domain"
+        ],
+        "additionalProperties": false
+      },
       "SmtpCredentialsResponse": {
         "type": "object",
         "properties": {
@@ -4831,6 +4863,41 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/smtp/settings": {
+      "get": {
+        "tags": [
+          "SmtpCredential"
+        ],
+        "description": "The server half of a mail-client setup: submission hostname, both ports (587 STARTTLS / 465 implicit TLS) and the SMTP username to use — the account's own email address, never an alias. Deployment config, so the client must ask rather than hardcode it.",
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpSettings"
+                }
+              }
+            }
+          },
+          "401": {
             "description": "Default Response",
             "content": {
               "application/json": {

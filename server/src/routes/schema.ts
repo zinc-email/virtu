@@ -151,6 +151,22 @@ export const SmtpCredentialCreatedDto = z
   })
   .meta({ id: "SmtpCredentialCreated" });
 
+// The server-side half of "set up your mail client": everything the setup
+// page must render but cannot know, because it is deployment config
+// (MAIL_HOSTNAME / SUBMISSION_PORT / SUBMISSION_TLS_PORT differ per box —
+// zinc, lmnop, localhost). `username` is the caller's own account email:
+// SMTP AUTH takes the account address, never an alias, and a page that
+// prints the exact string to paste beats one that describes it.
+export const SmtpSettingsDto = z
+  .object({
+    hostname: z.string(),
+    port_starttls: z.number().int(),
+    port_tls: z.number().int(),
+    username: z.string(),
+    mail_domain: z.string(),
+  })
+  .meta({ id: "SmtpSettings" });
+
 // ---------------------------------------------------------------------------
 // Notifications (GET /notifications shape — docs/api.md)
 // ---------------------------------------------------------------------------

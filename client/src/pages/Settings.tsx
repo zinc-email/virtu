@@ -1,42 +1,25 @@
 // Settings ("/settings") — legacy narrow page: left-aligned h1, old-style
 // native selects (the legacy site styled native controls; no combobox
 // widgetry), every control saves on change. Wired to GET/PATCH /setting and
-// GET /v2/setting/domains through the Kubb hooks. Below the account settings:
-// SMTP device passwords (one per device, revocable independently; the
-// password is shown exactly once at creation).
+// GET /v2/setting/domains through the Kubb hooks.
+//
+// SMTP device passwords used to live at the bottom of this page; they moved
+// to /smtp, where they sit with the setup instructions that give them a
+// purpose. Only a pointer remains — one place owns that state.
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { css, cx } from "styled-system/css";
 import { apiErrorMessage } from "src/api/errors";
+import { Link } from "@tanstack/react-router";
 import {
   getSettingQueryKey,
-  getSmtpCredentialsQueryKey,
-  type SmtpCredentialCreated,
   type UpdateSettingRequest,
-  useDeleteSmtpCredentialsCredentialId,
   useGetSetting,
-  useGetSmtpCredentials,
   useGetV2SettingDomains,
   usePatchSetting,
-  usePostSmtpCredentials,
 } from "src/gen";
-import { timeAgo } from "src/lib/time";
-import { Dialog } from "src/overlays";
-import {
-  Alert,
-  Button,
-  CopyButton,
-  Field,
-  FieldRow,
-  Icon,
-  KV,
-  KeyValue,
-  Section,
-  SelectField,
-  Switch,
-  ui,
-} from "src/ui";
+import { Alert, Icon, Section, SelectField, Switch, ui } from "src/ui";
 import { useHead } from "src/head";
 
 const GENERATOR_OPTIONS = [
@@ -60,137 +43,6 @@ const SENDER_FORMAT_OPTIONS = [
   { value: "AT_ONLY", label: "alan.watts at sjsu.edu" },
   { value: "NO_NAME", label: "No name" },
 ];
-
-// SMTP device passwords: list, create (password revealed once in a dialog),
-// revoke. Sends via port 587/465 authenticate with the account email + one
-// of these — the account itself has no password, so device credentials are
-// the only thing SMTP AUTH accepts.
-function SmtpCredentialsSection() {
-  const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const [created, setCreated] = useState<SmtpCredentialCreated | null>(null);
-
-  const credentials = useGetSmtpCredentials();
-  const invalidate = () =>
-    void queryClient.invalidateQueries({ queryKey: getSmtpCredentialsQueryKey() });
-
-  const create = usePostSmtpCredentials({
-    mutation: {
-      onSuccess: (row) => {
-        setName("");
-        invalidate();
-        setCreated(row);
-      },
-    },
-  });
-  const revoke = useDeleteSmtpCredentialsCredentialId({ mutation: { onSuccess: invalidate } });
-
-  const rows = credentials.data?.credentials ?? [];
-
-  return (
-    <div className={css({ marginTop: "4rem" })}>
-      <h2 className={cx(ui.h2, css({ marginBottom: "1rem" }))}>SMTP passwords.</h2>
-      <p className={cx(ui.finePrint, css({ marginBottom: "2rem" }))}>
-        One password per device — phone, laptop, mail client. Use your account email as the SMTP
-        username on port 587 or 465. Revoke a device any time; the others keep working.
-      </p>
-
-      {create.isError && <Alert>{apiErrorMessage(create.error)}</Alert>}
-      {revoke.isError && <Alert>{apiErrorMessage(revoke.error)}</Alert>}
-
-      {credentials.isPending ? (
-        <p className={css({ textAlign: "center", padding: "2rem", color: "textDim" })}>Loading…</p>
-      ) : credentials.isError ? (
-        <Alert>{apiErrorMessage(credentials.error)}</Alert>
-      ) : (
-        rows.length > 0 && (
-          <KeyValue>
-            {rows.map((c) => (
-              <KV key={c.id} k={c.name}>
-                <span className={css({ color: "textDim" })}>
-                  {c.last_used_timestamp === null
-                    ? "Never used"
-                    : `Last used ${timeAgo(c.last_used_timestamp)}`}
-                </span>
-                <Button
-                  size="tiny"
-                  variant="cta"
-                  disabled={revoke.isPending}
-                  onClick={() => revoke.mutate({ credential_id: c.id })}
-                  className={css({ marginLeft: "1rem" })}
-                >
-                  Revoke
-                </Button>
-              </KV>
-            ))}
-          </KeyValue>
-        )
-      )}
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const trimmed = name.trim();
-          if (!trimmed) return;
-          create.mutate({ data: { name: trimmed } });
-        }}
-      >
-        <FieldRow
-          field={
-            <Field
-              label="New device name"
-              name="credential-name"
-              placeholder="My phone"
-              value={name}
-              onChange={(e) => setName(e.currentTarget.value)}
-            />
-          }
-          button={
-            <Button
-              type="submit"
-              variant="submit"
-              loading={create.isPending}
-              className={css({ padding: "1rem 1.5rem 0.75rem 1.5rem", whiteSpace: "nowrap" })}
-            >
-              + Create
-            </Button>
-          }
-        />
-      </form>
-
-      {created !== null && (
-        <Dialog opened onClose={() => setCreated(null)} title="Save this password now.">
-          <p className={css({ marginBottom: "1.5rem", color: "textDim", fontSize: "0.9rem" })}>
-            This is the only time it will be shown. Enter it as the SMTP password for{" "}
-            <strong>{created.name}</strong>.
-          </p>
-          <div
-            className={css({
-              display: "flex",
-              alignItems: "center",
-              gap: "1rem",
-              padding: "1rem",
-              backgroundColor: "surface",
-              borderRadius: "0.25rem",
-              fontFamily: "mono",
-              wordBreak: "break-all",
-            })}
-          >
-            <span data-testid="smtp-password">{created.password}</span>
-            <CopyButton text={created.password} />
-          </div>
-          <div
-            className={css({ marginTop: "1.5rem", display: "flex", justifyContent: "flex-end" })}
-          >
-            <Button variant="submit" onClick={() => setCreated(null)}>
-              I saved it
-            </Button>
-          </div>
-        </Dialog>
-      )}
-    </div>
-  );
-}
 
 export function SettingsPage() {
   useHead({ title: "Settings" });
@@ -310,7 +162,16 @@ export function SettingsPage() {
         </div>
       )}
 
-      <SmtpCredentialsSection />
+      <div className={css({ marginTop: "4rem" })}>
+        <h2 className={cx(ui.h2, css({ marginBottom: "1rem" }))}>Mail client.</h2>
+        <p className={ui.finePrint}>
+          Send and reply as your aliases from your own mail app.{" "}
+          <Link to="/smtp" className={ui.link}>
+            Set up SMTP and manage device passwords
+          </Link>
+          .
+        </p>
+      </div>
     </Section>
   );
 }

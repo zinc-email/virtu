@@ -43,9 +43,12 @@ describe("Admin operator mail — real transport against the running stack", () 
       timeout: 15_000,
     });
     // Opted in ⇒ in the effective set: the row now carries the receiving tag.
-    const row = toggle.closest("div");
+    // Scope to this row's <dd> (switch + hint share it): the list is global,
+    // and an operator left opted-in by an interrupted run also reads
+    // "receiving".
+    const row = toggle.closest("dd");
     if (!row) throw new Error("switch row missing");
-    await within(row.parentElement ?? row).findByText("receiving");
+    await within(row).findByText("receiving");
 
     // Flip back so the shared fallback rule is left as we found it.
     await user.click(toggle);

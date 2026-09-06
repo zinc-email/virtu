@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { MailboxDetailPage } from "src/pages/MailboxDetail";
 import { MailboxesPage } from "src/pages/Mailboxes";
 import { SettingsPage } from "src/pages/Settings";
-import { renderPage } from "../../test/render";
+import { renderPage, waitForGone } from "../../test/render";
 import { createUser, latestLoginCode, suppressMailbox } from "../../test/tooling";
 
 const uniqueEmail = () => `dom-${crypto.randomUUID()}@qmail.com`;
@@ -61,12 +61,7 @@ describe("MailboxesPage — real transport against the running stack", () => {
     // The emailed 6-digit code verifies it.
     const code = await latestLoginCode(mailboxEmail);
     await fillCode(user, code);
-    await waitFor(
-      () => {
-        expect(screen.queryByText("Check your inbox.")).toBeNull();
-      },
-      { timeout: 15_000 },
-    );
+    await waitForGone(() => screen.queryByText("Check your inbox."));
     // Both mailboxes now read Verified (registration one + the new one).
     await waitFor(
       () => {
@@ -196,13 +191,8 @@ describe("bounce-suppressed mailbox (ABUSE.md Tier 1) — resume by re-verifying
 
     const code = await latestLoginCode(email);
     await fillCode(user, code);
-    await waitFor(
-      () => {
-        expect(screen.queryByText("Check your inbox.")).toBeNull();
-        expect(screen.getByText("Verified")).toBeTruthy();
-      },
-      { timeout: 15_000 },
-    );
+    await waitForGone(() => screen.queryByText("Check your inbox."));
+    await screen.findByText("Verified");
     expect(screen.queryByText("Paused — mail was bouncing")).toBeNull();
-  });
+  }, 60_000);
 });

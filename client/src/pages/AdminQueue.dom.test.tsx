@@ -8,12 +8,12 @@
 // in the dev queue (no deliverd runs) with a unique recipient address.
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { screen, waitFor } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AdminOverviewPage } from "src/pages/AdminOverview";
 import { AdminQueuePage } from "src/pages/AdminQueue";
 import { AdminQueueMessagePage } from "src/pages/AdminQueueMessage";
-import { renderPage } from "../../test/render";
+import { renderPage, waitForGone } from "../../test/render";
 import { createUser, grantAdmin } from "../../test/tooling";
 
 const uniqueEmail = () => `dom-admin-${crypto.randomUUID()}@qmail.com`;
@@ -55,13 +55,8 @@ describe("Admin queue — real transport against the running stack", () => {
     await user.click(screen.getByRole("button", { name: "Drop" }));
     await screen.findByText("Drop this message?");
     await user.click(screen.getByRole("button", { name: "Drop message" }));
-    await waitFor(
-      () => {
-        expect(screen.queryByText("Drop this message?")).toBeNull();
-        expect(screen.getByText("Delivery queue.")).toBeTruthy();
-      },
-      { timeout: 15_000 },
-    );
+    await waitForGone(() => screen.queryByText("Drop this message?"));
+    await screen.findByText("Delivery queue.");
   }, 60_000);
 
   test("a non-admin gets the not-found page — /admin looks like a bogus URL", async () => {

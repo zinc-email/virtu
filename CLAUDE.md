@@ -119,6 +119,10 @@ prod/staging.
   `bin/` tool over a **process boundary** via `client/test/tooling.ts` — never a
   client→server code import or a client DB reach-in. Harness:
   `client/test/{happydom,setup,render,tooling}.ts` + `client/bunfig.toml`.
+  Assert "the element went away" with `waitForGone` (`client/test/render.tsx`),
+  never `waitFor(() => expect(el).toBeNull())`: Bun's `expect` pretty-prints a
+  failing happy-dom element (thousands of lines), so each 50ms retry burns
+  ~4s and the response the test waits on never gets processed.
 
 `just check` = format + the typechecks (server, client — regenerating the
 SDK — and extension) + unit tests + bridge contract tests; green here means

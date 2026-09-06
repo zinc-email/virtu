@@ -14,7 +14,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import type { FunctionComponent } from "react";
 
 export const HOME_MARKER = "stub:home";
@@ -76,4 +76,20 @@ export function renderPage(
     </QueryClientProvider>,
   );
   return { router, queryClient, ...utils };
+}
+
+/**
+ * Wait until `query` returns null — "the element went away". Use this, never
+ * `waitFor(() => expect(query()).toBeNull())`: Bun's expect pretty-prints a
+ * failing `received`, and a happy-dom element serializes to thousands of
+ * lines, so each 50ms retry burns ~4s of CPU. The event loop (and the HTTP
+ * response the test is waiting on) stalls until the timeout.
+ */
+export async function waitForGone(query: () => Element | null, timeout = 15_000): Promise<void> {
+  await waitFor(
+    () => {
+      if (query() !== null) throw new Error("element is still on the page");
+    },
+    { timeout },
+  );
 }

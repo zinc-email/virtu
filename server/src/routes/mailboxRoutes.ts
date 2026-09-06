@@ -17,7 +17,7 @@ import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { db } from "../db";
-import { aliases, aliasMailboxes, deletedAliases, mailboxes, users } from "../db/schema";
+import { aliases, aliasMailboxes, deletedAliases, domains, mailboxes, users } from "../db/schema";
 import {
   consumeVerificationCode,
   createVerificationCode,
@@ -138,6 +138,17 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       // An address on one of our alias domains can never be a mailbox.
       const domain = email.slice(email.lastIndexOf("@") + 1);
       if (ALIAS_DOMAINS.includes(domain)) throw new HttpError(400, "Invalid email");
+      // Nor one on a custom domain whose MX points at us (anyone's): mail
+      // forwarded there comes straight back through our mx — a catch-all
+      // would mint the address as an alias and forward it to the owner's
+      // default mailbox, which can be this very address. The hop counter
+      // (mail/rewriteForward.ts) is the backstop; this refuses the setup.
+      const served = await db
+        .select({ id: domains.id })
+        .from(domains)
+        .where(and(eq(domains.name, domain), eq(domains.verifiedMx, true)))
+        .limit(1);
+      if (served[0] !== undefined) throw new HttpError(400, "Invalid email");
 
       // Uniqueness is per user in schema v1 (unlike SimpleLogin's global
       // check); the unique index catches the race.

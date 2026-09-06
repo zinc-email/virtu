@@ -42,6 +42,9 @@ export {
   type ForwardResult,
   forwardDisplayName,
   headerNameInList,
+  FORWARD_HOPS_HEADER,
+  MAX_FORWARD_HOPS,
+  parseForwardHops,
   rewriteForward,
 } from "./rewriteForward.ts";
 

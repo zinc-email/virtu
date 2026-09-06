@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import type { App } from "../app/server";
 import { buildApp } from "../app/server";
 import { db } from "../db";
-import { notifications, users } from "../db/schema";
+import { domains, notifications, users } from "../db/schema";
 import { suppressMailbox } from "../pipeline/suppression";
 import { createAlias, latestEmailedCode, registerAndLogin, uniqueEmail } from "./intHarness";
 
@@ -127,6 +127,43 @@ describe("POST /api/mailboxes", () => {
     });
     expect(aliasDomain.statusCode).toBe(400);
     expect(aliasDomain.json<{ error: string }>()).toEqual({ error: "Invalid email" });
+  });
+
+  test("refuses a mailbox on a custom domain whose MX is us (forwarding loop setup)", async () => {
+    // The loop: a mailbox on a served domain gets its forwards routed
+    // straight back through our mx. Anyone's served domain counts — the
+    // two-account ring is the same loop — so the owner here is a stranger.
+    const { apiKey } = await registerAndLogin(app);
+    const owner = await registerAndLogin(app);
+    const ownerRow = (await db.select().from(users).where(eq(users.email, owner.email)))[0]!;
+    const served = `s${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(domains).values({
+      userId: ownerRow.id,
+      nameRequested: served,
+      verifiedOwner: true,
+      verifiedMx: true,
+    });
+
+    const refused = await app.inject({
+      method: "POST",
+      url: "/api/mailboxes",
+      headers: auth(apiKey),
+      payload: { email: `inbox@${served}` },
+    });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json<{ error: string }>()).toEqual({ error: "Invalid email" });
+
+    // A claimed-but-unverified domain (no MX at us) is still a fine mailbox
+    // provider: the refusal keys on verified_mx, not on the claim.
+    const claimed = `c${crypto.randomUUID().slice(0, 8)}.example.com`;
+    await db.insert(domains).values({ userId: ownerRow.id, nameRequested: claimed });
+    const allowed = await app.inject({
+      method: "POST",
+      url: "/api/mailboxes",
+      headers: auth(apiKey),
+      payload: { email: `inbox@${claimed}` },
+    });
+    expect(allowed.statusCode).toBe(201);
   });
 });
 

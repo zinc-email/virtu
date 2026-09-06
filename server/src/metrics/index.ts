@@ -62,7 +62,7 @@ export const mxRateLimitedTotal = registry.counter(
 export const mxMessagesTotal = registry.counter(
   "virtu_mx_messages_total",
   "Inbound message outcomes at the MX",
-  ["outcome"], // forwarded | trash | verp_bounce | verp_ignored | rejected | dropped | error
+  ["outcome"], // forwarded | trash | verp_bounce | verp_ignored | rejected | dropped | loop_dropped | error
 );
 
 // ── submission (587/465) ────────────────────────────────────────────────────

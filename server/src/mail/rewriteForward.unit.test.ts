@@ -3,9 +3,12 @@ import { type Address, parseAddressList, parseMessage } from "./headers.ts";
 import {
   applyHeaderWhitelist,
   FORWARD_HEADER_WHITELIST,
+  FORWARD_HOPS_HEADER,
   type ForwardContext,
   forwardDisplayName,
   headerNameInList,
+  MAX_FORWARD_HOPS,
+  parseForwardHops,
   rewriteForward,
 } from "./rewriteForward.ts";
 
@@ -135,6 +138,33 @@ describe("rewriteForward", () => {
     // input untouched (pure)
     expect(headers.get("From")).toBe("Milton Waddams <milton@initech.com>");
     expect(headers.has("X-Virtu-Type")).toBe(false);
+  });
+
+  test("hop counter: absent → 1, present → +1, garbage → 1 (loop guard)", async () => {
+    const ctx = baseCtx();
+    const first = await rewriteForward({ headers: parseMessage(enc.encode(BASIC)).headers }, ctx);
+    expect(first.actions.inboundHops).toBe(0);
+    expect(first.headers.get(FORWARD_HOPS_HEADER)).toBe("1");
+
+    // A second forward of the first's output (what a chained alias sees).
+    const second = await rewriteForward({ headers: first.headers }, ctx);
+    expect(second.actions.inboundHops).toBe(1);
+    expect(second.headers.get(FORWARD_HOPS_HEADER)).toBe("2");
+
+    // Garbage from outside counts as zero, never as "already looping".
+    const garbage = parseMessage(enc.encode(`X-Virtu-Hops: lots\r\n${BASIC}`)).headers;
+    const third = await rewriteForward({ headers: garbage }, ctx);
+    expect(third.actions.inboundHops).toBe(0);
+    expect(third.headers.get(FORWARD_HOPS_HEADER)).toBe("1");
+  });
+
+  test("parseForwardHops accepts small non-negative integers only", () => {
+    expect(parseForwardHops(undefined)).toBe(0);
+    expect(parseForwardHops(" 2 ")).toBe(2);
+    expect(parseForwardHops("-1")).toBe(0);
+    expect(parseForwardHops("1e9")).toBe(0);
+    expect(parseForwardHops("9999999")).toBe(0);
+    expect(MAX_FORWARD_HOPS).toBe(2);
   });
 
   test("To/Cc third parties map to reverse aliases; alias entry kept", async () => {

@@ -35,9 +35,12 @@ import {
 import {
   type Address,
   buildVerp,
+  FORWARD_HOPS_HEADER,
   formatDateHeader,
   type HeaderBlock,
+  MAX_FORWARD_HOPS,
   parseAddressList,
+  parseForwardHops,
   parseMessage,
   rewriteForward,
   rewriteOperator,
@@ -288,6 +291,18 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     `from ${envelope.heloName || "unknown"} (${session.remoteAddress}) ` +
     `by ${opts.mailHostname} (virtu) with ESMTP; ${formatDateHeader(new Date())}`;
 
+  // Loop guard (mail/rewriteForward.ts): a message that has already been
+  // forwarded by us MAX_FORWARD_HOPS times is going round in a ring — a
+  // mailbox on a domain whose MX is us, catch-all minting it back into an
+  // alias, and so on forever. Accept-and-drop with a blocked log per
+  // recipient so the ring's last hop is auditable; a chained (second)
+  // forward is still delivered but logged, so telemetry shows who chains.
+  const inboundHops = parseForwardHops(parsed.headers.get(FORWARD_HOPS_HEADER));
+  const isLoop = inboundHops >= MAX_FORWARD_HOPS;
+  if (inboundHops > 0 && !isLoop) {
+    log.info("forward_chained", { hops: inboundHops, from: envelope.mailFrom || "<>" });
+  }
+
   // 4. Forward pipeline per deliverable recipient × delivery mailbox (an
   //    alias can deliver to several mailboxes; each copy gets its own
   //    email_log so bounce accounting stays per-mailbox).
@@ -301,6 +316,26 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       mailDomain: opts.mailDomain,
       envelopeFrom: envelope.mailFrom,
     });
+
+    if (isLoop) {
+      await createBlockedLog(opts.db, {
+        userId: user.id,
+        contactId: fromContact.id,
+        aliasId: alias.id,
+        mailboxId: rcpt.facts.mailbox?.id ?? null,
+        messageId: originalMessageId,
+        blockedReason: "forward_loop",
+        spamFlag,
+      });
+      mxMessagesTotal.inc({ outcome: "loop_dropped" });
+      log.warn("forward_loop_dropped", {
+        alias: rcpt.address,
+        hops: inboundHops,
+        from: envelope.mailFrom || "<>",
+        consequence: "accepted and dropped: message already forwarded by us too many times",
+      });
+      continue;
+    }
 
     for (const mailbox of rcpt.facts.deliveryMailboxes) {
       const emailLog = await createForwardLog(opts.db, {

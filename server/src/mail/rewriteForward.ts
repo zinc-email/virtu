@@ -51,7 +51,33 @@ export const FORWARD_HEADER_WHITELIST: readonly string[] = [
   "content-transfer-encoding",
   // virtu-specific passthrough
   "x-virtu-test-id",
+  // The forward hop counter (see FORWARD_HOPS_HEADER): must survive the
+  // whitelist so it can accumulate across our own forwards.
+  "x-virtu-hops",
 ];
+
+/**
+ * Loop guard. Every forward through our mx increments this header; the mx
+ * drops (blocked log, reason "forward_loop") a message that arrives already
+ * at {@link MAX_FORWARD_HOPS}. Ours to increment, so only routes through
+ * virtu systems count: one hop is every ordinary forward; two is a mailbox
+ * provider auto-forwarding into another alias (odd, not abuse); three has no
+ * honest shape. A forwarding loop — a mailbox on a domain whose MX is us,
+ * with or without a second account in the ring — shows up as the counter
+ * climbing, because the whitelist strips Received so nothing else survives
+ * a hop to count. A sender outside can preset the header, which only gets
+ * their own mail dropped.
+ */
+export const FORWARD_HOPS_HEADER = "X-Virtu-Hops";
+export const MAX_FORWARD_HOPS = 2;
+
+/** The hop count a message carries: a non-negative integer, else 0. */
+export function parseForwardHops(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const trimmed = value.trim();
+  if (!/^\d{1,6}$/.test(trimmed)) return 0;
+  return Number(trimmed);
+}
 
 /** True when a header name matches a whitelist (supports `prefix-*` wildcards). */
 export function headerNameInList(name: string, list: readonly string[]): boolean {
@@ -126,6 +152,8 @@ export interface ForwardActions {
   synthesizedDate: boolean;
   /** To/Cc entries skipped because their address was not plausibly valid. */
   invalidRecipients: string[];
+  /** Hop count the message ARRIVED with (before this forward's increment). */
+  inboundHops: number;
 }
 
 /** Result of {@link rewriteForward}. */
@@ -263,7 +291,9 @@ export async function rewriteForward(
     headers.replace("To", to === undefined ? ctx.alias.email : `${to}, ${ctx.alias.email}`);
   }
 
-  // 8. Provenance headers.
+  // 8. Provenance headers, and the loop guard's increment.
+  const inboundHops = parseForwardHops(headers.get(FORWARD_HOPS_HEADER));
+  headers.replace(FORWARD_HOPS_HEADER, String(inboundHops + 1));
   headers.replace("X-Virtu-Type", "Forward");
   headers.replace("X-Virtu-EmailLog-ID", String(ctx.emailLogId));
   headers.replace("X-Virtu-Envelope-From", ctx.envelopeFrom);
@@ -272,6 +302,6 @@ export async function rewriteForward(
 
   return {
     headers,
-    actions: { droppedHeaders, synthesizedDate, invalidRecipients },
+    actions: { droppedHeaders, synthesizedDate, invalidRecipients, inboundHops },
   };
 }

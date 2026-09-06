@@ -37,9 +37,54 @@ describe("DataDecoder", () => {
   };
 
   test("unstuffs dots and normalizes CRLF", () => {
-    const { d, rest } = decode("hello\r\n..dot\r\nbare\n.\r\nQUIT\r\n");
+    const { d, rest } = decode("hello\r\n..dot\r\nbare\nmore\r\n.\r\nQUIT\r\n");
     expect(rest?.toString()).toBe("QUIT\r\n");
-    expect(d.message().toString()).toBe("hello\r\n.dot\r\nbare\r\n");
+    expect(d.message().toString()).toBe("hello\r\n.dot\r\nbare\r\nmore\r\n");
+  });
+
+  // SMTP smuggling (CVE-2023-51764 class): only <CRLF>.<CRLF> may end DATA.
+  // A relay that passes bare LF through must not be able to end our DATA
+  // early and pipeline a second envelope behind it.
+  describe("end-of-data is <CRLF>.<CRLF> only", () => {
+    const smuggled = "MAIL FROM:<ceo@relay.example>\r\nRCPT TO:<victim@virtu.email>\r\nDATA\r\n";
+
+    test("<LF>.<LF> is content", () => {
+      const { d, rest } = decode(`body\r\n\n.\n${smuggled}`);
+      expect(rest).toBeNull();
+      expect(d.message().toString()).toBe(`body\r\n\r\n\r\n${smuggled.replace(/\r\n/g, "\r\n")}`);
+    });
+
+    test("<CRLF>.<LF> is content", () => {
+      const { rest } = decode(`body\r\n.\n${smuggled}`);
+      expect(rest).toBeNull();
+    });
+
+    test("<LF>.<CRLF> is content", () => {
+      const { rest } = decode(`body\n.\r\n${smuggled}`);
+      expect(rest).toBeNull();
+    });
+
+    test("the real terminator still works after bare-LF content", () => {
+      const { d, rest } = decode("body\n.\n\r\n.\r\nQUIT\r\n");
+      expect(rest?.toString()).toBe("QUIT\r\n");
+      // The smuggled-looking "." was unstuffed to an empty line.
+      expect(d.message().toString()).toBe("body\r\n\r\n\r\n");
+    });
+
+    test("terminator as the very first line (empty message)", () => {
+      const { d, rest } = decode(".\r\nQUIT\r\n");
+      expect(rest?.toString()).toBe("QUIT\r\n");
+      expect(d.message().length).toBe(0);
+    });
+
+    test("terminator split across chunks", () => {
+      const d = new DataDecoder(1_000_000, 998);
+      expect(d.push(Buffer.from("body\r"))).toBeNull();
+      expect(d.push(Buffer.from("\n."))).toBeNull();
+      expect(d.push(Buffer.from("\r"))).toBeNull();
+      expect(d.push(Buffer.from("\nQUIT\r\n"))?.toString()).toBe("QUIT\r\n");
+      expect(d.message().toString()).toBe("body\r\n");
+    });
   });
 
   test("terminator split across pushes", () => {
@@ -48,12 +93,6 @@ describe("DataDecoder", () => {
     const rest = d.push(Buffer.from("\r\n"));
     expect(rest?.toString()).toBe("");
     expect(d.message().toString()).toBe("line1\r\n");
-  });
-
-  test("bare-LF terminator", () => {
-    const { d, rest } = decode("a\n.\n");
-    expect(rest).not.toBeNull();
-    expect(d.message().toString()).toBe("a\r\n");
   });
 
   test("empty message", () => {

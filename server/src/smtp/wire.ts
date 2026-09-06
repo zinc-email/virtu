@@ -31,12 +31,27 @@ export function takeLine(buf: Buffer): { line: Buffer; rest: Buffer } | null {
  * terminator detection, size + line-length accounting. Once a violation is
  * detected the decoded output is discarded (memory stays bounded) but input
  * is still consumed until the terminator so the connection can recover.
+ *
+ * End-of-data is `<CRLF>.<CRLF>` ONLY (RFC 5321 §4.1.1.4): a lone "." line
+ * that is preceded or followed by a bare LF is message content, never the
+ * terminator. Accepting `<LF>.<LF>` (or either mixed form) is the SMTP
+ * smuggling bug (CVE-2023-51764 class): a relay that passes bare LF through
+ * lets a sender end our DATA early and inject a second envelope that we
+ * would then authenticate against the RELAY's IP — SPF pass, DMARC pass,
+ * our DKIM/ARC on a spoof. Bare LF elsewhere is normalized to CRLF (Postfix
+ * `smtpd_forbid_bare_newline = normalize`), so the only thing the strict
+ * rule changes is what counts as the terminator.
  */
 export class DataDecoder {
   private chunks: Buffer[] = [];
   private pending: Buffer = Buffer.alloc(0);
   private pendingOverflow = false;
   private discarding = false;
+  /**
+   * Whether the previous line ended in a real CRLF. Starts true: the DATA
+   * command line that opened the transaction did (takeLine strips it).
+   */
+  private prevCrlf = true;
   /** Normalized message size in bytes (approximate once discarding). */
   size = 0;
   tooBig = false;
@@ -73,18 +88,23 @@ export class DataDecoder {
         this.pending = Buffer.from(buf); // copy: chunk buffers get reused
         return null;
       }
-      const end = lf > 0 && buf[lf - 1] === CR ? lf - 1 : lf;
+      const crlf = lf > 0 && buf[lf - 1] === CR;
+      const end = crlf ? lf - 1 : lf;
       const content = buf.subarray(0, end);
       buf = buf.subarray(lf + 1);
+      const prevCrlf = this.prevCrlf;
+      this.prevCrlf = crlf;
       if (this.pendingOverflow) {
         // The tail end of an overlong line: swallow it and resync.
         this.pendingOverflow = false;
         this.size += end + 2;
         continue;
       }
-      if (content.length === 1 && content[0] === DOT) {
-        return buf; // end-of-data terminator; rest is pipelined input
+      if (content.length === 1 && content[0] === DOT && prevCrlf && crlf) {
+        return buf; // <CRLF>.<CRLF> end-of-data; rest is pipelined input
       }
+      // A "." line off a bare LF on either side is content: unstuffed to an
+      // empty line, exactly like any other dot-led line.
       const line = content[0] === DOT ? content.subarray(1) : content;
       this.size += line.length + 2;
       if (line.length > this.maxLineLength) {

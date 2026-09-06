@@ -270,9 +270,40 @@ describe("smtp server: DATA", () => {
         return { accept: true };
       },
     });
-    client.write("EHLO x\nMAIL FROM:<a@b.c>\nRCPT TO:<r@b.c>\nDATA\nX: 1\n\nhello\n.\n");
+    // Bare LF is tolerated on command lines and inside the body; only the
+    // end-of-data terminator must be a real <CRLF>.<CRLF> (see the next test).
+    client.write("EHLO x\nMAIL FROM:<a@b.c>\nRCPT TO:<r@b.c>\nDATA\nX: 1\n\nhello\r\n.\r\n");
     await client.waitFor(/^250 2\.6\.0/);
     expect(raw).toBe("X: 1\r\n\r\nhello\r\n");
+  });
+
+  test("SMTP smuggling: a bare-LF dot line cannot end DATA and inject a transaction", async () => {
+    const envelopes: string[] = [];
+    let raw = "";
+    const { client } = await setup({
+      onData: (event) => {
+        envelopes.push(event.envelope.mailFrom);
+        raw = Buffer.from(event.raw).toString();
+        return { accept: true };
+      },
+    });
+    // The outer message ends with "\n.\n" — what a bare-LF-passing relay
+    // would hand us — followed by a smuggled second envelope, then the real
+    // terminator. Everything after the fake dot must land in the ONE
+    // message's body; no second transaction may run.
+    client.write(
+      "EHLO x\r\nMAIL FROM:<outer@relay.example>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n" +
+        "Subject: outer\r\n\r\nbody\r\n\n.\n" +
+        "MAIL FROM:<ceo@relay.example>\r\nRCPT TO:<victim@b.c>\r\nDATA\r\nspoof\r\n" +
+        ".\r\nQUIT\r\n",
+    );
+    await client.waitFor(/^250 2\.6\.0/);
+    await client.waitFor(/^221/);
+    expect(envelopes).toEqual(["outer@relay.example"]);
+    expect(raw).toBe(
+      "Subject: outer\r\n\r\nbody\r\n\r\n\r\n" +
+        "MAIL FROM:<ceo@relay.example>\r\nRCPT TO:<victim@b.c>\r\nDATA\r\nspoof\r\n",
+    );
   });
 
   test("oversized DATA gets 552 after the terminator", async () => {

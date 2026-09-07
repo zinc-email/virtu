@@ -178,9 +178,34 @@ regardless of TLS config so a plaintext listener simply has no AUTH.
   `team`, `zinc`, …) for service-domain aliases.
 - **argon2 amplification in SMTP AUTH.** `verifyCredentials` tries up to
   `MAX_SMTP_CREDENTIALS` (20) hashes per attempt; the throttle is keyed
-  (ip, username), so a distributed attacker gets 20× CPU per try. Add a
-  per-username budget, or embed a credential id in the password format so
-  one hash is checked.
+  (ip, username), so a distributed attacker gets 20× CPU per try. (The
+  username is the account email — `users.email`, one per account — not a
+  mailbox, so multi-mailbox does not widen this.) A per-username budget is
+  out: anyone who knows the address could spend it, a lockout tool. The
+  plan (decided 2026-09-06), two controls that attack different halves:
+  1. **Selector in the password.** The generated device password already
+     has the shape `xxxxx-xxxxx-xxxxx-xxxxx` (`generateSmtpPassword`, a
+     32-char alphabet). The FIRST group becomes the selector (25 bits,
+     stored plaintext in a new `smtp_credentials.selector` column, unique
+     index on `(user_id, selector)`, retry on the negligible collision at
+     creation); the remaining three groups are the secret (75 bits) that
+     goes into argon2id. AUTH splits the first group off, does one indexed
+     lookup, one `Bun.password.verify`. On a selector miss verify against a
+     fixed dummy hash before the 535, so the miss costs the same as a wrong
+     secret and valid selectors cannot be enumerated for free. The wire
+     format the user pastes does not change. Legacy rows (no selector)
+     are not given a fallback loop — that loop is the vulnerability;
+     pre-launch, existing device passwords are regenerated (each.email is
+     the only box with real ones).
+  2. **A process-wide bulkhead on argon2 verifies.** `Bun.password.verify`
+     runs on the thread pool, so a distributed attacker can still pin every
+     core one cheap attempt at a time. Cap concurrent verifies in
+     submission (a small semaphore, ~4); a saturated pool answers
+     `454 4.7.0` before hashing, like the existing failed-attempt throttle.
+     Selector makes each attempt cheap; the bulkhead bounds the total.
+  Ships as its own change (schema + migration, `verifyCredentials`, the
+  credential-creation route, and the client's one-time password display
+  and `Smtp.tsx` copy — "paste the whole password").
 - **Length caps** on `device` (login/api_key) and mailbox/credential `name`
   fields — unbounded strings straight into the DB.
 - **Timing side channel on address existence** in `/auth/login` (insert vs

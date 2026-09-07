@@ -27,6 +27,12 @@ import {
 } from "../db/schema.ts";
 import { parseVerp, type VerpInfo } from "../mail/index.ts";
 import {
+  decideQueueQuota,
+  pendingUsage,
+  QUEUE_FULL_REPLY,
+  type QueueQuotaLimits,
+} from "../queue/quota.ts";
+import {
   countRecentInbound,
   decideInboundRateLimit,
   type InboundRateLimits,
@@ -108,10 +114,20 @@ export interface RcptFacts {
   catchAll: CatchAllFacts | null;
   /**
    * Inbound rate limit (pipeline/inboundRateLimit.ts): which scope is over
-   * its trailing-minute budget, or null. Only gathered for a recipient that
-   * would otherwise deliver — a drop or a reject never needs the count.
+   * its trailing-minute budget, or null. Gathered for a recipient that
+   * would deliver OR accept-and-drop — a drop still costs a contact row and
+   * a blocked log per message, so it needs the same per-alias bound; a
+   * reject never needs the count.
    */
   rateLimited: InboundRateLimitScope | null;
+  /**
+   * Per-user pending-queue cap (queue/quota.ts): true when the alias
+   * owner's in-flight mail is at the cap. Only gathered for a recipient
+   * that would deliver — the one RCPT kind that enqueues on a USER's
+   * behalf (operator mail is the service's own; see quota.ts for the
+   * bypass list).
+   */
+  queueFull: boolean;
 }
 
 /** What the mx should do with one RCPT address. */
@@ -195,26 +211,39 @@ export function decideRcpt(facts: RcptFacts): RcptDecision {
     // designated trash mailbox when one is set and healthy; otherwise the
     // default accept-and-drop (existence stays unprobeable either way).
     if (facts.trashMailbox !== null && mailboxDeliverable(facts.trashMailbox)) {
-      return facts.rateLimited === null
-        ? { kind: "deliver", trash: true }
-        : rateLimitReject(facts.rateLimited);
+      if (facts.rateLimited !== null) return rateLimitReject(facts.rateLimited);
+      if (facts.queueFull) return queueFullReject();
+      return { kind: "deliver", trash: true };
     }
+    // Accept-and-drop is still bounded: every dropped message writes a
+    // contact + blocked log at SMTP speed, so the per-alias budget gates it
+    // exactly like a delivery (450 reveals nothing an enabled alias's 450
+    // would not — existence stays unprobeable).
+    if (facts.rateLimited !== null) return rateLimitReject(facts.rateLimited);
     return { kind: "drop", reason: "alias_disabled" };
   }
 
   if (facts.deliveryMailboxes.length === 0) {
+    if (facts.rateLimited !== null) return rateLimitReject(facts.rateLimited);
     return {
       kind: "drop",
       reason: facts.suppressedFromDelivery ? "mailbox_suppressed" : "mailbox_unavailable",
     };
   }
 
-  // Last gate before delivery: the trailing-minute budget. A tempfail, so
-  // the sending MTA queues and retries — the burst stays on its side of
-  // the wire instead of becoming our outbound flood into the mailbox.
+  // Last gates before delivery: the trailing-minute budget, then the owner's
+  // pending-queue cap. Both tempfail, so the sending MTA queues and retries
+  // — the burst stays on its side of the wire instead of becoming our
+  // outbound flood into the mailbox (or our Postgres filling up).
   if (facts.rateLimited !== null) return rateLimitReject(facts.rateLimited);
+  if (facts.queueFull) return queueFullReject();
 
   return { kind: "deliver" };
+}
+
+/** The RCPT reply when the owner's queue is at its cap (queue/quota.ts). */
+function queueFullReject(): RcptDecision {
+  return { kind: "reject", ...QUEUE_FULL_REPLY };
 }
 
 /** The RCPT reply for an over-budget recipient (pipeline/inboundRateLimit.ts). */
@@ -245,6 +274,19 @@ export interface EvaluateRcptOptions {
    * Omitted = none (callers that don't care).
    */
   operatorLocalparts?: readonly string[];
+  /**
+   * Per-user pending-queue cap (queue/quota.ts). Omitted = not enforced;
+   * the mx passes config's values.
+   */
+  queueQuota?: QueueQuotaLimits;
+  /**
+   * Apply the inbound rate limit to accept-and-drop recipients too (default
+   * true — the RCPT-time gate). The mx passes false at its DATA-time
+   * re-evaluation: a drop enqueues nothing, so a budget that filled between
+   * RCPT and DATA has nothing to protect there, and turning the drop into a
+   * 450 would tempfail the whole message for its healthy co-recipients.
+   */
+  budgetDrops?: boolean;
   now?: Date;
 }
 
@@ -397,6 +439,7 @@ export async function evaluateRcpt(
     trashMailbox,
     catchAll,
     rateLimited: null,
+    queueFull: false,
   };
   let decision = decideRcpt(facts);
 
@@ -433,11 +476,16 @@ export async function evaluateRcpt(
     }
   }
 
-  // Inbound rate limit: counted only once the recipient would deliver (the
-  // delivery set as finally settled above — trash swap, catch-all mint — is
-  // exactly what the mailbox scope must measure), then the table re-decides
-  // with the fact filled in.
-  if (decision.kind === "deliver" && opts.inboundRateLimits !== undefined && facts.alias !== null) {
+  // Inbound rate limit: counted once the recipient would deliver or drop
+  // (the delivery set as finally settled above — trash swap, catch-all mint
+  // — is exactly what the mailbox scope must measure; a drop has no
+  // mailboxes and is bounded by the alias scope alone), then the table
+  // re-decides with the fact filled in.
+  if (
+    (decision.kind === "deliver" || (decision.kind === "drop" && opts.budgetDrops !== false)) &&
+    opts.inboundRateLimits !== undefined &&
+    facts.alias !== null
+  ) {
     const counts = await countRecentInbound(
       db,
       { aliasId: facts.alias.id, mailboxIds: facts.deliveryMailboxes.map((mb) => mb.id) },
@@ -445,6 +493,12 @@ export async function evaluateRcpt(
     );
     facts.rateLimited = decideInboundRateLimit(opts.inboundRateLimits, counts);
     if (facts.rateLimited !== null) decision = decideRcpt(facts);
+  }
+
+  // Pending-queue cap: only a delivery enqueues, so only a delivery asks.
+  if (decision.kind === "deliver" && opts.queueQuota !== undefined && facts.user !== null) {
+    facts.queueFull = decideQueueQuota(opts.queueQuota, await pendingUsage(db, facts.user.id));
+    if (facts.queueFull) decision = decideRcpt(facts);
   }
 
   return { address: normalized, decision, facts };

@@ -20,12 +20,12 @@ import { db } from "../db";
 import { aliases, aliasMailboxes, deletedAliases, domains, mailboxes, users } from "../db/schema";
 import {
   consumeVerificationCode,
-  createVerificationCode,
+  isTransactionalCeilingReached,
   mailboxVerificationAlertType,
   mailboxVerificationEmail,
-  sendWithRateLimit,
 } from "../pipeline/transactional";
 import { ALIAS_DOMAINS } from "./aliasConfig";
+import { issueVerificationCode, refusal } from "./verificationMail";
 import { transferAliasMailboxJoins } from "./aliasMailboxes";
 import { timestampOf } from "./aliasText";
 import { normalizeEmail } from "./auth";
@@ -157,6 +157,10 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
         throw new HttpError(400, "Email already used");
       }
 
+      // A fresh mailbox has no send history, so only the global ceiling can
+      // refuse its first code — ask before creating the row, not after.
+      if (await isTransactionalCeilingReached(db)) throw await refusal(db, "ceiling", "");
+
       let mb: typeof mailboxes.$inferSelect | undefined;
       try {
         const inserted = await db
@@ -175,19 +179,14 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
       }
       if (!mb) throw new Error("mailbox insert returned no row");
 
-      const { code, row } = await createVerificationCode(db, {
+      await issueVerificationCode(db, {
         userId: req.user.id,
+        toEmail: email,
+        alertType: mailboxVerificationAlertType(mb.id),
         purpose: "mailbox",
         mailboxId: mb.id,
-      });
-      const { subject, textBody } = mailboxVerificationEmail(email, code);
-      await sendWithRateLimit(db, {
-        userId: req.user.id,
-        alertType: mailboxVerificationAlertType(mb.id),
-        to: email,
-        subject,
-        textBody,
-        refId: row.id,
+        email: (code) => mailboxVerificationEmail(email, code),
+        refusedMessage: "Too many verification emails requested, try again later",
       });
 
       reply.status(201);
@@ -291,19 +290,14 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
         throw new HttpError(400, "Mailbox is already verified");
       }
 
-      const { code, row } = await createVerificationCode(db, {
+      await issueVerificationCode(db, {
         userId: req.user.id,
+        toEmail: mb.email,
+        alertType: mailboxVerificationAlertType(mb.id),
         purpose: "mailbox",
         mailboxId: mb.id,
-      });
-      const { subject, textBody } = mailboxVerificationEmail(mb.email, code);
-      await sendWithRateLimit(db, {
-        userId: req.user.id,
-        alertType: mailboxVerificationAlertType(mb.id),
-        to: mb.email,
-        subject,
-        textBody,
-        refId: row.id,
+        email: (code) => mailboxVerificationEmail(mb.email, code),
+        refusedMessage: "Too many verification emails requested, try again later",
       });
       return { ok: true };
     },

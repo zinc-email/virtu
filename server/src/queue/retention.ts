@@ -16,7 +16,13 @@
 
 import { and, eq, inArray, lt } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
-import { type OutboundStatus, outboundMessages, smtpRejections } from "../db/schema.ts";
+import {
+  type OutboundStatus,
+  outboundMessages,
+  sentAlerts,
+  smtpRejections,
+  users,
+} from "../db/schema.ts";
 
 export interface RetentionOptions {
   retainSentDays: number;
@@ -107,6 +113,88 @@ export async function runRejectionRetentionOnce(
       .delete(smtpRejections)
       .where(inArray(smtpRejections.id, batch))
       .returning({ id: smtpRejections.id });
+    total += deleted.length;
+    if (deleted.length < batchSize) return total;
+  }
+  return total;
+}
+
+export interface ProvisionalUserRetentionOptions {
+  /** Provisional rows older than this are deleted; 0 disables. */
+  retainHours: number;
+  batchSize?: number;
+  maxBatchesPerPass?: number;
+  now?: () => Date;
+}
+
+/**
+ * Prune provisional users: `users` rows that POST /auth/login created for an
+ * address that never verified (activated = false). Anyone can mint one per
+ * address they name, so without this the table grows at the attacker's
+ * pace; a login code lives 15 minutes, so a row this old is an abandoned
+ * signup. Age is `updated_at`, not `created_at`: /auth/login touches a
+ * reused provisional row (routes/auth.ts findOrCreateUser), so a two-day-old
+ * address that just asked for a code is live and stays. Operator-disabled
+ * rows are kept — that flag is a decision, not debris. Cascades take the
+ * row's codes, ledger entries and queued mail with it. Same batched/bounded
+ * shape as the queue passes (this runs inside the delivery loop).
+ */
+export async function runProvisionalUserRetentionOnce(
+  db: Db,
+  opts: ProvisionalUserRetentionOptions,
+): Promise<number> {
+  if (opts.retainHours <= 0) return 0;
+  const now = opts.now ?? (() => new Date());
+  const batchSize = opts.batchSize ?? 500;
+  const maxBatches = opts.maxBatchesPerPass ?? 20;
+  const cutoff = new Date(now().getTime() - opts.retainHours * 3_600_000);
+  let total = 0;
+  for (let pass = 0; pass < maxBatches; pass++) {
+    const batch = db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(eq(users.activated, false), eq(users.disabled, false), lt(users.updatedAt, cutoff)),
+      )
+      .limit(batchSize);
+    const deleted = await db
+      .delete(users)
+      .where(inArray(users.id, batch))
+      .returning({ id: users.id });
+    total += deleted.length;
+    if (deleted.length < batchSize) return total;
+  }
+  return total;
+}
+
+/**
+ * Age out sent_alerts rows: the send-budget ledger (3/h per scope, the
+ * trailing-hour global ceiling), the alert dedupe (<= a day) and the
+ * per-code attempt counters (codes live 15 minutes). Nothing reads further
+ * back than a day, so anything past the window is dead weight that every
+ * budget count would otherwise walk past forever. Same shape as the
+ * smtp_rejections pass.
+ */
+export async function runSentAlertsRetentionOnce(
+  db: Db,
+  opts: RejectionRetentionOptions,
+): Promise<number> {
+  if (opts.retainDays <= 0) return 0;
+  const now = opts.now ?? (() => new Date());
+  const batchSize = opts.batchSize ?? 500;
+  const maxBatches = opts.maxBatchesPerPass ?? 20;
+  const cutoff = new Date(now().getTime() - opts.retainDays * 86_400_000);
+  let total = 0;
+  for (let pass = 0; pass < maxBatches; pass++) {
+    const batch = db
+      .select({ id: sentAlerts.id })
+      .from(sentAlerts)
+      .where(lt(sentAlerts.createdAt, cutoff))
+      .limit(batchSize);
+    const deleted = await db
+      .delete(sentAlerts)
+      .where(inArray(sentAlerts.id, batch))
+      .returning({ id: sentAlerts.id });
     total += deleted.length;
     if (deleted.length < batchSize) return total;
   }

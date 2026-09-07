@@ -1,0 +1,1 @@
+CREATE INDEX "sent_alerts_created_at_idx" ON "sent_alerts" USING btree ("created_at");

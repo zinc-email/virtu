@@ -52,7 +52,12 @@ import {
   stepForCommand,
 } from "./destinationThrottle.ts";
 import { reapStuckSending } from "./reaper.ts";
-import { runRejectionRetentionOnce, runRetentionOnce } from "./retention.ts";
+import {
+  runProvisionalUserRetentionOnce,
+  runRejectionRetentionOnce,
+  runRetentionOnce,
+  runSentAlertsRetentionOnce,
+} from "./retention.ts";
 
 /** Outcome of one delivery attempt. */
 export type DeliveryOutcome =
@@ -656,6 +661,10 @@ export interface QueueHygieneOptions {
   retentionIntervalMs?: number;
   /** Age out smtp_rejections rows (Lane K P2); 0 disables. */
   retainRejectionsDays?: number;
+  /** Prune never-verified provisional users (retention.ts); 0 disables. */
+  retainProvisionalUsersHours?: number;
+  /** Age out sent_alerts ledger rows (retention.ts); 0 disables. */
+  retainSentAlertsDays?: number;
 }
 
 /**
@@ -711,6 +720,26 @@ export function startQueueWorker(
         if (rejections > 0) {
           queueRetentionDeletedTotal.inc({ status: "smtp_rejections" }, rejections);
           logger.info("rejection_retention_deleted", { deleted: rejections });
+        }
+      }
+      if ((hygiene.retainProvisionalUsersHours ?? 0) > 0) {
+        const pruned = await runProvisionalUserRetentionOnce(db, {
+          retainHours: hygiene.retainProvisionalUsersHours ?? 0,
+          now: opts.now,
+        });
+        if (pruned > 0) {
+          queueRetentionDeletedTotal.inc({ status: "provisional_users" }, pruned);
+          logger.info("provisional_users_pruned", { deleted: pruned });
+        }
+      }
+      if ((hygiene.retainSentAlertsDays ?? 0) > 0) {
+        const aged = await runSentAlertsRetentionOnce(db, {
+          retainDays: hygiene.retainSentAlertsDays ?? 0,
+          now: opts.now,
+        });
+        if (aged > 0) {
+          queueRetentionDeletedTotal.inc({ status: "sent_alerts" }, aged);
+          logger.info("sent_alerts_retention_deleted", { deleted: aged });
         }
       }
     }

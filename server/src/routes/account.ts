@@ -27,16 +27,14 @@ import { aliases, apiKeys, domains, emailLogs, type User, users } from "../db/sc
 import { canReceive } from "../pipeline/domainCapability";
 import {
   consumeVerificationCode,
-  createVerificationCode,
-  isRateLimited,
   SUDO_CODE_ALERT_TYPE,
-  sendWithRateLimit,
   sudoCodeEmail,
 } from "../pipeline/transactional";
 import { ALIAS_DOMAINS, FIRST_ALIAS_DOMAIN } from "./aliasConfig";
 import { HttpError } from "./httpError";
 import { assertSudoFresh } from "./sudoGuard";
 import { ErrorResponse, OkResponse } from "./schema";
+import { issueVerificationCode } from "./verificationMail";
 
 const StatsResponse = z
   .object({
@@ -300,29 +298,13 @@ export async function withAccountRoutes(authed: FastifyInstance) {
     handler: async (req, reply) => {
       const submitted = req.body.code;
       if (submitted === undefined) {
-        // Budget check BEFORE minting, so hammering this endpoint cannot
-        // invalidate a code that is still in flight.
-        if (
-          await isRateLimited(db, {
-            userId: req.user.id,
-            toEmail: req.user.email,
-            alertType: SUDO_CODE_ALERT_TYPE,
-          })
-        ) {
-          throw new HttpError(429, "Too many confirmation emails requested, try again later");
-        }
-        const { code, row } = await createVerificationCode(db, {
+        await issueVerificationCode(db, {
           userId: req.user.id,
-          purpose: "sudo",
-        });
-        const { subject, textBody } = sudoCodeEmail(code);
-        await sendWithRateLimit(db, {
-          userId: req.user.id,
+          toEmail: req.user.email,
           alertType: SUDO_CODE_ALERT_TYPE,
-          to: req.user.email,
-          subject,
-          textBody,
-          refId: row.id,
+          purpose: "sudo",
+          email: sudoCodeEmail,
+          refusedMessage: "Too many confirmation emails requested, try again later",
         });
         reply.status(202);
         return { msg: "Confirmation code sent" };

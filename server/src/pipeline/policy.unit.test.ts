@@ -114,6 +114,7 @@ function facts(over: Partial<RcptFacts> = {}): RcptFacts {
     trashMailbox: null,
     catchAll: null,
     rateLimited: null,
+    queueFull: false,
     ...over,
   };
   // Delivery set defaults to the healthy primary, like evaluateRcpt gathers.
@@ -213,7 +214,7 @@ describe("decideRcpt", () => {
     if (d.kind === "reject") expect(d.message).toContain("mailbox");
   });
 
-  test("rate limit gates trash delivery too, but a plain drop stays a drop", () => {
+  test("rate limit gates trash delivery too", () => {
     const trash = fakeMailbox({ id: 11, email: "trash@qmail.com" });
     expect(
       decideRcpt(
@@ -224,11 +225,46 @@ describe("decideRcpt", () => {
         }),
       ).kind,
     ).toBe("reject");
-    // No trash mailbox: accept-and-drop wins — the count was never gathered
-    // for a drop, and even a stale fact must not turn a drop into a reject.
+  });
+
+  test("rate limit gates accept-and-drop too (a drop still writes rows per message)", () => {
+    // Disabled alias, no trash mailbox: under budget it drops...
+    expect(decideRcpt(facts({ alias: fakeAlias({ enabled: false }) }))).toEqual({
+      kind: "drop",
+      reason: "alias_disabled",
+    });
+    // ...over budget it tempfails, same as a delivery would.
     expect(
       decideRcpt(facts({ alias: fakeAlias({ enabled: false }), rateLimited: "alias" })),
-    ).toEqual({ kind: "drop", reason: "alias_disabled" });
+    ).toMatchObject({ kind: "reject", code: 450, enhanced: "4.7.1" });
+    // Same for the no-deliverable-mailbox drop.
+    expect(decideRcpt(facts({ deliveryMailboxes: [], rateLimited: "alias" }))).toMatchObject({
+      kind: "reject",
+      code: 450,
+    });
+  });
+
+  test("a full owner queue: 452 4.3.1 tempfail, for plain and trash delivery", () => {
+    const d = decideRcpt(facts({ queueFull: true }));
+    expect(d).toMatchObject({ kind: "reject", code: 452, enhanced: "4.3.1" });
+    if (d.kind === "reject") expect(d.message).toContain("queue is full");
+    const trash = fakeMailbox({ id: 11, email: "trash@qmail.com" });
+    expect(
+      decideRcpt(
+        facts({ alias: fakeAlias({ enabled: false }), trashMailbox: trash, queueFull: true }),
+      ),
+    ).toMatchObject({ kind: "reject", code: 452 });
+    // A drop never enqueues, so a (stale) full flag must not turn it into a reject.
+    expect(decideRcpt(facts({ alias: fakeAlias({ enabled: false }), queueFull: true }))).toEqual({
+      kind: "drop",
+      reason: "alias_disabled",
+    });
+  });
+
+  test("the rate limit is reported before the queue cap when both trip", () => {
+    expect(decideRcpt(facts({ rateLimited: "alias", queueFull: true }))).toMatchObject({
+      code: 450,
+    });
   });
 
   test("account standing beats the rate limit (a disabled user is 550, not 450)", () => {

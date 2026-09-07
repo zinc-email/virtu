@@ -1,7 +1,8 @@
 # Pre-launch security review
 
-Companion to `PLAN.md` and `ABUSE.md`. Status: **P0 fixed 2026-09-05 (see
-STATE.md "Pre-launch review batch"); P1/P2 open.** Written 2026-09-05, one week before zinc goes live, from a
+Companion to `PLAN.md` and `ABUSE.md`. Status: **P0 fixed 2026-09-05, P1
+fixed 2026-09-06 (see STATE.md "Pre-launch review batch"); P2 open.**
+Written 2026-09-05, one week before zinc goes live, from a
 red-team pass over the whole tree by an agent with the same view of the code
 any attacker with the public repo has. Threat model: the legacy host was
 already being probed for mail-processing RCE (192.243.105.20, 2026-08-30);
@@ -82,7 +83,22 @@ B's default mailbox = A's alias) and stumble-into-able by an honest user.
 
 ## P1 — first weeks
 
-### 3. The login endpoint as an email cannon and lockout tool
+### 3. The login endpoint as an email cannon and lockout tool — FIXED 2026-09-06
+
+Landed: the last three unexpired codes of a scope are all valid and a
+successful verify consumes them all (wrong guesses spend every live code's
+own budget, so a fresh request never resets an attacker's guessing); the
+retention tick prunes provisional users after `PROVISIONAL_USER_RETAIN_HOURS`
+(24, operator-disabled rows kept); and `TRANSACTIONAL_MAIL_HOURLY_MAX` (500)
+is the global circuit breaker — 429 for everyone, a warn line, the
+`virtu_transactional_ceiling_refused_total` counter and one operator
+notification an hour. Proof-of-work/captcha stays "later", and so do two
+lockout paths a fresh-eyes review of the fix pointed out: three wrong
+`/auth/verify` guesses from a stranger still kill the target's live codes,
+and the per-address 3/h send budget still lets three stranger requests 429
+the target's own for the hour. Those are the brute-force and mail-bombing
+bounds respectively, limited by the per-IP rate; a requester dimension on
+them is the open design question.
 
 **Where:** `server/src/routes/auth.ts`, `server/src/pipeline/transactional.ts`
 `createVerificationCode` (marks every prior code used).
@@ -107,7 +123,15 @@ B's default mailbox = A's alias) and stumble-into-able by an honest user.
   429 for everyone, alert the operator) so a flood cannot burn the IP.
 - Later: proof-of-work or captcha on `/auth/login` for unknown addresses.
 
-### 4. Unbounded storage from accept-and-drop and retries
+### 4. Unbounded storage from accept-and-drop and retries — FIXED 2026-09-06
+
+Landed: the per-alias inbound budget now gates drops (450 like a delivery),
+and `queue/quota.ts` caps each user's in-flight mail
+(`QUEUE_MAX_PENDING_{ROWS,BYTES}_PER_USER`, 500 / 256 MiB): 452 4.3.1 at the
+mx RCPT and at submission DATA, both before any row is written. The mx also
+tempfails the whole message when a recipient re-evaluates to a 4xx at DATA
+(previously that recipient was silently skipped). The lower free-plan size
+cap was not done — the byte cap bounds the same thing per user.
 
 **Where:** `server/src/mx.ts` step 3 (drops mint a contact + blocked log
 with no rate limit — `policy.ts` gathers `rateLimited` only for a
@@ -123,7 +147,14 @@ tempfailing mailbox holds 25 MiB rows retrying for four days at ten a minute
 (and pending rows) per user at enqueue, 452 above it; consider a lower
 `SMTP_MAX_MESSAGE_SIZE` for free-plan recipients.
 
-### 5. Plaintext SMTP AUTH if the cert is missing
+### 5. Plaintext SMTP AUTH if the cert is missing — FIXED 2026-09-06
+
+Landed, both halves: `assertProductionSmtpTls` (called from
+`startSubmission`, so the api still boots without mail certs) refuses to
+start submission in production without `SMTP_TLS_*`, and `requireAuthTls`
+is now unconditional in submission — a TLS-less 587 has no AUTH at all
+unless the dev-only `SUBMISSION_ALLOW_PLAINTEXT_AUTH` is set, which
+production also refuses.
 
 **Where:** `server/src/config.ts` `assertProductionSecrets`,
 `server/src/submission.ts`.

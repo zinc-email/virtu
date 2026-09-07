@@ -62,7 +62,7 @@ export const mxRateLimitedTotal = registry.counter(
 export const mxMessagesTotal = registry.counter(
   "virtu_mx_messages_total",
   "Inbound message outcomes at the MX",
-  ["outcome"], // forwarded | trash | verp_bounce | verp_ignored | rejected | dropped | loop_dropped | error
+  ["outcome"], // forwarded | trash | verp_bounce | verp_ignored | rejected | tempfailed | dropped | loop_dropped | error
 );
 
 // ── submission (587/465) ────────────────────────────────────────────────────
@@ -88,6 +88,11 @@ export const submissionEnqueuedTotal = registry.counter(
 export const submissionQuotaRefusedTotal = registry.counter(
   "virtu_submission_quota_refused_total",
   "Messages refused by the per-user daily send quota",
+);
+
+export const submissionQueueFullTotal = registry.counter(
+  "virtu_submission_queue_full_total",
+  "Messages refused because the user's pending queue is at its cap (queue/quota.ts)",
 );
 
 // Shared by mx and submission (pipeline/smtpRejection.ts).
@@ -156,8 +161,8 @@ export const queueReapedTotal = registry.counter(
 
 export const queueRetentionDeletedTotal = registry.counter(
   "virtu_queue_retention_deleted_total",
-  "Terminal queue rows deleted by retention",
-  ["status"], // sent | failed
+  "Rows deleted by the retention tick",
+  ["status"], // sent | failed | smtp_rejections | provisional_users | sent_alerts
 );
 
 export const queueAdminTotal = registry.counter(
@@ -170,6 +175,13 @@ export const dsnTotal = registry.counter(
   "virtu_dsn_total",
   "DSN generation outcomes for permanent failures",
   ["outcome"], // sent | suppressed | skipped
+);
+
+// ── transactional mail (pipeline/transactional.ts) ─────────────────────────
+
+export const transactionalCeilingRefusedTotal = registry.counter(
+  "virtu_transactional_ceiling_refused_total",
+  "Login/sudo/mailbox-verification emails refused by the global hourly ceiling",
 );
 
 // ── api (Fastify) ───────────────────────────────────────────────────────────

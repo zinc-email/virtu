@@ -18,7 +18,10 @@
  * disabled alias → 250 accept-and-drop (blocked email_log, nothing queued),
  * role addresses (postmaster@ …) → a re-signed copy per operator
  * (pipeline/operatorMail.ts, mail/rewriteOperator.ts) on the null reverse
- * path, per-alias/per-mailbox floods → 450 (pipeline/inboundRateLimit.ts).
+ * path, per-alias/per-mailbox floods → 450 (pipeline/inboundRateLimit.ts —
+ * drops are budgeted too), an owner whose pending queue is at its cap → 452
+ * (queue/quota.ts). A recipient that re-evaluates to a tempfail at DATA
+ * tempfails the whole message before anything is queued.
  */
 
 import { config } from "./config.ts";
@@ -74,6 +77,7 @@ import { type EvaluatedRcpt, evaluateRcpt } from "./pipeline/policy.ts";
 import { recordSmtpRejection } from "./pipeline/smtpRejection.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
 import { enqueue } from "./queue/index.ts";
+import type { QueueQuotaLimits } from "./queue/quota.ts";
 import {
   createSmtpServer,
   rejectWith,
@@ -104,6 +108,8 @@ export interface MxOptions {
   inboundRateLimits?: InboundRateLimits;
   /** Role-address localparts routed to operators; omitted = none (tests). */
   operatorLocalparts?: readonly string[];
+  /** Per-user pending-queue cap (queue/quota.ts); omitted = not enforced (tests). */
+  queueQuota?: QueueQuotaLimits;
   tls?: SmtpTlsConfig;
   /**
    * DNS resolver override for verifyInbound. Defaults to
@@ -144,8 +150,25 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
         mailDomain: opts.mailDomain,
         inboundRateLimits: opts.inboundRateLimits,
         operatorLocalparts: opts.operatorLocalparts,
+        queueQuota: opts.queueQuota,
+        // A drop stays a drop here — RCPT already gated it (policy.ts).
+        budgetDrops: false,
       }),
     );
+  }
+
+  // A DELIVERY that re-evaluates to a tempfail here (its budget or its
+  // owner's queue cap filled between RCPT and DATA) tempfails the whole
+  // message BEFORE anything is queued: the sender retries everything and
+  // nobody gets a duplicate. A 5xx re-evaluation (alias deleted meanwhile)
+  // simply leaves that recipient out, as before.
+  for (const rcpt of evaluated) {
+    const d = rcpt.decision;
+    if (d.kind === "reject" && d.code >= 400 && d.code < 500) {
+      mxMessagesTotal.inc({ outcome: "tempfailed" });
+      log.info("data_tempfailed", { to: rcpt.address, smtpCode: d.code, reason: d.message });
+      return rejectWith(d.code, d.enhanced, d.message);
+    }
   }
 
   const parsed = parseMessage(event.raw);
@@ -537,6 +560,7 @@ export function createMxServer(opts: MxOptions): SmtpServer {
         mailDomain: opts.mailDomain,
         inboundRateLimits: opts.inboundRateLimits,
         operatorLocalparts: opts.operatorLocalparts,
+        queueQuota: opts.queueQuota,
       });
       mxRcptTotal.inc({ decision: decision.kind });
       if (facts.rateLimited !== null) mxRateLimitedTotal.inc({ scope: facts.rateLimited });
@@ -596,6 +620,10 @@ export function mxOptionsFromConfig(): MxOptions {
       perMailboxPerMinute: config.inboundRateLimitPerMailboxPerMinute,
     },
     operatorLocalparts: config.operatorLocalparts,
+    queueQuota: {
+      maxPendingRows: config.queueMaxPendingRowsPerUser,
+      maxPendingBytes: config.queueMaxPendingBytesPerUser,
+    },
     tls: loadSmtpTls(config.smtpTlsCertFile, config.smtpTlsKeyFile),
   };
 }

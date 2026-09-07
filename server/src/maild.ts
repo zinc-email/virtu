@@ -20,7 +20,7 @@
  * a wedged loop still trips.
  */
 
-import { config } from "./config.ts";
+import { assertProductionSmtpTls, config } from "./config.ts";
 import { startDeliverd } from "./deliverd.ts";
 import { createLogger } from "./log.ts";
 import { registry } from "./metrics/index.ts";
@@ -32,6 +32,10 @@ const WORKER_HEARTBEAT_MAX_MS = Math.max(5 * config.queuePollMs, 10 * 60_000);
 
 async function main(): Promise<void> {
   const logger = createLogger("maild");
+  // Fail closed BEFORE anything binds: a production box without mail certs
+  // must not come up as an MX that accepts connections and then dies when
+  // submission refuses — with nothing bound, senders queue and retry.
+  assertProductionSmtpTls(config);
   const mx = await startMx();
   const submission = await startSubmission();
   const worker = startDeliverd();

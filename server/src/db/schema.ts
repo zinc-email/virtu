@@ -625,6 +625,9 @@ export const sentAlerts = pgTable(
     index("sent_alerts_user_id_idx").on(t.userId),
     index("sent_alerts_to_email_idx").on(t.toEmail),
     index("sent_alerts_alert_type_idx").on(t.alertType),
+    // The trailing-hour global count (pipeline/transactional.ts
+    // countTransactionalSends) and the retention pass scan by age.
+    index("sent_alerts_created_at_idx").on(t.createdAt),
   ],
 );
 

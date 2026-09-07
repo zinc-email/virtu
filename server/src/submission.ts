@@ -1,8 +1,10 @@
 /**
  * submission — authenticated mail submission (PLAN Milestone 2): one options
- * object, two listeners — 587 (STARTTLS required before AUTH; the smtp
- * library enforces requireAuthTls whenever TLS is configured) and 465
- * (implicit TLS).
+ * object, two listeners — 587 (STARTTLS required before AUTH, always: with
+ * no TLS configured the listener simply has no AUTH, unless the dev-only
+ * SUBMISSION_ALLOW_PLAINTEXT_AUTH is set) and 465 (implicit TLS, only when
+ * TLS is configured). Production refuses to start without TLS
+ * (config.ts assertProductionSmtpTls).
  *
  * AUTH: email + password against the account password OR any of the user's
  * per-device SMTP credentials (smtp_credentials — app passwords that are
@@ -31,7 +33,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { config } from "./config.ts";
+import { assertProductionSmtpTls, config } from "./config.ts";
 import { db } from "./db/index.ts";
 import type { Db } from "./db/index.ts";
 import { and, eq } from "drizzle-orm";
@@ -53,6 +55,7 @@ import {
   smtpConnectionsTotal,
   submissionAuthTotal,
   submissionEnqueuedTotal,
+  submissionQueueFullTotal,
   submissionQuotaRefusedTotal,
   submissionRcptRefusedTotal,
 } from "./metrics/index.ts";
@@ -72,6 +75,12 @@ import {
 } from "./pipeline/sendQuota.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
 import { enqueue } from "./queue/index.ts";
+import {
+  decideQueueQuota,
+  OUTBOUND_QUEUE_FULL_REPLY,
+  pendingUsage,
+  type QueueQuotaLimits,
+} from "./queue/quota.ts";
 import {
   createSmtpServer,
   rejectWith,
@@ -95,6 +104,17 @@ export interface SubmissionOptions {
   authThrottle?: AuthThrottle;
   /** Daily send quota plan defaults; omitted = quota not enforced (tests). */
   sendQuota?: SendQuotaLimits;
+  /** Per-user pending-queue cap (queue/quota.ts); omitted = not enforced (tests). */
+  queueQuota?: QueueQuotaLimits;
+  /**
+   * Offer AUTH on the plaintext 587 listener when no TLS is configured.
+   * Off by default: a listener without TLS then has no AUTH at all, so a
+   * deploy whose mail certs never arrived cannot leak credentials in the
+   * clear (it just cannot submit — loud, not silent). Dev-only; production
+   * refuses it (config.ts assertProductionSmtpTls). Irrelevant once `tls`
+   * is set: AUTH then always requires the TLS layer.
+   */
+  allowPlaintextAuth?: boolean;
   logger?: Logger;
 }
 
@@ -399,6 +419,26 @@ async function handleSubmissionData(
     }
   }
 
+  // Pending-queue cap (queue/quota.ts), also pre-write: what this account
+  // already has in flight — retrying forwards included — bounds what it may
+  // add. One user per submission, so one check covers every recipient.
+  if (opts.queueQuota !== undefined) {
+    const usage = await pendingUsage(opts.db, user.id);
+    if (decideQueueQuota(opts.queueQuota, usage)) {
+      submissionQueueFullTotal.inc();
+      log.info("queue_full_refused", {
+        from: envelope.mailFrom,
+        pendingRows: usage.rows,
+        pendingBytes: usage.bytes,
+      });
+      return rejectWith(
+        OUTBOUND_QUEUE_FULL_REPLY.code,
+        OUTBOUND_QUEUE_FULL_REPLY.enhanced,
+        OUTBOUND_QUEUE_FULL_REPLY.message,
+      );
+    }
+  }
+
   const parsed = parseMessage(event.raw);
   const aliasDomain = alias.email.slice(alias.email.indexOf("@") + 1);
 
@@ -574,8 +614,11 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
     banner: "virtu submission",
     tls: opts.tls,
     maxMessageSize: opts.maxMessageSize,
-    // AUTH is refused (and unadvertised) before STARTTLS whenever TLS is
-    // configured — the library's requireAuthTls default.
+    // AUTH is refused (and unadvertised) off the TLS layer — always, not
+    // only when TLS happens to be configured: a listener with no TLS then
+    // has no AUTH rather than plaintext AUTH. Only the explicit dev flag
+    // relaxes that, and only when there is no TLS to require.
+    requireAuthTls: opts.tls !== undefined || opts.allowPlaintextAuth !== true,
     // session.tls is already true at connect time on the implicit-TLS
     // listener (byte-0 TLS), still false on the STARTTLS one — that's the
     // listener discriminator.
@@ -741,11 +784,21 @@ export function submissionOptionsFromConfig(): SubmissionOptions {
       freePerDay: config.sendQuotaFreePerDay,
       premiumPerDay: config.sendQuotaPremiumPerDay,
     },
+    queueQuota: {
+      maxPendingRows: config.queueMaxPendingRowsPerUser,
+      maxPendingBytes: config.queueMaxPendingBytesPerUser,
+    },
+    allowPlaintextAuth: config.submissionAllowPlaintextAuth,
   };
 }
 
-/** Start the 587 listener (and 465 when TLS is configured). */
+/**
+ * Start the 587 listener (and 465 when TLS is configured). In production
+ * this refuses to start without TLS material — fail closed, like the secret
+ * checks at boot — rather than run a listener whose AUTH cannot happen.
+ */
 export async function startSubmission(): Promise<SubmissionServers> {
+  assertProductionSmtpTls(config);
   const servers = createSubmissionServers(submissionOptionsFromConfig());
   const bound = await servers.starttls.listen(config.submissionPort, config.smtpHost);
   defaultSubmissionLogger().info("listening", { host: bound.host, port: bound.port });

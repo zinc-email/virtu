@@ -279,7 +279,8 @@ for the next controller).
 ### Pre-launch review batch (2026-09-05)
 
 Red-team pass a week before zinc goes live; findings and the fix plan in
-`plans/2026-09-05-security-review.md`. The two P0s landed; P1/P2 are open.
+`plans/2026-09-05-security-review.md`. The two P0s landed 2026-09-05, the
+three P1s 2026-09-06; P2 is open.
 
 1. **SMTP smuggling closed** (was High, CVE-2023-51764 class).
    `smtp/wire.ts:DataDecoder` ended DATA on a lone "." line after ANY line
@@ -301,6 +302,61 @@ Red-team pass a week before zinc goes live; findings and the fix plan in
    the mx accept-and-drops at the limit with a `forward_loop` blocked log
    and a `loop_dropped` outcome, and logs `forward_chained` at the second
    hop so telemetry shows who chains. `loop.story.test.ts` pins both sides.
+3. **Login endpoint: the resend lockout and the cannon closed** (P1,
+   2026-09-06). `pipeline/transactional.ts`: the newest `MAX_ACTIVE_CODES`
+   (= `ACTIVATION_RESEND_MAX`, 3) unused codes of a scope are ALL valid, so
+   a stranger's /auth/login for someone's address no longer kills the code
+   that address is about to type; a match consumes the whole scope, a
+   wrong guess spends each live code's own 3-try budget (the oldest dies
+   first, `410` only once none is left). Every route mails a code through
+   `routes/verificationMail.ts issueVerificationCode` — budget check, mint,
+   send, and a 429 (with the minted code retired) if the send's own
+   re-check refuses — so no route can answer "code sent" with nothing
+   queued. Provisional users (`activated=false`, not disabled) idle past
+   `PROVISIONAL_USER_RETAIN_HOURS` (24, by `updated_at` — a reused row is
+   touched) are pruned on the retention tick (`provisional_users` label);
+   `sent_alerts` ages out after `SENT_ALERTS_RETAIN_DAYS` (30, new
+   `created_at` index, migration 0001). `TRANSACTIONAL_MAIL_HOURLY_MAX`
+   (500, 0 = off — dev compose + `server/.env.test` set 0) is the global
+   circuit breaker inside `sendBudget` (pure): 429 for every code request,
+   checked before the provisional insert; `noteCeilingRefusal` (route
+   layer, once per 429) logs, counts
+   `virtu_transactional_ceiling_refused_total` and notifies the operators
+   once an hour. Pinned in `transactional.int.test.ts`, `auth.int.test.ts`,
+   `hygiene.int.test.ts`. **Still open, by design for now:** two lockout
+   paths the review named survive — three wrong `/auth/verify` guesses from
+   a stranger still kill the target's live codes (the brute-force bound),
+   and the 3/h send budget is keyed on the target address, so three
+   stranger requests 429 the target's own for the rest of the hour (the
+   mail-bombing bound). Both are limited by the per-IP auth rate; fixing
+   them means a requester dimension on those budgets, a design call not
+   yet made.
+4. **Unbounded storage closed** (P1, 2026-09-06). `policy.ts` gathers the
+   inbound rate count for drops too, so accept-and-drop tempfails 450 at the
+   per-alias budget like a delivery (the blocked rows already counted).
+   `queue/quota.ts`: `pendingUsage` (pending+sending rows and
+   `octet_length(raw)` per user) + `decideQueueQuota` against
+   `QUEUE_MAX_PENDING_{ROWS,BYTES}_PER_USER` (500 / 256 MiB, 0 = off) →
+   `RcptFacts.queueFull` → `452 4.3.1` at RCPT; submission checks the same
+   cap at DATA before any write (`virtu_submission_queue_full_total`, its
+   own "your outbound queue" wording). Transactional mail, DSNs and
+   operator mail bypass the cap on purpose (documented in `quota.ts`). The
+   mx now tempfails the WHOLE message when a DELIVERY re-evaluates to a 4xx
+   at DATA (before verify/enqueue, so no duplicates) — previously such a
+   recipient was silently skipped; drops are budgeted at RCPT only
+   (`budgetDrops: false` at DATA), so a flooded disabled alias never
+   tempfails its healthy co-recipients. Pinned in `quota.unit.test.ts`,
+   `quota.int.test.ts` (usage + `evaluateRcpt` 452), `policy.unit.test.ts`.
+5. **Plaintext SMTP AUTH closed** (P1, 2026-09-06). Submission passes
+   `requireAuthTls` unconditionally — no TLS means no AUTH, not clear-text
+   AUTH — unless the dev-only `SUBMISSION_ALLOW_PLAINTEXT_AUTH` is set; and
+   `config.ts assertProductionSmtpTls` (called first thing in `maild` —
+   before port 25 binds, so a cert-less production box comes up with
+   nothing listening rather than a flapping MX — and in `startSubmission`;
+   the api still boots without certs) refuses to start in production
+   without `SMTP_TLS_*` or with that flag. Pinned in
+   `submission.unit.test.ts` (socket level: no AUTH advertised, `538` on
+   attempt) and `config.unit.test.ts`.
 
 ## Not started
 

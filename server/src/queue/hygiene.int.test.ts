@@ -10,11 +10,15 @@
 import { describe, expect, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.ts";
-import { outboundMessages } from "../db/schema.ts";
+import { outboundMessages, sentAlerts, users } from "../db/schema.ts";
 import { createLogger } from "../log.ts";
 import { DROPPED_BY_OPERATOR, dropMessages, requeueMessages } from "./admin.ts";
 import { reapStuckSending } from "./reaper.ts";
-import { runRetentionOnce } from "./retention.ts";
+import {
+  runProvisionalUserRetentionOnce,
+  runRetentionOnce,
+  runSentAlertsRetentionOnce,
+} from "./retention.ts";
 import { processQueueOnce } from "./worker.ts";
 
 const RAW = new TextEncoder().encode("Subject: hygiene\r\n\r\nbody\r\n");
@@ -153,6 +157,95 @@ describe("runRetentionOnce", () => {
     await db
       .delete(outboundMessages)
       .where(inArray(outboundMessages.id, [oldPending.id, youngSent.id]));
+  });
+});
+
+describe("runProvisionalUserRetentionOnce", () => {
+  const ancient = new Date("2020-01-01T00:00:00Z");
+  const email = (kind: string) => `prov-${kind}-${crypto.randomUUID()}@hygiene.test`;
+
+  test("deletes never-verified users idle past the window; activated, disabled and recently-touched rows stay", async () => {
+    const [oldProvisional, oldActivated, oldDisabled, freshProvisional] = await db
+      .insert(users)
+      .values([
+        { email: email("old"), activated: false, createdAt: ancient, updatedAt: ancient },
+        { email: email("act"), activated: true, createdAt: ancient, updatedAt: ancient },
+        {
+          email: email("dis"),
+          activated: false,
+          disabled: true,
+          createdAt: ancient,
+          updatedAt: ancient,
+        },
+        // Minted long ago but touched now (a fresh /auth/login): live.
+        { email: email("touched"), activated: false, createdAt: ancient },
+      ])
+      .returning({ id: users.id });
+
+    // A cutoff around 2023: only this test's synthetic 2020 rows qualify, so
+    // the int tier's own fresh provisional users are untouchable.
+    const deleted = await runProvisionalUserRetentionOnce(db, { retainHours: 3 * 365 * 24 });
+    expect(deleted).toBeGreaterThanOrEqual(1);
+
+    const remaining = new Set(
+      (
+        await db
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            inArray(users.id, [
+              oldProvisional!.id,
+              oldActivated!.id,
+              oldDisabled!.id,
+              freshProvisional!.id,
+            ]),
+          )
+      ).map((r) => r.id),
+    );
+    expect(remaining.has(oldProvisional!.id)).toBe(false);
+    expect(remaining.has(oldActivated!.id)).toBe(true);
+    expect(remaining.has(oldDisabled!.id)).toBe(true);
+    expect(remaining.has(freshProvisional!.id)).toBe(true);
+    await db
+      .delete(users)
+      .where(inArray(users.id, [oldActivated!.id, oldDisabled!.id, freshProvisional!.id]));
+  });
+
+  test("0 hours disables the pass", async () => {
+    expect(await runProvisionalUserRetentionOnce(db, { retainHours: 0 })).toBe(0);
+  });
+});
+
+describe("runSentAlertsRetentionOnce", () => {
+  test("ages out ledger rows past the window, keeps fresh ones", async () => {
+    const ancient = new Date("2020-01-01T00:00:00Z");
+    const user = (
+      await db
+        .insert(users)
+        .values({ email: `sa-${crypto.randomUUID()}@hygiene.test`, activated: true })
+        .returning({ id: users.id })
+    )[0]!;
+    const [old, fresh] = await db
+      .insert(sentAlerts)
+      .values([
+        {
+          userId: user.id,
+          toEmail: "x@hygiene.test",
+          alertType: "hygiene_test",
+          createdAt: ancient,
+        },
+        { userId: user.id, toEmail: "x@hygiene.test", alertType: "hygiene_test" },
+      ])
+      .returning({ id: sentAlerts.id });
+
+    expect(await runSentAlertsRetentionOnce(db, { retainDays: 3 * 365 })).toBeGreaterThanOrEqual(1);
+    const left = await db
+      .select({ id: sentAlerts.id })
+      .from(sentAlerts)
+      .where(inArray(sentAlerts.id, [old!.id, fresh!.id]));
+    expect(left.map((r) => r.id)).toEqual([fresh!.id]);
+    expect(await runSentAlertsRetentionOnce(db, { retainDays: 0 })).toBe(0);
+    await db.delete(users).where(eq(users.id, user.id));
   });
 });
 

@@ -44,6 +44,9 @@ services:
       # The DOM test tier registers a fresh user per test, all from one host
       # IP — don't let the auth limiter starve repeated local runs.
       AUTH_RATE_LIMIT_MAX: "1000"
+      # Same reason: the tiers mint login codes far past the production
+      # ceiling on code mail (500/hour, pipeline/transactional.ts).
+      TRANSACTIONAL_MAIL_HOURLY_MAX: "0"
     ports:
       - "127.0.0.1:${API_PORT:-3000}:3000"
     init: true

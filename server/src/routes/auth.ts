@@ -25,14 +25,13 @@ import { db } from "../db";
 import { apiKeys, invites, mailboxes, type User, users } from "../db/schema";
 import {
   consumeVerificationCode,
-  createVerificationCode,
-  isRateLimited,
+  isTransactionalCeilingReached,
   LOGIN_CODE_ALERT_TYPE,
   loginCodeEmail,
-  sendWithRateLimit,
 } from "../pipeline/transactional";
 import { HttpError } from "./httpError";
 import { ErrorResponse } from "./schema";
+import { issueVerificationCode, refusal } from "./verificationMail";
 
 const LoginPost = z
   .object({
@@ -95,10 +94,20 @@ function isUniqueViolation(err: unknown): boolean {
   return code === "23505" || message.includes("duplicate key");
 }
 
-/** Find-or-create the user row for a submitted email (provisional on miss). */
+/**
+ * Find-or-create the user row for a submitted email (provisional on miss).
+ * A reused PROVISIONAL row is touched: the retention tick prunes
+ * never-verified users by updated_at (queue/retention.ts), and a row that
+ * just requested a code is live, however old its first request was.
+ */
 async function findOrCreateUser(email: string): Promise<User> {
   const found = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (found[0] !== undefined) return found[0];
+  if (found[0] !== undefined) {
+    if (!found[0].activated) {
+      await db.update(users).set({ updatedAt: new Date() }).where(eq(users.id, found[0].id));
+    }
+    return found[0];
+  }
 
   try {
     const inserted = await db.insert(users).values({ email, activated: false }).returning();
@@ -199,36 +208,23 @@ export async function withAuthRoutes(api: FastifyInstance) {
         const email = normalizeEmail(req.body.email);
         if (!looksLikeEmail(email)) throw new HttpError(400, "Invalid email address");
 
+        // The global ceiling before the provisional insert: a tripped
+        // breaker must not keep minting a users row per attacker request.
+        if (await isTransactionalCeilingReached(db)) throw await refusal(db, "ceiling", "");
+
         const user = await findOrCreateUser(email);
 
         // A disabled account gets the uniform response but no email — the
         // flow must not confirm the address exists, let alone its standing.
         if (user.disabled) return { msg: CODE_SENT_MSG };
 
-        // Budget check BEFORE minting, so hammering this endpoint cannot
-        // invalidate a code that is still in flight.
-        if (
-          await isRateLimited(db, {
-            userId: user.id,
-            toEmail: email,
-            alertType: LOGIN_CODE_ALERT_TYPE,
-          })
-        ) {
-          throw new HttpError(429, "Too many login emails requested, try again later");
-        }
-
-        const { code, row } = await createVerificationCode(db, {
+        await issueVerificationCode(db, {
           userId: user.id,
-          purpose: "login",
-        });
-        const { subject, textBody } = loginCodeEmail(code);
-        await sendWithRateLimit(db, {
-          userId: user.id,
+          toEmail: email,
           alertType: LOGIN_CODE_ALERT_TYPE,
-          to: email,
-          subject,
-          textBody,
-          refId: row.id,
+          purpose: "login",
+          email: loginCodeEmail,
+          refusedMessage: "Too many login emails requested, try again later",
         });
 
         return { msg: CODE_SENT_MSG };

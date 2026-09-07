@@ -36,6 +36,19 @@ const ConfigSchema = z.object({
   // (activated) users log in unaffected. Off by default so dev/lmnop stay
   // open; zinc sets it until the Tier 2 detector is proven.
   signupInviteOnly: booleanString(false),
+  // GLOBAL hourly ceiling on login/sudo/mailbox-verification mail, across
+  // every address (pipeline/transactional.ts). /auth/login lets anyone make
+  // us mail any address they name; the per-address (3/h) and per-IP budgets
+  // bound one target and one source, this bounds the TOTAL a distributed
+  // flood can push through our IP at spam traps before it becomes a
+  // reputation event. Tripped = 429 for everyone + an operator notification.
+  // 0 = unlimited (dev compose and the int tier, which mint codes freely).
+  transactionalMailHourlyMax: z.coerce.number().int().default(500),
+  // Provisional users (activated = false: a /auth/login for an address that
+  // never verified) are pruned on the retention tick once older than this;
+  // 0 keeps them forever. A login code lives 15 minutes, so a day-old
+  // provisional row is an abandoned signup or someone else's probe.
+  provisionalUserRetainHours: z.coerce.number().int().default(24),
 
   // ── Mail path (mx / submission / deliverd — PLAN Milestones 1-3) ─────────
   // The domain aliases + reverse aliases + VERP addresses live on.
@@ -60,9 +73,15 @@ const ConfigSchema = z.object({
   // The default is a dev-only value; production must override.
   verpSecret: z.string().min(32).default("insecure-dev-verp-secret-change-me-00"),
   // PEM cert/key for STARTTLS (25/587) and implicit TLS (465). Both unset =>
-  // plaintext-only listeners (local dev); requireAuthTls then defaults off.
+  // plaintext-only listeners (local dev) — and no AUTH on submission unless
+  // the dev flag below says so. Required in production (assertProductionSmtpTls).
   smtpTlsCertFile: z.string().optional(),
   smtpTlsKeyFile: z.string().optional(),
+  // Submission only: offer AUTH on the plaintext 587 listener when no TLS is
+  // configured. Without it a TLS-less submission listener has no AUTH at
+  // all (nothing works, nothing leaks). Dev-only — refused in production
+  // (assertProductionSmtpTls).
+  submissionAllowPlaintextAuth: booleanString(false),
   smtpHost: z.string().default("0.0.0.0"),
   mxPort: z.coerce.number().int().default(25),
   submissionPort: z.coerce.number().int().default(587),
@@ -103,6 +122,17 @@ const ConfigSchema = z.object({
     .number()
     .int()
     .default(6 * 60 * 60_000),
+  // Per-user cap on what sits in the queue (queue/quota.ts): pending +
+  // sending rows and their raw bytes. Checked at the mx RCPT and at
+  // submission before enqueue; over it = 452 4.3.1, so the sender retries
+  // later. Bounds what one tempfailing mailbox (four days of retries at up
+  // to SMTP_MAX_MESSAGE_SIZE a row) or one user's flood can hold in
+  // Postgres. 0 = unlimited.
+  queueMaxPendingRowsPerUser: z.coerce.number().int().default(500),
+  queueMaxPendingBytesPerUser: z.coerce
+    .number()
+    .int()
+    .default(256 * 1024 * 1024),
   // Per-destination backpressure (queue/destinationThrottle.ts): a 421 or a
   // 4.7.x policy deferral at a non-recipient step pauses the whole recipient
   // DOMAIN for base·2^strikes (capped), rows for it wait without attempts.
@@ -132,6 +162,9 @@ const ConfigSchema = z.object({
   // smtp_rejections rows (Lane K P2 forensics) age out on the same retention
   // tick; 0 keeps them forever.
   smtpRejectionsRetainDays: z.coerce.number().int().default(30),
+  // sent_alerts (the send-budget / alert-dedupe / attempt ledger) ages out on
+  // the same tick; every window read from it is <= a day. 0 keeps forever.
+  sentAlertsRetainDays: z.coerce.number().int().default(30),
 });
 
 export const config = loadConfigFromEnv(ConfigSchema);
@@ -172,6 +205,34 @@ export function assertProductionSecrets(
 }
 
 assertProductionSecrets(config);
+
+/**
+ * Fail closed on the submission listeners: in production SMTP AUTH must
+ * never be reachable in the clear. Without TLS material the 587 listener
+ * would otherwise run without STARTTLS (and 465 never starts) — the deploy
+ * where the mail-certs sync has not happened yet. Called from
+ * startSubmission, not at import: the api has no SMTP listeners and must
+ * boot without mail certs. Exported for unit testing.
+ */
+export function assertProductionSmtpTls(
+  cfg: Pick<Config, "smtpTlsCertFile" | "smtpTlsKeyFile" | "submissionAllowPlaintextAuth">,
+  env: Record<string, string | undefined> = process.env,
+): void {
+  if ((env.VIRTU_ENV ?? env.NODE_ENV) !== "production") return;
+  const problems: string[] = [];
+  if (cfg.smtpTlsCertFile === undefined || cfg.smtpTlsKeyFile === undefined) {
+    problems.push("SMTP_TLS_CERT_FILE / SMTP_TLS_KEY_FILE are unset (AUTH would have no TLS)");
+  }
+  if (cfg.submissionAllowPlaintextAuth) {
+    problems.push("SUBMISSION_ALLOW_PLAINTEXT_AUTH is set (dev-only)");
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `refusing to start submission with VIRTU_ENV=production and insecure config: ${problems.join("; ")}. ` +
+        'Point the listeners at a real cert — see server/.env.example and README "Mail TLS".',
+    );
+  }
+}
 
 // SimpleLogin's MAX_NB_EMAIL_FREE_PLAN default.
 export const MAX_ALIAS_FREE_PLAN = 5;

@@ -163,19 +163,30 @@ describe("POST /api/auth/login", () => {
     expect(res.json<{ error: string }>()).toEqual({ error: "Invalid email address" });
   });
 
-  test("a resend invalidates the previous code; the newest one wins", async () => {
+  test("a resend keeps the earlier code valid (a stranger's request cannot lock the user out)", async () => {
     const c = authClient();
     const email = uniqueEmail();
     await c.login(email);
-    const stale = await latestEmailedCode(email);
+    const earlier = await latestEmailedCode(email);
+    // Someone else — or a retry — requests another code for the address.
     await c.login(email);
-    const fresh = await latestEmailedCode(email);
+    const later = await latestEmailedCode(email);
 
-    if (stale !== fresh) {
-      const dead = await c.verify(email, stale);
-      expect(dead.statusCode).toBe(400);
+    // The code already in the inbox still works...
+    expect((await c.verify(email, earlier)).statusCode).toBe(200);
+    // ...and the login consumed every outstanding code, so the other is dead.
+    if (later !== earlier) {
+      expect((await c.verify(email, later)).statusCode).toBe(400);
     }
-    expect((await c.verify(email, fresh)).statusCode).toBe(200);
+  });
+
+  test("the newest of several codes works as well", async () => {
+    const c = authClient();
+    const email = uniqueEmail();
+    await c.login(email);
+    await c.login(email);
+    await c.login(email);
+    expect((await c.verify(email, await latestEmailedCode(email))).statusCode).toBe(200);
   });
 
   test("the send budget (3/hour) returns 429 when spent", async () => {

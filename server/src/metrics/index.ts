@@ -70,7 +70,7 @@ export const mxMessagesTotal = registry.counter(
 export const submissionAuthTotal = registry.counter(
   "virtu_submission_auth_total",
   "SMTP AUTH attempts on submission",
-  ["result"], // ok | bad_credentials | throttled
+  ["result"], // ok | bad_credentials | throttled | saturated
 );
 
 export const submissionRcptRefusedTotal = registry.counter(

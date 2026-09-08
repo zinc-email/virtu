@@ -48,10 +48,12 @@ import { aliasToDict, emailAvailable, loadAliasInfos } from "./aliasInfo";
 import {
   checkAliasPrefix,
   convertToId,
+  isReservedAliasPrefix,
   prefixSuggestionFromHostname,
   randomString,
 } from "./aliasText";
 import { operatorLocalpart } from "../pipeline/operatorMail";
+import { isUniqueViolation } from "../db/pgError";
 import { HttpError } from "./httpError";
 import { CreatedAliasResponse, ErrorResponse } from "./schema";
 import { signSuffix, verifySignedSuffix } from "./signedSuffix";
@@ -125,13 +127,6 @@ async function serializeCreated(alias: Alias) {
   const info = infos[0];
   if (!info) throw new Error("created alias vanished");
   return { alias: alias.email, ...aliasToDict(info) };
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const code = "code" in err ? err.code : undefined;
-  const message = err instanceof Error ? err.message : "";
-  return code === "23505" || message.includes("duplicate key");
 }
 
 /** Find-or-create the (alias, hostname) pair (SimpleLogin AliasUsedOn). */
@@ -340,6 +335,14 @@ export async function withAliasNewRoutes(authed: FastifyInstance) {
         domainId === null &&
         operatorLocalpart(fullAlias, config.mailDomain, config.operatorLocalparts) !== null
       ) {
+        throw new HttpError(400, "Email alias is reserved");
+      }
+      // Look-alike guard: `noreply.x4f2q@`, `admin2@` etc. on a SHARED
+      // domain would go out signed by the service key looking like the
+      // service itself (aliasText.ts isReservedAliasPrefix). The operator
+      // localparts fold in so the two reserved lists can't drift. Custom
+      // domains are the user's own namespace.
+      if (domainId === null && isReservedAliasPrefix(aliasPrefix, config.operatorLocalparts)) {
         throw new HttpError(400, "Email alias is reserved");
       }
       if (fullAlias.includes("..")) {

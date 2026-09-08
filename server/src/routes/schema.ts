@@ -5,9 +5,23 @@
 
 import { createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
-import { users } from "../db/schema";
+import { apiKeys, mailboxes, users } from "../db/schema";
 
 export const userSelect = createSelectSchema(users);
+export const mailboxSelect = createSelectSchema(mailboxes);
+export const apiKeySelect = createSelectSchema(apiKeys);
+
+/**
+ * Request-side variant of a derived DB-backed string column: trim first —
+ * pasted input arrives padded, and every handler normalizes anyway — THEN
+ * apply the column's length cap, read off the derived schema so a column
+ * resize still surfaces here (at import, loudly) instead of drifting.
+ */
+export function trimmedString(column: z.ZodString): z.ZodString {
+  const max = column.maxLength;
+  if (max === null) throw new Error("trimmedString: derived column schema has no max length");
+  return z.string().trim().max(max);
+}
 
 export const ErrorResponse = z
   .object({ error: z.string() })

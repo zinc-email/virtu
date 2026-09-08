@@ -3,6 +3,7 @@ import {
   checkAliasPrefix,
   convertToId,
   formatCreationDate,
+  isReservedAliasPrefix,
   prefixSuggestionFromHostname,
   randomString,
   websiteSendTo,
@@ -27,6 +28,45 @@ describe("checkAliasPrefix", () => {
     expect(checkAliasPrefix("Nope")).toBe(false);
     expect(checkAliasPrefix("a".repeat(41))).toBe(false);
     expect(checkAliasPrefix("a b")).toBe(false);
+  });
+});
+
+describe("isReservedAliasPrefix", () => {
+  test("reserves the bare word and word + separator", () => {
+    expect(isReservedAliasPrefix("noreply")).toBe(true);
+    expect(isReservedAliasPrefix("no-reply")).toBe(true);
+    expect(isReservedAliasPrefix("support.us")).toBe(true);
+    expect(isReservedAliasPrefix("billing-2")).toBe(true);
+    expect(isReservedAliasPrefix("admin_eu")).toBe(true);
+    expect(isReservedAliasPrefix("zinc")).toBe(true);
+  });
+
+  test("reserves separator, digit-look-alike and digit-padding variants", () => {
+    expect(isReservedAliasPrefix("no.reply")).toBe(true);
+    expect(isReservedAliasPrefix("do_not_reply")).toBe(true);
+    expect(isReservedAliasPrefix("s.u.p.p.o.r.t")).toBe(true);
+    expect(isReservedAliasPrefix("supp0rt")).toBe(true);
+    expect(isReservedAliasPrefix("b1lling")).toBe(true);
+    expect(isReservedAliasPrefix("secur1ty")).toBe(true);
+    expect(isReservedAliasPrefix("admin2")).toBe(true);
+    expect(isReservedAliasPrefix("noreply2")).toBe(true);
+    expect(isReservedAliasPrefix("billing2024")).toBe(true);
+    expect(isReservedAliasPrefix("supp0rt.eu")).toBe(true);
+  });
+
+  test("folds in extra words (config.operatorLocalparts)", () => {
+    expect(isReservedAliasPrefix("dmarc", ["dmarc"])).toBe(true);
+    expect(isReservedAliasPrefix("dmarc.reports", ["dmarc"])).toBe(true);
+    expect(isReservedAliasPrefix("dmarc", [])).toBe(false);
+  });
+
+  test("honest prefixes that merely contain a reserved word pass", () => {
+    expect(isReservedAliasPrefix("supportive")).toBe(false);
+    expect(isReservedAliasPrefix("adminton")).toBe(false);
+    expect(isReservedAliasPrefix("groupon")).toBe(false);
+    expect(isReservedAliasPrefix("my-support")).toBe(false);
+    expect(isReservedAliasPrefix("teams")).toBe(false);
+    expect(isReservedAliasPrefix("account4u")).toBe(false);
   });
 });
 

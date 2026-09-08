@@ -310,6 +310,33 @@ describe("POST /api/v3/alias/custom/new", () => {
     expect(res.json<{ error: string }>()).toEqual({ error: "Tampered suffix" });
   });
 
+  test("look-alike service prefixes are reserved on shared domains", async () => {
+    const { apiKey } = await registerAndLogin(app);
+    const mailboxId = await defaultMailboxId(apiKey);
+    const options = await app.inject({
+      method: "GET",
+      url: "/api/v5/alias/options",
+      headers: auth(apiKey),
+    });
+    const suffix = options.json<{ suffixes: { signed_suffix: string }[] }>().suffixes[0]!;
+
+    const mint = (alias_prefix: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v3/alias/custom/new",
+        headers: auth(apiKey),
+        payload: { alias_prefix, signed_suffix: suffix.signed_suffix, mailbox_ids: [mailboxId] },
+      });
+
+    for (const prefix of ["noreply", "support.us", "billing-2"]) {
+      const res = await mint(prefix);
+      expect(res.statusCode).toBe(400);
+      expect(res.json<{ error: string }>()).toEqual({ error: "Email alias is reserved" });
+    }
+    // Containing a reserved word without leading it stays mintable.
+    expect((await mint("supportive")).statusCode).toBe(201);
+  });
+
   test("409 when the alias already exists (and after deletion: tombstoned)", async () => {
     const { apiKey } = await registerAndLogin(app);
     const created = await createAlias(app, apiKey, { prefix: "dupe" });

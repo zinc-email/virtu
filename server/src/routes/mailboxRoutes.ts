@@ -17,6 +17,7 @@ import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
 import { db } from "../db";
+import { isUniqueViolation } from "../db/pgError";
 import { aliases, aliasMailboxes, deletedAliases, domains, mailboxes, users } from "../db/schema";
 import {
   consumeVerificationCode,
@@ -28,9 +29,17 @@ import { ALIAS_DOMAINS } from "./aliasConfig";
 import { issueVerificationCode, refusal } from "./verificationMail";
 import { transferAliasMailboxJoins } from "./aliasMailboxes";
 import { timestampOf } from "./aliasText";
-import { normalizeEmail } from "./auth";
+import { looksLikeEmail, normalizeEmail } from "./emailText";
 import { HttpError } from "./httpError";
-import { DeletedResponse, ErrorResponse, MailboxDto, OkResponse, UpdatedResponse } from "./schema";
+import {
+  DeletedResponse,
+  ErrorResponse,
+  MailboxDto,
+  mailboxSelect,
+  OkResponse,
+  trimmedString,
+  UpdatedResponse,
+} from "./schema";
 
 const MailboxIdParams = z.object({ mailbox_id: z.coerce.number().int() });
 
@@ -38,14 +47,16 @@ const MailboxesResponse = z
   .object({ mailboxes: z.array(MailboxDto) })
   .meta({ id: "MailboxesResponse" });
 
+// The length cap derives from mailboxes.email — a longer string 400s in Zod
+// instead of surfacing as a Postgres length error (500).
 const CreateMailboxBody = z
-  .object({ email: z.string() })
+  .object({ email: trimmedString(mailboxSelect.shape.email) })
   .meta({ id: "CreateMailboxRequest", example: { email: "second@example.com" } });
 
 const UpdateMailboxBody = z
   .object({
     default: z.boolean().optional(),
-    email: z.string().optional(),
+    email: trimmedString(mailboxSelect.shape.email).optional(),
     cancel_email_change: z.boolean().optional(),
     // Virtu extension: designate (true) or clear (false) this mailbox as the
     // account's trash inbox — mail for disabled aliases lands there.
@@ -60,10 +71,6 @@ const DeleteMailboxBody = z
 const VerifyMailboxBody = z
   .object({ code: z.string() })
   .meta({ id: "VerifyMailboxRequest", example: { code: "662302" } });
-
-function looksLikeEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
 
 export async function withMailboxRoutes(authed: FastifyInstance) {
   const a = authed.withTypeProvider<FastifyZodOpenApiTypeProvider>();
@@ -169,12 +176,7 @@ export async function withMailboxRoutes(authed: FastifyInstance) {
           .returning();
         mb = inserted[0];
       } catch (err) {
-        const message = err instanceof Error ? err.message : "";
-        const code =
-          typeof err === "object" && err !== null && "code" in err ? err.code : undefined;
-        if (code === "23505" || message.includes("duplicate key")) {
-          throw new HttpError(400, "Email already used");
-        }
+        if (isUniqueViolation(err)) throw new HttpError(400, "Email already used");
         throw err;
       }
       if (!mb) throw new Error("mailbox insert returned no row");

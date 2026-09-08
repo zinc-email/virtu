@@ -6,8 +6,9 @@
  */
 
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { generateApiKey, hashApiKey } from "../src/auth/apiKey.ts";
+import { splitSmtpPassword } from "../src/auth/smtpPassword.ts";
 import { config } from "../src/config.ts";
 import { db } from "../src/db/index.ts";
 import {
@@ -29,8 +30,9 @@ import { publishTxt } from "./nsupdate.ts";
 
 /** Wes's submission password (constant so reruns against dirty state work).
  * Accounts have no password: this is the per-device SMTP credential
- * ensureUser mints (name {@link STORY_DEVICE}). */
-export const WES_PASSWORD = "correct-horse-battery-staple";
+ * ensureUser mints (name {@link STORY_DEVICE}). First group = the selector
+ * (max 5 chars, auth/smtpPassword.ts), like every device password. */
+export const WES_PASSWORD = "wes55-horse-battery-staple";
 
 /** Device name of the SMTP credential every ensureUser fixture carries. */
 export const STORY_DEVICE = "story-fixture";
@@ -139,21 +141,39 @@ export async function ensureUser(email: string, password: string): Promise<UserF
   throw new Error(`ensureUser lost every race for ${normalized}`);
 }
 
-/** Find-or-create the {@link STORY_DEVICE} SMTP credential for a user.
- * Reruns and parallel racers hash the same constant password, so a
- * duplicate row is harmless — both authenticate. */
+/** Find-or-create the {@link STORY_DEVICE} SMTP credential for a user,
+ * stored the way the real creation route stores it: plaintext selector
+ * (the password's first group), argon2id hash of the rest. Reruns and
+ * parallel racers derive the same row from the same constant password, so
+ * the loser of an insert race just no-ops on the unique selector. */
 async function ensureSmtpCredential(userId: number, password: string): Promise<void> {
-  const existing = (
-    await db
-      .select({ id: smtpCredentials.id })
-      .from(smtpCredentials)
-      .where(and(eq(smtpCredentials.userId, userId), eq(smtpCredentials.name, STORY_DEVICE)))
-      .limit(1)
-  )[0];
-  if (existing !== undefined) return;
+  const split = splitSmtpPassword(password);
+  if (split === null || split.selector.length > 5) {
+    throw new Error(`fixture password ${password} is not selector-shaped (5 chars, dash, rest)`);
+  }
+  const rows = await db
+    .select({ id: smtpCredentials.id, selector: smtpCredentials.selector })
+    .from(smtpCredentials)
+    .where(and(eq(smtpCredentials.userId, userId), eq(smtpCredentials.name, STORY_DEVICE)));
+  if (rows.some((r) => r.selector === split.selector)) return;
 
-  const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
-  await db.insert(smtpCredentials).values({ userId, name: STORY_DEVICE, passwordHash });
+  // Stale rows (an older constant password) — duplicates included, which the
+  // pre-selector fixture tolerated — are cleared and re-minted rather than
+  // healed in place: an UPDATE could collide with a sibling already carrying
+  // this selector on the (user_id, selector) unique index.
+  if (rows.length > 0) {
+    await db.delete(smtpCredentials).where(
+      inArray(
+        smtpCredentials.id,
+        rows.map((r) => r.id),
+      ),
+    );
+  }
+  const passwordHash = await Bun.password.hash(split.secret, { algorithm: "argon2id" });
+  await db
+    .insert(smtpCredentials)
+    .values({ userId, name: STORY_DEVICE, selector: split.selector, passwordHash })
+    .onConflictDoNothing();
 }
 
 /** Mint an API key for a fixture user directly in the DB — story tests

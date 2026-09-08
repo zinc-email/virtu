@@ -255,7 +255,8 @@ function CredentialsSection() {
         <Dialog opened onClose={() => setCreated(null)} title="Save this password now.">
           <p className={css({ marginBottom: "1.5rem", color: "textDim", fontSize: "0.9rem" })}>
             This is the only time it will be shown. Enter it as the SMTP password for{" "}
-            <strong>{created.name}</strong>.
+            <strong>{created.name}</strong> — paste the whole thing, dashes included; every block is
+            part of the password.
           </p>
           <div
             className={css({

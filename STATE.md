@@ -280,7 +280,9 @@ for the next controller).
 
 Red-team pass a week before zinc goes live; findings and the fix plan in
 `plans/2026-09-05-security-review.md`. The two P0s landed 2026-09-05, the
-three P1s 2026-09-06; P2 is open.
+three P1s 2026-09-06, and the P2 batch (plus the Caddyfile webhook deploy
+bug found on the way) 2026-09-06; only the noted-not-chased timing side
+channel remains, by design.
 
 1. **SMTP smuggling closed** (was High, CVE-2023-51764 class).
    `smtp/wire.ts:DataDecoder` ended DATA on a lone "." line after ANY line
@@ -357,6 +359,76 @@ three P1s 2026-09-06; P2 is open.
    without `SMTP_TLS_*` or with that flag. Pinned in
    `submission.unit.test.ts` (socket level: no AUTH advertised, `538` on
    attempt) and `config.unit.test.ts`.
+6. **argon2 amplification in SMTP AUTH closed** (P2, 2026-09-06, design
+   decided in the plan doc; hardened same day by a fresh-eyes review). The
+   device password's first group is now a plaintext **selector**
+   (`smtp_credentials.selector`, migration 0002, unique per user):
+   `verifyCredentials` splits it off (`auth/smtpPassword.ts`), does one
+   indexed lookup and ONE argon2id verify — never a loop over the user's
+   rows — and any miss (unknown user, unsplittable paste, no selector
+   match) burns a dummy verify so misses cost like wrong secrets. The
+   password splits BEFORE any DB work; the dummy hash is promise-memoized
+   (concurrent cold starts share one computation), warmed at submission
+   startup, never caches a rejection (a failed computation retries next
+   attempt, and the miss still refuses — degraded timing beats a downed
+   mail path). Creation (`routes/smtpCredentialRoutes.ts`) stores the
+   selector and hashes only the remaining groups, retrying the negligible
+   per-user collision via `db/pgError.ts isUniqueViolation` (the driver
+   wraps SQLSTATE in `err.cause`). `selector` is **NOT NULL** (decision
+   2026-09-07: clear to blow out all old device passwords) — migration 0002
+   deletes every pre-selector row before adding the column, so the
+   dead-credential class (looks healthy in the dashboard, counts against
+   MAX_SMTP_CREDENTIALS, can never authenticate) is unrepresentable at the
+   schema level; there is deliberately NO fallback verify loop. On
+   top, a process-wide **bulkhead** (`pipeline/verifyBulkhead.ts`, 4 slots)
+   meters ONLY the argon2id call — DB I/O never holds a slot, so DB latency
+   can't starve real clients — while `onAuth` sheds a pinned pool before
+   any per-attempt work with `454 4.7.0` (`virtu_submission_auth_total
+   result="saturated"`; deliberately NO `smtp_rejections` row on that path,
+   which is globally triggerable and unpaced — a per-attempt INSERT would
+   be its own amplification). `verifyCredentials` now returns
+   `"ok" | "invalid" | "saturated"`. Story fixtures mint selector-shaped
+   credentials (stale/duplicate rows are cleared and re-minted, never
+   healed in place — an UPDATE could collide on the unique index). Client
+   `Smtp.tsx` copy says to paste the whole password. Pinned in
+   `smtpPassword.unit.test.ts`, `verifyBulkhead.unit.test.ts`,
+   `submission.unit.test.ts` (454 at the socket),
+   `smtpCredentials.int.test.ts` (partial pastes),
+   `outbound.story.test.ts` (real AUTH end-to-end).
+7. **P2 hardening sweep** (2026-09-06). Look-alike service aliases:
+   `routes/aliasText.ts isReservedAliasPrefix` refuses shared-domain
+   prefixes that LEAD with a reserved word under a fuzzy walk — separators
+   skipped (`no.reply`), look-alike digits read as letters (`supp0rt`,
+   `b1lling`), trailing digit runs as a boundary (`admin2`,
+   `billing2024`) — while `supportive`/`account4u` stay mintable;
+   `aliasNew.ts` folds `config.operatorLocalparts` into the word list so
+   the two reserved sets can't drift (custom domains exempt — the user's
+   own namespace). **Best-effort by design** (decision 2026-09-07,
+   documented in `aliasText.ts`): the guard stops at the mechanical
+   variants; creative misspellings are accepted residual risk owned by
+   abuse handling, not an ever-growing minting rule. Pinned in
+   `aliasText.unit.test.ts` + `aliases.int.test.ts`. Length caps: `device`
+   and `email` on `/auth/login`+`/auth/verify` and mailbox `email` go
+   through `routes/schema.ts trimmedString` — trim first (what users
+   expect from pasted input; the RFC-purist untrimmed reading lost,
+   decision 2026-09-07), then the cap read off the drizzle-zod select
+   schemas (`apiKeySelect`/`userSelect`/`mailboxSelect`), per that file's
+   derive-don't-retype mandate — Zod 400s instead of Postgres varchar
+   500s, and a column resize can't reopen the gap (spec + SDK
+   regenerated). DRY sweep on the way (the review noticed
+   security-sensitive helpers being copy-pasted): SQLSTATE-23505
+   classification now has ONE definition (`db/pgError.ts`, cause-chain
+   aware — the four local copies in auth/aliasNew/mailboxRoutes/
+   smtpCredentialRoutes checked only the top level, a latent 500 on
+   wrapped errors), and `normalizeEmail`/`looksLikeEmail` moved to
+   `routes/emailText.ts` (three identical private copies). The four
+   `timingSafeEqual` sites were audited and left alone — each
+   length-guards correctly and verifies a different secret. The timing
+   side channel on address existence stays noted-not-chased. Deploy bug:
+   both Caddyfiles
+   now proxy `handle /webhooks/*` to the api, so Stripe's POSTs to
+   `/webhooks/stripe` (outside `/api` by design) no longer 404 on the www
+   file server — still verify on lmnop before enabling billing on zinc.
 
 ## Not started
 

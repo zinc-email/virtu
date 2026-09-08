@@ -19,10 +19,12 @@
         "type": "object",
         "properties": {
           "email": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 256
           },
           "device": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 128
           }
         },
         "required": [
@@ -37,13 +39,16 @@
         "type": "object",
         "properties": {
           "email": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 256
           },
           "code": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 16
           },
           "device": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 128
           },
           "invite": {
             "type": "string"
@@ -242,7 +247,8 @@
         "type": "object",
         "properties": {
           "email": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 256
           }
         },
         "required": [
@@ -273,7 +279,8 @@
             "type": "boolean"
           },
           "email": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 256
           },
           "cancel_email_change": {
             "type": "boolean"

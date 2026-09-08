@@ -29,6 +29,13 @@
 		reverse_proxy api:3000
 	}
 
+	# Provider callbacks live OUTSIDE /api on purpose (the Stripe webhook at
+	# /webhooks/stripe — routes/billing.ts, signature-verified over the raw
+	# body). Without this block those POSTs land on the www file server as 404.
+	handle /webhooks/* {
+		reverse_proxy api:3000
+	}
+
 	# SPA under /app. Strip /app so the on-disk paths (assets live at
 	# client/dist/static/*, referenced as /app/static/* via assetPrefix)
 	# resolve, and fall back to index.html for client-side deep links.

@@ -7,13 +7,14 @@
 //   POST   /smtp/credentials                 create; plaintext returned ONCE
 //   DELETE /smtp/credentials/:credential_id  revoke immediately
 
-import { randomBytes } from "node:crypto";
 import { and, count, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { FastifyZodOpenApiTypeProvider } from "fastify-zod-openapi";
 import { z } from "zod";
+import { generateSmtpPassword, splitSmtpPassword } from "../auth/smtpPassword";
 import { config } from "../config";
 import { db } from "../db";
+import { isUniqueViolation } from "../db/pgError";
 import { type SmtpCredential, smtpCredentials } from "../db/schema";
 import { timestampOf } from "./aliasText";
 import { HttpError } from "./httpError";
@@ -27,21 +28,6 @@ import {
 
 /** Keep runaway scripted creation in check (well past any real device count). */
 export const MAX_SMTP_CREDENTIALS = 20;
-
-const CREDENTIAL_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"; // no 0/o/1/l
-
-/**
- * Generate a device password: four dash-separated groups of five characters
- * from an unambiguous lowercase alphabet (~100 bits) — app-password style,
- * easy to type on a phone once, never shown again.
- */
-export function generateSmtpPassword(): string {
-  const bytes = randomBytes(20);
-  const chars = [...bytes].map((b) => CREDENTIAL_ALPHABET[b % CREDENTIAL_ALPHABET.length]);
-  const groups = [];
-  for (let i = 0; i < 20; i += 5) groups.push(chars.slice(i, i + 5).join(""));
-  return groups.join("-");
-}
 
 const CredentialIdParams = z.object({ credential_id: z.coerce.number().int() });
 
@@ -137,14 +123,33 @@ export async function withSmtpCredentialRoutes(authed: FastifyInstance) {
         throw new HttpError(400, "Too many SMTP credentials");
       }
 
-      const password = generateSmtpPassword();
-      const passwordHash = await Bun.password.hash(password, { algorithm: "argon2id" });
-      const inserted = await db
-        .insert(smtpCredentials)
-        .values({ userId: req.user.id, name: req.body.name, passwordHash })
-        .returning();
-      const row = inserted[0];
-      if (row === undefined) throw new Error("smtp_credentials insert returned no row");
+      // Selector scheme (auth/smtpPassword.ts): the first group is stored in
+      // the clear for AUTH's indexed lookup; only the remaining groups go
+      // into argon2id. A (user_id, selector) collision is a ~1-in-33M event
+      // per existing row — retry with a fresh password rather than surface it.
+      let row: SmtpCredential | undefined;
+      let password = "";
+      for (let attempt = 0; attempt < 3 && row === undefined; attempt++) {
+        password = generateSmtpPassword();
+        const split = splitSmtpPassword(password);
+        if (split === null) throw new Error("generated password did not split");
+        const passwordHash = await Bun.password.hash(split.secret, { algorithm: "argon2id" });
+        try {
+          const inserted = await db
+            .insert(smtpCredentials)
+            .values({
+              userId: req.user.id,
+              name: req.body.name,
+              selector: split.selector,
+              passwordHash,
+            })
+            .returning();
+          row = inserted[0];
+        } catch (err) {
+          if (!isUniqueViolation(err)) throw err;
+        }
+      }
+      if (row === undefined) throw new Error("smtp_credentials selector retries exhausted");
 
       reply.status(201);
       return { ...credentialToDict(row), password };

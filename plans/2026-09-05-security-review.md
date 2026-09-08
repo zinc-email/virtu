@@ -1,7 +1,8 @@
 # Pre-launch security review
 
-Companion to `PLAN.md` and `ABUSE.md`. Status: **P0 fixed 2026-09-05, P1
-fixed 2026-09-06 (see STATE.md "Pre-launch review batch"); P2 open.**
+Companion to `PLAN.md` and `ABUSE.md`. Status: **P0 fixed 2026-09-05, P1 and
+P2 fixed 2026-09-06 (see STATE.md "Pre-launch review batch"); only the
+noted-not-chased timing side channel remains, by design.**
 Written 2026-09-05, one week before zinc goes live, from a
 red-team pass over the whole tree by an agent with the same view of the code
 any attacker with the public repo has. Threat model: the legacy host was
@@ -170,13 +171,20 @@ regardless of TLS config so a plaintext listener simply has no AUTH.
 
 ## P2 — hardening
 
-- **Look-alike service aliases.** Only `OPERATOR_LOCALPARTS` are reserved at
+- **Look-alike service aliases — FIXED 2026-09-06.** Landed as
+  `aliasText.ts isReservedAliasPrefix`: a fuzzy leads-with match (separators
+  skipped, look-alike digits read as letters, trailing digit runs count as a
+  boundary) so `no.reply`, `supp0rt` and `admin2` refuse while `supportive`
+  stays mintable, with `config.operatorLocalparts` folded in; enforced in
+  `aliasNew.ts` for shared domains only. Originally: only `OPERATOR_LOCALPARTS` are reserved at
   mint time (`aliasNew.ts`). Bare `noreply@` can't be minted on the service
   domain (custom suffixes must start with a dot) but `noreply.xxxxx@` with a
   chosen display name goes out DKIM-signed by the service key. Add a reserved
   prefix list (`noreply`, `no-reply`, `support`, `admin`, `billing`, `help`,
   `team`, `zinc`, …) for service-domain aliases.
-- **argon2 amplification in SMTP AUTH.** `verifyCredentials` tries up to
+- **argon2 amplification in SMTP AUTH — FIXED 2026-09-06, as planned below**
+  (selector in `auth/smtpPassword.ts` + migration 0002; bulkhead in
+  `pipeline/verifyBulkhead.ts`, limit 4, `454 4.7.0` when saturated). `verifyCredentials` tries up to
   `MAX_SMTP_CREDENTIALS` (20) hashes per attempt; the throttle is keyed
   (ip, username), so a distributed attacker gets 20× CPU per try. (The
   username is the account email — `users.email`, one per account — not a
@@ -206,19 +214,22 @@ regardless of TLS config so a plaintext listener simply has no AUTH.
   Ships as its own change (schema + migration, `verifyCredentials`, the
   credential-creation route, and the client's one-time password display
   and `Smtp.tsx` copy — "paste the whole password").
-- **Length caps** on `device` (login/api_key) and mailbox/credential `name`
-  fields — unbounded strings straight into the DB.
+- **Length caps — FIXED 2026-09-06** on `device` (128) and `email` (256) in
+  `/auth/login`+`/auth/verify` and on mailbox `email` (256); credential
+  `name` was already capped at 128. A 400 from Zod instead of a 500 from a
+  Postgres varchar overflow.
 - **Timing side channel on address existence** in `/auth/login` (insert vs
   no insert) and `/auth/verify` (early 400 vs code lookup). Low value to an
   attacker; note it, don't chase it.
 
-## Deploy bug found on the way (not security)
+## Deploy bug found on the way (not security) — FIXED 2026-09-06
 
 The Caddyfile proxies only `/api/*` to the API. The Stripe webhook is mounted
 at `/webhooks/stripe` (outside `/api`, by design), so in the serve stack
-Stripe's POSTs land on the `www` file server as 404. Either add a
-`handle /webhooks/*` proxy block or move the route under `/api/webhooks/`.
-Verify on lmnop before enabling billing on zinc.
+Stripe's POSTs land on the `www` file server as 404. Fixed by adding a
+`handle /webhooks/*` proxy block to BOTH Caddyfiles (deploy + dev, keeping
+the path topology identical). Still: verify on lmnop before enabling billing
+on zinc.
 
 ## What held up
 

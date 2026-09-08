@@ -182,12 +182,28 @@ export const smtpCredentials = pgTable(
       .notNull(),
     // Device name, humanly readable ("Phone", "Laptop").
     name: varchar({ length: 128 }).notNull(),
-    // Bun.password argon2id encoded string (includes salt + params).
+    // The FIRST group of the device password, stored in the clear. AUTH
+    // splits it off and does ONE indexed lookup + ONE argon2id verify,
+    // instead of verifying against every row — the CPU-amplification fix
+    // from the pre-launch security review (P2). NOT NULL because a
+    // selectorless row could never authenticate (there is deliberately no
+    // fallback loop — that loop IS the vulnerability): migration 0002
+    // deletes the pre-selector rows outright (decision 2026-09-07, all old
+    // device passwords cleared) rather than leave dead credentials that
+    // look healthy in the dashboard and count against the cap.
+    selector: varchar({ length: 5 }).notNull(),
+    // Bun.password argon2id encoded string (includes salt + params) of the
+    // REMAINING groups of the password (the secret half).
     passwordHash: text().notNull(),
     lastUsedAt: timestamp({ withTimezone: true, mode: "date" }),
     ...timestamps,
   },
-  (t) => [index("smtp_credentials_user_id_idx").on(t.userId)],
+  (t) => [
+    index("smtp_credentials_user_id_idx").on(t.userId),
+    // AUTH resolves (user, selector) to at most one row; creation retries
+    // on the (negligible) collision.
+    uniqueIndex("smtp_credentials_user_id_selector_uq").on(t.userId, t.selector),
+  ],
 );
 
 // ---------------------------------------------------------------------------

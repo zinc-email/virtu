@@ -19,6 +19,7 @@ import { config } from "../config";
 import { db } from "../db";
 import { type Contact, contacts, emailLogs } from "../db/schema";
 import { parseAddressList } from "../mail";
+import { looksLikeEmail } from "./emailText";
 import { findOrCreateContact } from "../pipeline/contacts";
 import { PAGE_LIMIT } from "./aliasConfig";
 import { formatCreationDate, timestampOf, websiteSendTo } from "./aliasText";
@@ -68,10 +69,6 @@ async function lastReplyAtFor(contactIds: number[]): Promise<Map<number, Date>> 
   const out = new Map<number, Date>();
   for (const r of rows) if (r.at) out.set(r.contactId, r.at);
   return out;
-}
-
-function looksLikeEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 export async function withContactRoutes(authed: FastifyInstance) {

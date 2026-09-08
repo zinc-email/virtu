@@ -15,6 +15,13 @@
       "when": 1788741472938,
       "tag": "0001_sent_alerts_created_at_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788838425111,
+      "tag": "0002_smtp-credentials-selector",
+      "breakpoints": true
     }
   ]
 }

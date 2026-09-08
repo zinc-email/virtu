@@ -6,9 +6,12 @@
  * TLS is configured). Production refuses to start without TLS
  * (config.ts assertProductionSmtpTls).
  *
- * AUTH: email + password against the account password OR any of the user's
- * per-device SMTP credentials (smtp_credentials — app passwords that are
- * created/revoked independently; the matched row gets last_used_at stamped).
+ * AUTH: email + device password (smtp_credentials — app passwords created/
+ * revoked independently; the account has no password). The password's first
+ * group is a plaintext selector resolving to one row — one lookup, one
+ * argon2id verify (auth/smtpPassword.ts) — and a process-wide bulkhead caps
+ * concurrent verifies (pipeline/verifyBulkhead.ts). The matched row gets
+ * last_used_at stamped.
  *
  * Two sending modes, chosen by MAIL FROM (the outbound-alias metadata):
  *
@@ -44,10 +47,12 @@ import {
   deletedAliases,
   domains,
   mailboxes,
+  type SmtpCredential,
   smtpCredentials,
   type User,
   users,
 } from "./db/schema.ts";
+import { splitSmtpPassword, verifyAgainstDummy, warmDummyHash } from "./auth/smtpPassword.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { buildVerp, parseMessage, rewriteReply, serializeMessage } from "./mail/index.ts";
 import { signOutbound } from "./mailauth/index.ts";
@@ -74,6 +79,7 @@ import {
   type SendQuotaLimits,
 } from "./pipeline/sendQuota.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
+import { type Bulkhead, createBulkhead } from "./pipeline/verifyBulkhead.ts";
 import { enqueue } from "./queue/index.ts";
 import {
   decideQueueQuota,
@@ -102,6 +108,8 @@ export interface SubmissionOptions {
   tls?: SmtpTlsConfig;
   /** Failed-AUTH throttle override for tests; default {@link createAuthThrottle}. */
   authThrottle?: AuthThrottle;
+  /** Concurrent-verify bulkhead override for tests; default {@link createBulkhead}. */
+  verifyBulkhead?: Bulkhead;
   /** Daily send quota plan defaults; omitted = quota not enforced (tests). */
   sendQuota?: SendQuotaLimits;
   /** Per-user pending-queue cap (queue/quota.ts); omitted = not enforced (tests). */
@@ -125,36 +133,76 @@ function defaultSubmissionLogger(): Logger {
   return submissionLogger;
 }
 
+/** One SMTP AUTH attempt's verdict from {@link verifyCredentials}.
+ * "saturated" = the verify bulkhead had no slot, so no credential was
+ * examined — answer 454, not 535. */
+export type SmtpAuthOutcome = "ok" | "invalid" | "saturated";
+
 /**
- * Verify (once) that credentials are usable for message submission: any of
+ * Verify (once) that credentials are usable for message submission: one of
  * the user's per-device SMTP credentials — accounts have no password, so
- * device credentials are the only thing SMTP AUTH accepts. A match stamps
- * the credential's last_used_at (the dashboard shows it).
+ * device credentials are the only thing SMTP AUTH accepts.
+ *
+ * Selector scheme (auth/smtpPassword.ts, security review P2): the password's
+ * first group resolves (user, selector) to at most ONE row — one indexed
+ * lookup, one argon2id verify — never a loop over every credential. Any miss
+ * (unknown user, unsplittable password, no selector match) burns the same
+ * dummy verify before refusing, so misses cost
+ * like wrong secrets. (The argon2 work dominates; the extra sub-ms
+ * credential lookup on known users is the residual timing channel the
+ * review notes and deliberately doesn't chase.) A match stamps the
+ * credential's last_used_at (the dashboard shows it).
+ *
+ * When `opts.verifyBulkhead` is set it meters ONLY the argon2id call — the
+ * DB lookups around it are cheap I/O that must not consume verify slots, or
+ * DB latency alone would refuse legitimate clients with no hashing in
+ * flight.
  */
 export async function verifyCredentials(
-  opts: Pick<SubmissionOptions, "db">,
+  opts: Pick<SubmissionOptions, "db" | "verifyBulkhead">,
   username: string,
   password: string,
-): Promise<boolean> {
+): Promise<SmtpAuthOutcome> {
+  // Split before any DB work: an unsplittable password can never match, so
+  // it goes straight to the dummy verify without spending a users lookup.
+  const split = splitSmtpPassword(password);
   const email = username.trim().toLowerCase();
-  const rows = await opts.db.select().from(users).where(eq(users.email, email)).limit(1);
-  const user = rows[0];
-  if (user === undefined || user.disabled) return false;
 
-  const credentials = await opts.db
-    .select()
-    .from(smtpCredentials)
-    .where(eq(smtpCredentials.userId, user.id));
-  for (const credential of credentials) {
-    if (await Bun.password.verify(password, credential.passwordHash)) {
-      await opts.db
-        .update(smtpCredentials)
-        .set({ lastUsedAt: new Date() })
-        .where(eq(smtpCredentials.id, credential.id));
-      return true;
+  let credential: SmtpCredential | undefined;
+  if (split !== null) {
+    const rows = await opts.db.select().from(users).where(eq(users.email, email)).limit(1);
+    const user = rows[0];
+    if (user !== undefined && !user.disabled) {
+      credential = (
+        await opts.db
+          .select()
+          .from(smtpCredentials)
+          .where(
+            and(eq(smtpCredentials.userId, user.id), eq(smtpCredentials.selector, split.selector)),
+          )
+          .limit(1)
+      )[0];
     }
   }
-  return false;
+
+  const bulkhead = opts.verifyBulkhead;
+  if (bulkhead !== undefined && !bulkhead.tryAcquire()) return "saturated";
+  let verified: boolean;
+  try {
+    verified =
+      credential !== undefined && split !== null
+        ? await Bun.password.verify(split.secret, credential.passwordHash)
+        : await verifyAgainstDummy(split?.secret ?? password);
+  } finally {
+    bulkhead?.release();
+  }
+  if (!verified || credential === undefined) return "invalid";
+
+  await opts.db
+    .update(smtpCredentials)
+    .set({ lastUsedAt: new Date() })
+    .where(eq(smtpCredentials.id, credential.id));
+  return "ok";
 }
 
 const AUTH_REQUIRED = rejectWith(530, "5.7.0", "Authentication required");
@@ -606,9 +654,12 @@ async function handleSubmissionData(
 function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
   // One throttle shared by both listeners (587 + 465): repeated bad
   // credentials from one (address, username) get a 454 BEFORE any argon2id
-  // work — the amplification path a wrong password otherwise opens
-  // (account hash + every device credential, verified serially).
+  // work. The bulkhead is the other half (security review P2): the throttle
+  // bounds one (address, username) pair, the bulkhead bounds the TOTAL
+  // concurrent argon2id work a distributed attacker can pin the thread pool
+  // with — one cheap attempt per source at a time.
   const throttle = opts.authThrottle ?? createAuthThrottle();
+  const bulkhead = opts.verifyBulkhead ?? createBulkhead();
   return {
     hostname: opts.mailHostname,
     banner: "virtu submission",
@@ -629,43 +680,62 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
       return { accept: true };
     },
     onAuth: async (event) => {
+      // One shape for every auth refusal: count it and (unless told not to)
+      // record it for forensics before answering.
+      const refuseAuth = async (
+        result: ReturnType<typeof rejectWith>,
+        metric: "throttled" | "saturated" | "bad_credentials",
+        record = true,
+      ) => {
+        submissionAuthTotal.inc({ result: metric });
+        if (record) {
+          await recordSmtpRejection(
+            opts.db,
+            {
+              entrypoint: "submission",
+              phase: "auth",
+              remoteAddress: event.session.remoteAddress,
+              heloName: event.session.heloName,
+              reject: result.reject,
+            },
+            opts.logger ?? defaultSubmissionLogger(),
+          );
+        }
+        return result;
+      };
+
+      // No forensics row on the saturated paths: they are globally
+      // triggerable at raw connection rate with nothing (argon2, a throttle
+      // key) pacing them, so a per-attempt INSERT would turn the bounded-CPU
+      // defense into unbounded DB growth. The counter metric still tracks
+      // them; 454 = transient, so a real client retries.
+      const SATURATED = () => rejectWith(454, "4.7.0", "Server busy; try again later");
+
       const key = authThrottleKey(event.session.remoteAddress, event.username);
       if (throttle.isLimited(key)) {
-        submissionAuthTotal.inc({ result: "throttled" });
-        const result = rejectWith(
-          454,
-          "4.7.0",
-          "Too many failed authentication attempts; try again later",
+        return refuseAuth(
+          rejectWith(454, "4.7.0", "Too many failed authentication attempts; try again later"),
+          "throttled",
         );
-        await recordSmtpRejection(
-          opts.db,
-          {
-            entrypoint: "submission",
-            phase: "auth",
-            remoteAddress: event.session.remoteAddress,
-            heloName: event.session.heloName,
-            reject: result.reject,
-          },
-          opts.logger ?? defaultSubmissionLogger(),
-        );
-        return result;
       }
-      const ok = await verifyCredentials(opts, event.username, event.password);
-      if (!ok) {
+      // Shed a pinned verify pool before spending ANY work on the attempt —
+      // the flood case. The slot itself is claimed inside verifyCredentials
+      // around just the argon2 call, so this peek admitting an attempt that
+      // later loses the slot race is fine: it gets the same 454 there.
+      if (bulkhead.saturated()) {
+        return refuseAuth(SATURATED(), "saturated", false);
+      }
+      const outcome = await verifyCredentials(
+        { db: opts.db, verifyBulkhead: bulkhead },
+        event.username,
+        event.password,
+      );
+      if (outcome === "saturated") {
+        return refuseAuth(SATURATED(), "saturated", false);
+      }
+      if (outcome === "invalid") {
         throttle.recordFailure(key);
-        submissionAuthTotal.inc({ result: "bad_credentials" });
-        await recordSmtpRejection(
-          opts.db,
-          {
-            entrypoint: "submission",
-            phase: "auth",
-            remoteAddress: event.session.remoteAddress,
-            heloName: event.session.heloName,
-            reject: BAD_CREDENTIALS.reject,
-          },
-          opts.logger ?? defaultSubmissionLogger(),
-        );
-        return BAD_CREDENTIALS;
+        return refuseAuth(BAD_CREDENTIALS, "bad_credentials");
       }
       throttle.clear(key);
       submissionAuthTotal.inc({ result: "ok" });
@@ -763,6 +833,9 @@ export interface SubmissionServers {
 
 /** Build both servers from one options object (not yet listening). */
 export function createSubmissionServers(opts: SubmissionOptions): SubmissionServers {
+  // Pre-compute the dummy hash so the first AUTH miss costs one verify like
+  // every later one, not hash + verify.
+  void warmDummyHash();
   const base = submissionServerOptions(opts);
   return {
     starttls: createSmtpServer(base),

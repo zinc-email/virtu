@@ -1,8 +1,10 @@
 /**
- * Submission listener AUTH posture (pre-launch review P1 #5): without TLS
- * material, AUTH is neither advertised nor accepted unless the dev-only
- * plaintext flag is set. Pure socket-level — the onAuth hook is never
- * reached, so the db handle is never touched.
+ * Submission listener AUTH posture (pre-launch review P1 #5 + P2 bulkhead):
+ * without TLS material, AUTH is neither advertised nor accepted unless the
+ * dev-only plaintext flag is set; a saturated verify bulkhead refuses before
+ * any credential work. Socket-level — no credential rows are ever consulted
+ * (the bulkhead test's rejection bookkeeping tolerates a dead db: the
+ * recorder swallows its own failures by design).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -52,5 +54,17 @@ describe("submission without TLS", () => {
   test("advertises AUTH only under the explicit dev flag", async () => {
     const client = await ehlo({ allowPlaintextAuth: true });
     expect(client.all).toContain("AUTH PLAIN LOGIN");
+  });
+});
+
+describe("verify bulkhead", () => {
+  test("a saturated verify pool answers 454 before any credential work", async () => {
+    const client = await ehlo({
+      allowPlaintextAuth: true,
+      verifyBulkhead: { tryAcquire: () => false, release: () => {}, saturated: () => true },
+    });
+    client.write(`AUTH PLAIN ${Buffer.from("\0wes\0pw").toString("base64")}\r\n`);
+    const reply = await client.waitFor(/^454 /);
+    expect(reply).toContain("4.7.0");
   });
 });

@@ -29,15 +29,20 @@ import {
   LOGIN_CODE_ALERT_TYPE,
   loginCodeEmail,
 } from "../pipeline/transactional";
+import { isUniqueViolation } from "../db/pgError";
+import { looksLikeEmail, normalizeEmail } from "./emailText";
 import { HttpError } from "./httpError";
-import { ErrorResponse } from "./schema";
+import { apiKeySelect, ErrorResponse, trimmedString, userSelect } from "./schema";
 import { issueVerificationCode, refusal } from "./verificationMail";
 
 const LoginPost = z
   .object({
-    email: z.string(),
+    // Length caps derive from the columns these land in (users.email,
+    // api_keys.name) so Zod refuses with a 400 exactly where Postgres
+    // would error, and a column resize can't reopen the gap.
+    email: trimmedString(userSelect.shape.email),
     // Device name; becomes the API key's name so the user can manage keys.
-    device: z.string().optional(),
+    device: trimmedString(apiKeySelect.shape.name.unwrap()).optional(),
   })
   .meta({
     id: "AuthLoginRequest",
@@ -48,9 +53,9 @@ const MsgResponse = z.object({ msg: z.string() }).meta({ id: "MsgResponse" });
 
 const VerifyPost = z
   .object({
-    email: z.string(),
-    code: z.string(),
-    device: z.string().optional(),
+    email: trimmedString(userSelect.shape.email),
+    code: z.string().max(16),
+    device: trimmedString(apiKeySelect.shape.name.unwrap()).optional(),
     // Consumed only when the deployment is invite-only AND this verify would
     // graduate a new account; ignored otherwise.
     invite: z.string().optional(),
@@ -70,29 +75,12 @@ const LoginResponse = z
   })
   .meta({ id: "AuthLoginResponse" });
 
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
-
-// Deliberately loose — real deliverability checks (MX, disposable-domain
-// blocklist; legacy virtu had both) are a wave-2 concern.
-function looksLikeEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
 // The trial starts at graduation (first verified login), not at the
 // provisional insert: 7 days + 1 hour, SimpleLogin's trial_end default.
 const TRIAL_MS = (7 * 24 + 1) * 60 * 60 * 1000;
 
 // One response for every successful /auth/login, new user or old.
 const CODE_SENT_MSG = "Login code sent";
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const code = "code" in err ? err.code : undefined;
-  const message = err instanceof Error ? err.message : "";
-  return code === "23505" || message.includes("duplicate key");
-}
 
 /**
  * Find-or-create the user row for a submitted email (provisional on miss).

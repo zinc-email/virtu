@@ -27,6 +27,12 @@
 		reverse_proxy api:3000
 	}
 
+	# Provider callbacks (the Stripe webhook) live outside /api — same split
+	# as the deploy Caddyfile, so `stripe listen` against dev works too.
+	handle /webhooks/* {
+		reverse_proxy api:3000
+	}
+
 	handle /app/* {
 		reverse_proxy client:9000
 	}

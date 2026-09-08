@@ -70,9 +70,9 @@ describe("SMTP AUTH against credentials (verifyCredentials)", () => {
 
     // Both device passwords authenticate; nothing else does — the account
     // itself has no password.
-    expect(await verifyCredentials({ db }, email, phone.password)).toBe(true);
-    expect(await verifyCredentials({ db }, email, laptop.password)).toBe(true);
-    expect(await verifyCredentials({ db }, email, "wrong-password")).toBe(false);
+    expect(await verifyCredentials({ db }, email, phone.password)).toBe("ok");
+    expect(await verifyCredentials({ db }, email, laptop.password)).toBe("ok");
+    expect(await verifyCredentials({ db }, email, "wrong-password")).toBe("invalid");
 
     // A successful device AUTH stamps last_used_timestamp.
     const list = await app.inject({
@@ -92,9 +92,29 @@ describe("SMTP AUTH against credentials (verifyCredentials)", () => {
       headers: auth(apiKey),
     });
     expect(del.statusCode).toBe(200);
-    expect(await verifyCredentials({ db }, email, phone.password)).toBe(false);
-    expect(await verifyCredentials({ db }, email, laptop.password)).toBe(true);
+    expect(await verifyCredentials({ db }, email, phone.password)).toBe("invalid");
+    expect(await verifyCredentials({ db }, email, laptop.password)).toBe("ok");
   });
+
+  test("partial pastes fail: the first group is part of the password", async () => {
+    const { email, apiKey } = await registerAndLogin(app);
+    const cred = await createCredential(apiKey, "Phone");
+
+    // Missing the selector group, selector alone, or an undashed mash all
+    // refuse — only the whole pasted password authenticates.
+    const secretOnly = cred.password.slice(cred.password.indexOf("-") + 1);
+    expect(await verifyCredentials({ db }, email, secretOnly)).toBe("invalid");
+    expect(await verifyCredentials({ db }, email, cred.password.slice(0, 5))).toBe("invalid");
+    expect(await verifyCredentials({ db }, email, cred.password.replaceAll("-", ""))).toBe(
+      "invalid",
+    );
+    expect(await verifyCredentials({ db }, email, cred.password)).toBe("ok");
+  });
+
+  // No "selectorless row" test: smtp_credentials.selector is NOT NULL since
+  // migration 0002 (which also deletes every pre-selector row), so the
+  // dead-credential class is unrepresentable at the schema level — a
+  // stronger pin than any test could be.
 
   test("credentials never cross accounts", async () => {
     const alice = await registerAndLogin(app);
@@ -102,7 +122,7 @@ describe("SMTP AUTH against credentials (verifyCredentials)", () => {
     const cred = await createCredential(alice.apiKey, "Phone");
 
     // Bob can't use Alice's device password…
-    expect(await verifyCredentials({ db }, bob.email, cred.password)).toBe(false);
+    expect(await verifyCredentials({ db }, bob.email, cred.password)).toBe("invalid");
 
     // …and can't revoke it either (403, not found-for-you).
     const del = await app.inject({

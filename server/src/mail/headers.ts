@@ -131,6 +131,16 @@ export class HeaderBlock {
     );
   }
 
+  /**
+   * Keep only the fields `predicate` accepts, in order, in one pass. The
+   * way to drop many fields: a `remove` per name walks the array each time.
+   */
+  retain(predicate: (field: HeaderField) => boolean): void {
+    const kept = this.fields.filter(predicate);
+    this.fields.length = 0;
+    this.fields.push(...kept);
+  }
+
   /** First field with the given name (case-insensitive), or undefined. */
   getField(name: string): HeaderField | undefined {
     return this.fields.find((f) => nameEquals(f.name, name));
@@ -242,6 +252,14 @@ export interface ParsedMessage {
  * with no colon and no leading WSP is kept as an opaque field (name = whole
  * line, empty value) so it still round-trips.
  */
+/**
+ * More header fields than any real message carries. The mx and submission
+ * refuse a message past this (`5.6.0`) before any per-field work — a
+ * whitelist, a contact mint or a signature check per field is the sender's
+ * lever otherwise. Parsing itself is linear and unbounded.
+ */
+export const MAX_HEADER_FIELDS = 2000;
+
 export function parseMessage(raw: Uint8Array): ParsedMessage {
   const fields: HeaderField[] = [];
   let separator: Uint8Array = new Uint8Array(0);

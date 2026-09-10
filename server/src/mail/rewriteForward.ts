@@ -98,15 +98,25 @@ export function headerNameInList(name: string, list: readonly string[]): boolean
  */
 export function applyHeaderWhitelist(headers: HeaderBlock, whitelist: readonly string[]): string[] {
   const dropped: string[] = [];
-  for (let i = headers.fields.length - 1; i >= 0; i--) {
-    const field = headers.fields[i]!;
-    if (!headerNameInList(field.name, whitelist)) {
-      dropped.unshift(field.name);
-      headers.fields.splice(i, 1);
-    }
-  }
+  // One pass into a new array: a splice per dropped field was quadratic in
+  // the header count, and the header count is the sender's to choose.
+  headers.retain((field) => {
+    if (headerNameInList(field.name, whitelist)) return true;
+    dropped.push(field.name);
+    return false;
+  });
   return dropped;
 }
+
+/**
+ * To/Cc entries mapped to reverse aliases per header; entries past the cap
+ * are kept verbatim (the sender's own addressing — nothing to hide, and
+ * nothing to mint a contact row for). A To: with ten thousand names was
+ * ten thousand contact rows and round trips per delivery copy.
+ */
+export const MAX_MAPPED_RECIPIENTS = 20;
+/** References ids translated per message; older ones are kept as they are. */
+export const MAX_TRANSLATED_REFERENCES = 20;
 
 /** A contact's reverse alias, as resolved/created by the caller (DB in wave 2). */
 export interface ContactRef {
@@ -229,9 +239,13 @@ export async function rewriteForward(
     const references = headers.get("References");
     if (references !== undefined) {
       const ids = references.split(/\s+/).filter((s) => s !== "");
-      const mapped = await Promise.all(
-        ids.map(async (id) => (await ctx.resolveOriginalMessageId!(id)) ?? id),
-      );
+      // Only the newest ids can be ours (threading is recent); translate
+      // those, one query at a time, and leave the older tail untouched.
+      const cut = Math.max(0, ids.length - MAX_TRANSLATED_REFERENCES);
+      const mapped = ids.slice(0, cut);
+      for (const id of ids.slice(cut)) {
+        mapped.push((await ctx.resolveOriginalMessageId(id)) ?? id);
+      }
       headers.replace("References", mapped.join(" "));
     }
   }
@@ -263,6 +277,7 @@ export async function rewriteForward(
     if (value === undefined) continue;
     const entries = parseAddressList(value);
     const mapped: Address[] = [];
+    let mappedCount = 0;
     for (const entry of entries) {
       if (entry.address.toLowerCase() === aliasEmail) {
         mapped.push(entry); // keep the alias itself verbatim
@@ -272,6 +287,11 @@ export async function rewriteForward(
         invalidRecipients.push(entry.address);
         continue;
       }
+      if (mappedCount >= MAX_MAPPED_RECIPIENTS) {
+        mapped.push(entry); // past the cap: verbatim, no contact
+        continue;
+      }
+      mappedCount++;
       const contact = await ctx.getOrCreateContact(entry, headerName === "To" ? "to" : "cc");
       mapped.push({ name: forwardDisplayName(entry), address: contact.replyEmail });
     }

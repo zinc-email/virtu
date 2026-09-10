@@ -25,6 +25,8 @@ import type {
   SmtpServerOptions,
   SmtpSession,
 } from "./types.ts";
+import { clientKey } from "../pipeline/ipAddress.ts";
+import { createDataBudget, type DataBudget } from "./dataBudget.ts";
 import {
   DataDecoder,
   MAX_COMMAND_LINE,
@@ -42,17 +44,25 @@ const DEFAULTS = {
   maxRecipients: 100,
   maxErrors: 10,
   maxConnections: 1024,
-  maxConnectionsPerIp: 64,
+  // Postfix's smtpd_client_connection_count_limit is 50; an MX that is not a
+  // relay for anyone needs far fewer, and every slot a dribbling peer holds
+  // is one an honest MTA cannot have (sessionTimeoutMs bounds the hold).
+  maxConnectionsPerIp: 20,
   maxDataLineLength: 10_000,
   commandTimeoutMs: 300_000,
   dataTimeoutMs: 600_000,
+  sessionTimeoutMs: 30 * 60_000,
+  maxPipelinedBytes: 1024 * 1024,
+  maxJunkCommands: 100,
+  softErrorLimit: 5,
+  errorSleepMs: 1000,
+  maxCommands: 10_000,
+  minDataRate: 500,
+  maxDataBytesInFlight: 256 * 1024 * 1024,
 };
 
-/** Normalize a remote address for per-IP accounting (fold IPv4-mapped IPv6). */
-function normalizeRemoteIp(addr: string | undefined): string {
-  if (addr === undefined || addr === "") return "unknown";
-  return addr.startsWith("::ffff:") ? addr.slice(7) : addr;
-}
+/** Commands that do no work for anyone (Postfix's junk command list). */
+const JUNK_COMMANDS = new Set(["NOOP", "RSET", "HELO", "EHLO", "VRFY"]);
 
 type Resolved = SmtpServerOptions & typeof DEFAULTS & { requireAuthTls: boolean };
 
@@ -72,14 +82,16 @@ export function createSmtpServer(options: SmtpServerOptions): SmtpServer {
 
   const connections = new Set<Connection>();
   const perIp = new Map<string, number>();
+  const dataBudget = options.dataBudget ?? createDataBudget(opts.maxDataBytesInFlight);
   let server: net.Server | null = null;
   let bound: { port: number; host: string } | null = null;
 
   const onSocket = (socket: net.Socket | tls.TLSSocket, secure: boolean) => {
-    // Backpressure: cap concurrent connections globally and per remote IP so a
+    // Backpressure: cap concurrent connections globally and per client so a
     // flood of slow/idle sockets (each alive up to commandTimeoutMs) can't
     // exhaust memory/timers. Refuse over the cap without allocating a session.
-    const ip = normalizeRemoteIp(socket.remoteAddress ?? undefined);
+    // The client key is the /64 for IPv6 (pipeline/ipAddress.ts).
+    const ip = clientKey(socket.remoteAddress ?? undefined);
     const ipCount = perIp.get(ip) ?? 0;
     if (connections.size >= opts.maxConnections || ipCount >= opts.maxConnectionsPerIp) {
       try {
@@ -91,7 +103,7 @@ export function createSmtpServer(options: SmtpServerOptions): SmtpServer {
       return;
     }
     perIp.set(ip, ipCount + 1);
-    const conn = new Connection(socket, secure, opts, () => {
+    const conn = new Connection(socket, secure, opts, dataBudget, () => {
       connections.delete(conn);
       const n = (perIp.get(ip) ?? 1) - 1;
       if (n <= 0) perIp.delete(ip);
@@ -195,7 +207,14 @@ class Connection {
   private readonly rawSocket: net.Socket;
   private bridgeSocket: net.Socket | null = null;
   private readonly session: SmtpSession;
+  /** Input consumed by the pump: what is left of the last joined chunk list. */
   private buf: Buffer = Buffer.alloc(0);
+  /**
+   * Input received but not yet joined into `buf`. Chunks are joined once per
+   * pump run (linear), never per `data` event (quadratic on a flood).
+   */
+  private chunks: Buffer[] = [];
+  private buffered = 0;
   private mode: "command" | "data" | "closed" = "command";
   private destroyed = false;
   private greeted = false;
@@ -203,7 +222,14 @@ class Connection {
   private skipUntilLf = false;
   private greetingRejected = false;
   private errors = 0;
+  private junkCommands = 0;
+  private commands = 0;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the current DATA transfer times out; credited per chunk received. */
+  private dataDeadlineAt = 0;
+  /** Bytes of the current message reserved from the shared data budget. */
+  private dataHeld = 0;
 
   // Transaction state
   private mailFrom: string | null = null;
@@ -218,6 +244,7 @@ class Connection {
     socket: net.Socket | tls.TLSSocket,
     private secure: boolean,
     private readonly opts: Resolved,
+    private readonly dataBudget: DataBudget,
     private readonly onClose: () => void,
   ) {
     this.socket = socket;
@@ -233,6 +260,15 @@ class Connection {
   async start(): Promise<void> {
     this.attach(this.socket);
     this.armIdleTimer();
+    // Absolute session lifetime: the idle timers re-arm on activity, so a
+    // peer dribbling one byte per timeout would otherwise hold its slot
+    // forever (slowloris). Nothing legitimate needs half an hour on one
+    // SMTP session; deliverd-class clients reconnect.
+    this.sessionTimer = setTimeout(() => {
+      this.write(reply(421, "4.4.2", `${this.opts.hostname} Error: session time limit exceeded`));
+      this.destroy();
+    }, this.opts.sessionTimeoutMs);
+    this.sessionTimer.unref?.();
     const result = await this.runHook(this.opts.onConnect, { session: this.session });
     if (this.destroyed) return;
     if ("reject" in result) {
@@ -251,18 +287,52 @@ class Connection {
     this.destroyed = true;
     this.mode = "closed";
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (this.sessionTimer) clearTimeout(this.sessionTimer);
+    this.releaseDataHeld();
     this.socket.destroy();
     if (this.bridgeSocket) this.bridgeSocket.destroy();
     if (this.rawSocket !== this.socket) this.rawSocket.destroy();
     this.onClose();
   }
 
+  private releaseDataHeld(): void {
+    if (this.dataHeld === 0) return;
+    this.dataBudget.release(this.dataHeld);
+    this.dataHeld = 0;
+  }
+
   // -- plumbing -------------------------------------------------------------
 
   private attach(socket: net.Socket | tls.TLSSocket): void {
     socket.on("data", (chunk: Buffer) => {
-      this.buf = this.buf.length > 0 ? Buffer.concat([this.buf, chunk]) : chunk;
-      this.armIdleTimer();
+      this.chunks.push(chunk);
+      this.buffered += chunk.length;
+      if (this.mode === "data") {
+        // Every byte in DATA is held until the message is queued or refused,
+        // and the process has one budget for all of them.
+        if (!this.dataBudget.reserve(chunk.length)) {
+          this.write(
+            reply(421, "4.3.1", `${this.opts.hostname} Error: insufficient system storage`),
+          );
+          this.destroy();
+          return;
+        }
+        this.dataHeld += chunk.length;
+        // Bytes flowing keep a DATA session alive at the minimum data rate;
+        // in command mode only a consumed line does (see pump) — a
+        // byte-at-a-time dribble is not activity either way.
+        this.creditDataDeadline(chunk.length);
+      }
+      if (this.pumping) {
+        // The pump is parked at an await, and the socket is paused there:
+        // whatever still arrives (an in-flight segment) is bounded here so
+        // a peer can never make us hold more than this on its behalf.
+        if (this.buffered > this.opts.maxPipelinedBytes) {
+          this.write(reply(421, "4.7.0", `${this.opts.hostname} Error: too much pipelined input`));
+          this.destroy();
+        }
+        return;
+      }
       void this.pump();
     });
     socket.on("error", () => this.destroy());
@@ -281,11 +351,37 @@ class Connection {
     this.socket.write(s);
   }
 
+  /**
+   * Extend the DATA deadline for `bytes` received: `bytes / minDataRate`
+   * seconds, never beyond a full `dataTimeoutMs` from now (Postfix
+   * `smtpd_min_data_rate`). The timer itself is not touched per chunk; it
+   * re-arms against this deadline when it fires (`armIdleTimer`).
+   */
+  private creditDataDeadline(bytes: number): void {
+    const now = Date.now();
+    const cap = now + this.opts.dataTimeoutMs;
+    if (this.opts.minDataRate <= 0) {
+      this.dataDeadlineAt = cap;
+      return;
+    }
+    this.dataDeadlineAt = Math.min(
+      this.dataDeadlineAt + (bytes * 1000) / this.opts.minDataRate,
+      cap,
+    );
+  }
+
   private armIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.mode === "closed") return;
-    const ms = this.mode === "data" ? this.opts.dataTimeoutMs : this.opts.commandTimeoutMs;
+    const ms =
+      this.mode === "data"
+        ? Math.max(0, this.dataDeadlineAt - Date.now())
+        : this.opts.commandTimeoutMs;
     this.idleTimer = setTimeout(() => {
+      if (this.mode === "data" && Date.now() < this.dataDeadlineAt) {
+        this.armIdleTimer();
+        return;
+      }
       this.write(reply(421, "4.4.2", `${this.opts.hostname} Error: timeout exceeded`));
       this.destroy();
     }, ms);
@@ -293,12 +389,19 @@ class Connection {
 
   /** Reply with an error, counting toward maxErrors (421 + close beyond it). */
   private sayError(code: number, enhanced: string | undefined, text: string): void {
-    this.errors++;
     this.write(reply(code, enhanced, text));
+    this.noteError();
+  }
+
+  /** Count one error; true when that ended the session (`421 4.7.0`). */
+  private noteError(): boolean {
+    this.errors++;
     if (this.errors > this.opts.maxErrors) {
       this.write(reply(421, "4.7.0", `${this.opts.hostname} Error: too many errors`));
       this.endAfterFlush();
+      return true;
     }
+    return false;
   }
 
   private endAfterFlush(): void {
@@ -315,11 +418,42 @@ class Connection {
     arg: A,
   ): Promise<SmtpHookResult> {
     if (!hook) return { accept: true };
+    // Backpressure: while the hook runs (DB, DNS — seconds, and the peer
+    // can stretch it) stop reading. Bytes stay in the kernel receive
+    // buffer, the window closes, and the peer's sends block — TCP's own
+    // flow control, which a socket that never stops reading defeats.
+    const socket = this.socket;
+    socket.pause();
     try {
       return await hook(arg);
     } catch {
       return { reject: { code: 451, enhanced: "4.3.0", message: "Internal server error" } };
+    } finally {
+      if (!this.destroyed && this.socket === socket) socket.resume();
     }
+  }
+
+  /** Resolve once the socket's write buffer drains (or the socket goes away). */
+  private waitForDrain(): Promise<void> {
+    const socket = this.socket;
+    return new Promise((resolve) => {
+      const done = () => {
+        socket.off("drain", done);
+        socket.off("close", done);
+        resolve();
+      };
+      socket.once("drain", done);
+      socket.once("close", done);
+    });
+  }
+
+  /** Join received chunks into `buf` (once per pump run). */
+  private takeBuffered(): void {
+    if (this.chunks.length === 0) return;
+    const parts = this.buf.length > 0 ? [this.buf, ...this.chunks] : this.chunks;
+    this.buf = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+    this.chunks = [];
+    this.buffered = 0;
   }
 
   private resetTransaction(): void {
@@ -336,6 +470,7 @@ class Connection {
     this.pumping = true;
     try {
       while (this.mode !== "closed") {
+        this.takeBuffered();
         if (this.mode === "data") {
           if (this.buf.length === 0) break;
           const chunk = this.buf;
@@ -373,6 +508,26 @@ class Connection {
           this.sayError(500, "5.5.2", "Line too long");
           continue;
         }
+        // Honour our own write backpressure: a peer that pipelines commands
+        // and never reads the replies would otherwise have every reply
+        // queued in our memory. Stop reading until it catches up (the idle
+        // timer still runs — a peer that never reads is idle to us).
+        if (this.socket.writableNeedDrain) {
+          this.socket.pause();
+          await this.waitForDrain();
+          if (this.destroyed) break;
+          this.socket.resume();
+        }
+        // Past the soft error limit every command pays a delay first
+        // (Postfix error_sleep_time): a peer that keeps failing spends
+        // its time on our schedule until it hits the hard limit.
+        if (this.errors >= this.opts.softErrorLimit && this.opts.errorSleepMs > 0) {
+          this.socket.pause();
+          await Bun.sleep(this.opts.errorSleepMs);
+          if (this.destroyed) break;
+          this.socket.resume();
+        }
+        this.armIdleTimer();
         await this.handleLine(split.line.toString("utf8"));
       }
     } finally {
@@ -383,6 +538,10 @@ class Connection {
   // -- command dispatch -----------------------------------------------------
 
   private async handleLine(line: string): Promise<void> {
+    if (++this.commands > this.opts.maxCommands) {
+      this.write(reply(421, "4.7.0", `${this.opts.hostname} Error: too many commands`));
+      return this.endAfterFlush();
+    }
     if (this.authDialog) return this.handleAuthLine(line);
 
     const sp = line.indexOf(" ");
@@ -391,6 +550,15 @@ class Connection {
 
     if (this.greetingRejected && verb !== "QUIT") {
       return this.sayError(503, "5.5.1", "Bad sequence of commands");
+    }
+    // Junk past the limit is an error each (Postfix smtpd_junk_command_limit);
+    // the command is still answered unless that error ended the session.
+    if (
+      JUNK_COMMANDS.has(verb) &&
+      ++this.junkCommands > this.opts.maxJunkCommands &&
+      this.noteError()
+    ) {
+      return;
     }
 
     switch (verb) {
@@ -525,6 +693,15 @@ class Connection {
     if (this.rcptTo.length >= this.opts.maxRecipients) {
       return this.sayError(452, "4.5.3", "Too many recipients");
     }
+    // A recipient named twice is delivered once (RFC 5321 §4.5.3 says
+    // duplicates MAY be deduplicated; a server that does not is a fan-out
+    // amplifier — the same alias a hundred times was a hundred queued
+    // copies past every per-mailbox budget, since each RCPT only sees the
+    // rows already written). The peer still gets its 250.
+    const dedupeKey = parsed.address.trim().toLowerCase();
+    if (this.rcptTo.some((r) => r.address.trim().toLowerCase() === dedupeKey)) {
+      return this.write(reply(250, "2.1.5", "Ok"));
+    }
     const result = await this.runHook(this.opts.onRcptTo, {
       session: this.session,
       address: parsed.address,
@@ -543,13 +720,26 @@ class Connection {
     if (arg.trim() !== "") return this.sayError(501, "5.5.4", "DATA takes no arguments");
     if (this.mailFrom === null) return this.sayError(503, "5.5.1", "Need MAIL command first");
     if (this.rcptTo.length === 0) return this.sayError(503, "5.5.1", "Need RCPT command first");
+    if (this.dataBudget.inFlight() >= this.dataBudget.maxBytes) {
+      return this.sayError(452, "4.3.1", "Insufficient system storage, try again later");
+    }
     this.dataDecoder = new DataDecoder(this.opts.maxMessageSize, this.opts.maxDataLineLength);
     this.mode = "data";
+    this.dataDeadlineAt = Date.now() + this.opts.dataTimeoutMs;
     this.armIdleTimer();
     this.write("354 End data with <CR><LF>.<CR><LF>\r\n");
   }
 
   private async finishData(): Promise<void> {
+    try {
+      await this.disposeData();
+    } finally {
+      // The message is queued or refused either way: its bytes are free.
+      this.releaseDataHeld();
+    }
+  }
+
+  private async disposeData(): Promise<void> {
     const decoder = this.dataDecoder!;
     const envelope: SmtpEnvelope = {
       heloName: this.session.heloName ?? "",
@@ -592,6 +782,8 @@ class Connection {
     // RFC 3207: discard any plaintext pipelined after STARTTLS (injection guard)
     // and reset all SMTP state.
     this.buf = Buffer.alloc(0);
+    this.chunks = [];
+    this.buffered = 0;
     const raw = this.socket as net.Socket;
     this.detach(raw);
     raw.pause();

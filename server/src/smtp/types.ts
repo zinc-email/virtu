@@ -29,6 +29,8 @@
  *   memory.
  */
 
+import type { DataBudget } from "./dataBudget.ts";
+
 /** MAIL FROM / RCPT TO esmtp-parameters: `KEY=value` or bare `KEY` (=> `true`). Keys are uppercased. */
 export type SmtpParams = Record<string, string | true>;
 
@@ -221,7 +223,7 @@ export interface SmtpServerOptions extends SmtpServerHooks {
   maxErrors?: number;
   /** Max concurrent connections server-wide (`421` + close beyond it). Default 1024. */
   maxConnections?: number;
-  /** Max concurrent connections from one remote IP (`421` + close beyond it). Default 64. */
+  /** Max concurrent connections from one remote IP (`421` + close beyond it). Default 20. */
   maxConnectionsPerIp?: number;
   /** DATA line-length cap; see the line-length policy above. Default 10000. */
   maxDataLineLength?: number;
@@ -229,6 +231,58 @@ export interface SmtpServerOptions extends SmtpServerHooks {
   commandTimeoutMs?: number;
   /** Idle timeout while receiving DATA, ms (=> `421 4.4.2` + close). Default 600000. */
   dataTimeoutMs?: number;
+  /**
+   * Absolute lifetime of one connection, ms (=> `421 4.4.2` + close). The
+   * idle timeouts re-arm on activity; this one never does, so a peer that
+   * dribbles a byte per idle period cannot hold a slot forever. Default 30 min.
+   */
+  sessionTimeoutMs?: number;
+  /**
+   * Bytes the server will hold for a peer beyond what it has consumed. The
+   * socket is paused while a hook runs, so only an in-flight segment should
+   * ever arrive then; past this the connection is dropped with `421`.
+   * Default 1 MiB.
+   */
+  maxPipelinedBytes?: number;
+  /**
+   * NOOP/RSET/HELO/EHLO/VRFY commands a session may issue before each
+   * further one counts as an error (Postfix `smtpd_junk_command_limit`).
+   * Successful commands never touched the error count, so a peer could
+   * drive the server at full command rate for the whole session.
+   * Default 100.
+   */
+  maxJunkCommands?: number;
+  /**
+   * Errors after which every reply is delayed by `errorSleepMs` (Postfix
+   * `smtpd_soft_error_limit` + `smtpd_error_sleep_time`): a peer that
+   * keeps failing pays in time before it reaches the hard limit.
+   * Default 5 errors, 1000 ms.
+   */
+  softErrorLimit?: number;
+  errorSleepMs?: number;
+  /**
+   * Commands one session may issue in total (`421 4.7.0` past it). A
+   * ceiling on what one connection can make the hooks do; no legitimate
+   * session comes near it. Default 10000.
+   */
+  maxCommands?: number;
+  /**
+   * Minimum DATA transfer rate, bytes per second (Postfix
+   * `smtpd_min_data_rate`). Each chunk received in DATA extends the DATA
+   * deadline by `bytes / rate` seconds, never beyond `dataTimeoutMs` from
+   * now; a peer dribbling a byte per idle period is cut in about one
+   * timeout instead of holding its message buffer all session. 0 restores
+   * the plain idle timeout. Default 500.
+   */
+  minDataRate?: number;
+  /**
+   * Message bytes this server may hold in DATA across all its connections
+   * when no `dataBudget` is given (`452 4.3.1` at DATA past it, `421 4.3.1`
+   * mid-transfer). See smtp/dataBudget.ts. Default 256 MiB.
+   */
+  maxDataBytesInFlight?: number;
+  /** A budget shared with other listeners in the process; overrides `maxDataBytesInFlight`. */
+  dataBudget?: DataBudget;
 }
 
 /** A bound-and-listening SMTP server, from {@link createSmtpServer}. */

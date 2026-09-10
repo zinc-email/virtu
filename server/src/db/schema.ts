@@ -451,6 +451,15 @@ export const emailLogs = pgTable(
     // Our replacement Message-ID (SimpleLogin's sl_message_id) so threading
     // survives the reply phase.
     ourMessageId: varchar({ length: 512 }),
+    // Forward phase: the envelope MAIL FROM the message arrived with — the
+    // return path, which is where a delivery-failure DSN belongs (RFC 5321
+    // §4.5.5), never the header From (sender-chosen; a DSN there is
+    // backscatter to whoever the sender named). Empty for the null sender.
+    envelopeFrom: varchar({ length: 512 }),
+    // Forward phase: SPF passed for that envelope sender — its domain
+    // authorized the connecting IP — so a DSN to it reaches a party that
+    // really sent the message. Without it the DSN is withheld.
+    senderAuthenticated: boolean().default(false).notNull(),
     ...timestamps,
   },
   (t) => [

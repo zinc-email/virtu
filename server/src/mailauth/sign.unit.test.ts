@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { authenticate } from "mailauth";
 import { parseMessage } from "../mail/headers.ts";
-import { DKIM_HEADER_FALLBACK_CHAINS, signOutbound } from "./sign.ts";
+import { DKIM_HEADER_FALLBACK_CHAINS, DKIM_SIGNATURE_LIFETIME_MS, signOutbound } from "./sign.ts";
 import {
   dkimTxtRecord,
   makeRsaKeyPair,
@@ -160,5 +160,45 @@ describe("signOutbound", () => {
   test("throws without keys", async () => {
     const { headers, body } = parseMessage(enc.encode(RAW));
     expect(signOutbound(headers, body, { dkimKeys: [] })).rejects.toThrow(/at least one/);
+  });
+});
+
+describe("signOutbound signs what goes on the wire (review round 3)", () => {
+  test("signatures carry an expiry a week out", async () => {
+    const { headers, body } = parseMessage(enc.encode(RAW));
+    const signTime = new Date("2026-08-07T10:00:00Z");
+    const result = await signOutbound(headers, body, {
+      dkimKeys: [
+        { signingDomain: "virtu.test", selector: "vs1", privateKey: ourKey.privateKeyPem },
+      ],
+      signTime,
+    });
+    const t = Number(/\bt=(\d+)/.exec(result.dkimHeaders)?.[1]);
+    const x = Number(/\bx=(\d+)/.exec(result.dkimHeaders)?.[1]);
+    expect(t).toBe(Math.floor(signTime.getTime() / 1000));
+    expect(x - t).toBe(DKIM_SIGNATURE_LIFETIME_MS / 1000);
+  });
+
+  test("lines over 998 octets are folded before signing, and the result verifies", async () => {
+    const long = `${"long ".repeat(400)}end`;
+    const { headers, body } = parseMessage(enc.encode(RAW.replace("Please find attached.", long)));
+    const result = await signOutbound(headers, body, {
+      dkimKeys: [
+        { signingDomain: "virtu.test", selector: "vs1", privateKey: ourKey.privateKeyPem },
+      ],
+    });
+    const text = new TextDecoder().decode(result.message);
+    expect(Math.max(...text.split("\r\n").map((l) => l.length))).toBeLessThanOrEqual(998);
+    expect(text).toContain("long\r\n long");
+    const auth = await authenticate(Buffer.from(result.message), {
+      resolver: makeStubResolver(ourZones()) as never,
+      disableBimi: true,
+      disableDmarc: true,
+      mta: "mx.qmail.com",
+      ip: "192.0.2.1",
+      helo: "out.virtu.test",
+      sender: "vt.x.y@virtu.test",
+    });
+    expect(auth.dkim.results?.[0]?.status.result).toBe("pass");
   });
 });

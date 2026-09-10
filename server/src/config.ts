@@ -90,6 +90,16 @@ const ConfigSchema = z.object({
     .number()
     .int()
     .default(25 * 1024 * 1024),
+  // Message bytes all SMTP listeners together may hold in DATA (received,
+  // not yet queued or refused — smtp/dataBudget.ts). The one bound on what
+  // peers can make the mail process hold: past it DATA is refused with
+  // 452 4.3.1 and an in-flight transfer is cut with 421. Size it so this
+  // plus the process baseline fits the container's mem_limit (RSS runs
+  // ~1.5× the bytes held).
+  smtpMaxDataBytesInFlight: z.coerce
+    .number()
+    .int()
+    .default(256 * 1024 * 1024),
   // Per-user outbound send quota (submission pre-enqueue, Lane K P2):
   // recipients per rolling 24h, by plan. 0 = unlimited. Overridable per user
   // via users.max_daily_sends. Caps what a leaked device credential can
@@ -103,6 +113,21 @@ const ConfigSchema = z.object({
   // defaults (10 / 15).
   inboundRateLimitPerAliasPerMinute: z.coerce.number().int().default(10),
   inboundRateLimitPerMailboxPerMinute: z.coerce.number().int().default(15),
+  // Catch-all minting (policy.ts): new aliases a catch-all domain may mint
+  // per trailing hour, 450 4.7.1 beyond. Every RCPT for a fresh localpart
+  // on such a domain is an alias row for the rest of time; an outside
+  // sender must not be able to write them at SMTP speed. 0 = unlimited.
+  catchAllMintsPerHour: z.coerce.number().int().default(50),
+  // Role addresses (postmaster@ …, pipeline/roleMailBudget.ts): messages a
+  // role localpart accepts per trailing minute (450 4.7.1 beyond), and the
+  // largest message it accepts (552 5.3.4 beyond). Operator mail bypasses
+  // the user budgets on purpose (it is the service's own), so these are
+  // its only bounds. 0 = unlimited.
+  operatorMailPerMinute: z.coerce.number().int().default(10),
+  operatorMailMaxBytes: z.coerce
+    .number()
+    .int()
+    .default(5 * 1024 * 1024),
   // deliverd egress guard: when false (the default), deliverd refuses to open
   // an SMTP connection to a recipient domain whose MX (or implicit-MX A record)
   // resolves to a private/loopback/link-local address — the SSRF where an

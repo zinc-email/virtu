@@ -154,6 +154,19 @@ account email — that is Caddy's "use ACME" spelling, e.g.
 `SUBMISSION_TLS_PUBLISH` (host port bindings). `Caddyfile.dev` is the
 dev-only variant (proxies the HMR dev servers).
 
+**maild must see real client addresses.** Its per-client limits (connections
+per client, the AUTH throttle) key on the peer's address — the /64 for IPv6.
+Docker publishes IPv4 ports by DNAT, which keeps the source address, but
+IPv6 connections to a published port go through the userland `docker-proxy`
+unless the daemon has `"ipv6": true` and `"ip6tables": true` in
+`/etc/docker/daemon.json` — and then every IPv6 peer arrives from the bridge
+gateway and shares one bucket, so one attacker can lock out every IPv6 MTA.
+The same collapse happens behind any load balancer that does not preserve
+the source address (maild speaks no PROXY protocol). Check once per box,
+after the first deploy: connect from an IPv6 host and confirm the address in
+maild's `connect` log line is that host, not `172.x`/`fd00:` — or put the MX
+on host networking.
+
 ### Mail TLS
 
 Caddy owns TLS for the box, including the MX hostname: the `Caddyfile` has a

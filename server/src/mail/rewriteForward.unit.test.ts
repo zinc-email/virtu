@@ -311,3 +311,72 @@ describe("rewriteForward", () => {
     expect(from.name).toBe("Renée Müller - renee at initech.com");
   });
 });
+
+describe("rewriteForward bounds per-message work (review round 2)", () => {
+  test("To/Cc past the cap are kept verbatim without a contact", async () => {
+    const { rewriteForward, MAX_MAPPED_RECIPIENTS } = await import("./rewriteForward.ts");
+    const { parseMessage } = await import("./headers.ts");
+    const n = MAX_MAPPED_RECIPIENTS + 5;
+    const to = Array.from({ length: n }, (_, i) => `p${i}@example.com`).join(", ");
+    const msg = parseMessage(
+      new TextEncoder().encode(`From: a@example.com\r\nTo: ${to}\r\nSubject: x\r\n\r\nb\r\n`),
+    );
+    let minted = 0;
+    const result = await rewriteForward(
+      { headers: msg.headers },
+      {
+        alias: { email: "alias@virtu.email" },
+        mailbox: { email: "wes@qmail.com" },
+        envelopeFrom: "a@example.com",
+        emailLogId: 1,
+        getOrCreateContact: async (addr) => {
+          minted++;
+          return { replyEmail: `ra-${addr.address.split("@")[0]}@virtu.email` };
+        },
+      },
+    );
+    expect(minted).toBe(MAX_MAPPED_RECIPIENTS + 1); // + the From contact
+    const rewrittenTo = result.headers.get("To") ?? "";
+    expect(rewrittenTo).toContain(`p${n - 1}@example.com`); // verbatim tail
+    expect(rewrittenTo).toContain("ra-p0@virtu.email"); // mapped head
+  });
+
+  test("References: only the newest ids are translated", async () => {
+    const { rewriteForward, MAX_TRANSLATED_REFERENCES } = await import("./rewriteForward.ts");
+    const { parseMessage } = await import("./headers.ts");
+    const n = MAX_TRANSLATED_REFERENCES + 10;
+    const refs = Array.from({ length: n }, (_, i) => `<r${i}@x>`).join(" ");
+    const msg = parseMessage(
+      new TextEncoder().encode(`From: a@example.com\r\nReferences: ${refs}\r\n\r\nb\r\n`),
+    );
+    const asked: string[] = [];
+    await rewriteForward(
+      { headers: msg.headers },
+      {
+        alias: { email: "alias@virtu.email" },
+        mailbox: { email: "wes@qmail.com" },
+        envelopeFrom: "a@example.com",
+        emailLogId: 1,
+        getOrCreateContact: async () => ({ replyEmail: "ra@virtu.email" }),
+        resolveOriginalMessageId: async (id) => {
+          asked.push(id);
+          return null;
+        },
+      },
+    );
+    expect(asked.length).toBe(MAX_TRANSLATED_REFERENCES);
+    expect(asked[0]).toBe(`<r${n - MAX_TRANSLATED_REFERENCES}@x>`);
+  });
+
+  test("the whitelist is linear in the header count", async () => {
+    const { applyHeaderWhitelist, FORWARD_HEADER_WHITELIST } = await import("./rewriteForward.ts");
+    const { parseMessage } = await import("./headers.ts");
+    const lines = Array.from({ length: 200_000 }, (_, i) => (i % 2 ? "X-A: 1" : "List-Id: a"));
+    const msg = parseMessage(new TextEncoder().encode(`${lines.join("\r\n")}\r\n\r\nb\r\n`));
+    const started = Date.now();
+    const dropped = applyHeaderWhitelist(msg.headers, FORWARD_HEADER_WHITELIST);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(dropped.length).toBe(100_000);
+    expect(msg.headers.fields.length).toBe(100_000);
+  });
+});

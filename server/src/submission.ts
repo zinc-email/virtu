@@ -54,7 +54,14 @@ import {
 } from "./db/schema.ts";
 import { splitSmtpPassword, verifyAgainstDummy, warmDummyHash } from "./auth/smtpPassword.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { buildVerp, parseMessage, rewriteReply, serializeMessage } from "./mail/index.ts";
+import {
+  buildVerp,
+  foldLongLines,
+  MAX_HEADER_FIELDS,
+  parseMessage,
+  rewriteReply,
+  serializeMessage,
+} from "./mail/index.ts";
 import { signOutbound } from "./mailauth/index.ts";
 import {
   smtpConnectionsTotal,
@@ -95,6 +102,8 @@ import {
   type SmtpServer,
   type SmtpServerOptions,
   type SmtpTlsConfig,
+  type DataBudget,
+  processDataBudget,
 } from "./smtp/index.ts";
 
 /** Everything submission needs; a subset of config plus injectables. */
@@ -105,6 +114,8 @@ export interface SubmissionOptions {
   dkimSelector: string;
   verpSecret: string;
   maxMessageSize: number;
+  /** In-flight DATA byte budget shared with the mx (smtp/dataBudget.ts). */
+  dataBudget?: DataBudget;
   tls?: SmtpTlsConfig;
   /** Failed-AUTH throttle override for tests; default {@link createAuthThrottle}. */
   authThrottle?: AuthThrottle;
@@ -439,6 +450,46 @@ async function handleSubmissionData(
   if ("reject" in resolved) return resolved.reject;
   const { alias, plan, mode, sendingMailboxId } = resolved;
 
+  // Everything from the quota check down is check-then-act against rows
+  // this same call writes, so a user's submissions run one at a time:
+  // twenty parallel connections used to read the same low count and all
+  // pass. One process (maild), one lock map; a second submission process
+  // would have its own, which at worst doubles the quota, not unbounds it.
+  return withUserSendLock(user.id, () =>
+    completeSubmission(event, opts, log, user, { alias, plan, mode, sendingMailboxId }),
+  );
+}
+
+/** Per-user serialization of the quota → write → enqueue section. */
+const userSendLocks = new Map<number, Promise<void>>();
+async function withUserSendLock<T>(userId: number, fn: () => Promise<T>): Promise<T> {
+  const previous = userSendLocks.get(userId) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const mine = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = previous.then(() => mine);
+  userSendLocks.set(userId, chained);
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (userSendLocks.get(userId) === chained) userSendLocks.delete(userId);
+  }
+}
+
+/** The rest of a submission, under the user's send lock. */
+async function completeSubmission(
+  event: SmtpDataEvent,
+  opts: SubmissionOptions,
+  log: Logger,
+  user: User,
+  resolved: Extract<Awaited<ReturnType<typeof resolveOutbound>>, { alias: unknown }>,
+): Promise<SmtpHookResult> {
+  const { envelope } = event;
+  const { alias, plan, mode, sendingMailboxId } = resolved;
+
   // Daily send quota (PLAN Lane K P2), pre-enqueue and pre-write: the cap on
   // what a leaked device credential can blast through our IP. Counted per
   // recipient over a rolling 24h; a multi-recipient message is refused whole
@@ -488,6 +539,15 @@ async function handleSubmissionData(
   }
 
   const parsed = parseMessage(event.raw);
+  if (parsed.headers.fields.length > MAX_HEADER_FIELDS) {
+    return rejectWith(550, "5.6.0", "Too many header fields");
+  }
+  // Exactly one From (RFC 5322 §3.6.2), as the mx requires of inbound
+  // mail: the rewrite replaces the first From and would leave a second
+  // one standing in a message we sign as our own.
+  if (parsed.headers.getFields("From").length !== 1) {
+    return rejectWith(550, "5.6.0", "Message must have exactly one From header");
+  }
   const aliasDomain = alias.email.slice(alias.email.indexOf("@") + 1);
 
   // The rewrite (with its To/Cc leak screen) runs BEFORE anything is
@@ -607,7 +667,7 @@ async function handleSubmissionData(
   let message: Uint8Array;
   if (dkimKey === null) {
     log.warn("dkim_key_missing", { domain: aliasDomain, consequence: "sending unsigned" });
-    message = serializeMessage(result.headers, parsed.body);
+    message = foldLongLines(serializeMessage(result.headers, parsed.body));
   } else {
     const signed = await signOutbound(result.headers, parsed.body, { dkimKeys: [dkimKey] });
     for (const err of signed.errors) {
@@ -665,6 +725,7 @@ function submissionServerOptions(opts: SubmissionOptions): SmtpServerOptions {
     banner: "virtu submission",
     tls: opts.tls,
     maxMessageSize: opts.maxMessageSize,
+    dataBudget: opts.dataBudget,
     // AUTH is refused (and unadvertised) off the TLS layer — always, not
     // only when TLS happens to be configured: a listener with no TLS then
     // has no AUTH rather than plaintext AUTH. Only the explicit dev flag
@@ -852,6 +913,7 @@ export function submissionOptionsFromConfig(): SubmissionOptions {
     dkimSelector: config.dkimSelector,
     verpSecret: config.verpSecret,
     maxMessageSize: config.smtpMaxMessageSize,
+    dataBudget: processDataBudget(config.smtpMaxDataBytesInFlight),
     tls: loadSmtpTls(config.smtpTlsCertFile, config.smtpTlsKeyFile),
     sendQuota: {
       freePerDay: config.sendQuotaFreePerDay,

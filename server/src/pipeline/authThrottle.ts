@@ -12,6 +12,8 @@
  * the least-recently-failing key past `maxKeys`.
  */
 
+import { clientKey } from "./ipAddress.ts";
+
 export interface AuthThrottleOptions {
   /** Sliding window length. Default 60s. */
   windowMs?: number;
@@ -39,9 +41,13 @@ export interface AuthThrottle {
   clear(key: string): void;
 }
 
-/** The throttle key: one budget per (client address, claimed identity). */
+/**
+ * The throttle key: one budget per (client, claimed identity). The client
+ * half is {@link clientKey} — the /64 for IPv6 — so a guesser cannot buy a
+ * fresh budget per address out of one allocation.
+ */
 export function authThrottleKey(remoteAddress: string, username: string): string {
-  return `${remoteAddress}|${username.trim().toLowerCase()}`;
+  return `${clientKey(remoteAddress)}|${username.trim().toLowerCase()}`;
 }
 
 export function createAuthThrottle(opts: AuthThrottleOptions = {}): AuthThrottle {

@@ -216,3 +216,71 @@ describe("smtp client vs hostile server", () => {
     client.close();
   });
 });
+
+describe("smtp client bounds what a hostile server can make it hold (review round 3)", () => {
+  test("an endless multiline greeting is a protocol error, not a memory hog", async () => {
+    const port = await serve(async (conn) => {
+      const line = `220-${"g".repeat(1000)}\r\n`;
+      for (let i = 0; i < 5000; i++) {
+        if (conn.socket.destroyed) return;
+        conn.write(line);
+        if (i % 50 === 0) await new Promise((r) => setTimeout(r, 1));
+      }
+    });
+    const started = Date.now();
+    expect.assertions(3);
+    try {
+      await connectSmtp({ host: "127.0.0.1", port, timeoutMs: 5000 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(SmtpClientError);
+      expect((err as SmtpClientError).kind).toBe("PROTOCOL");
+      expect(Date.now() - started).toBeLessThan(2000);
+    }
+  });
+
+  test("a reply that never ends its line is cut at the buffer cap", async () => {
+    const port = await serve(async (conn) => {
+      conn.write("220 fake ESMTP\r\n");
+      await conn.nextLine(); // EHLO
+      const chunk = "2".repeat(16 * 1024);
+      for (let i = 0; i < 64; i++) {
+        if (conn.socket.destroyed) return;
+        conn.write(chunk);
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    });
+    const client = await connectSmtp({ host: "127.0.0.1", port, timeoutMs: 5000 });
+    expect.assertions(2);
+    try {
+      await client.ehlo();
+    } catch (err) {
+      expect(err).toBeInstanceOf(SmtpClientError);
+      expect((err as SmtpClientError).kind).toBe("PROTOCOL");
+    }
+  });
+
+  test("bytes nobody asked for are bounded too", async () => {
+    const port = await serve(async (conn) => {
+      conn.write("220 fake ESMTP\r\n");
+      await conn.nextLine(); // EHLO
+      conn.write("250 fake\r\n");
+      // Unsolicited chatter while the client is between commands.
+      const chunk = `250-${"n".repeat(1000)}\r\n`;
+      for (let i = 0; i < 200; i++) {
+        if (conn.socket.destroyed) return;
+        conn.write(chunk);
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    });
+    const client = await connectSmtp({ host: "127.0.0.1", port, timeoutMs: 5000 });
+    await client.ehlo();
+    await new Promise((r) => setTimeout(r, 500));
+    expect.assertions(2);
+    try {
+      await client.ehlo();
+    } catch (err) {
+      expect(err).toBeInstanceOf(SmtpClientError);
+      expect((err as SmtpClientError).kind).toBe("CLOSED");
+    }
+  });
+});

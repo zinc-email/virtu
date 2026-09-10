@@ -13,10 +13,13 @@ export {
   type HeaderField,
   type ParsedMessage,
   parseAddressList,
+  MAX_HEADER_FIELDS,
   parseMessage,
   serializeMessage,
   unfoldValue,
 } from "./headers.ts";
+
+export { foldLongLines, MAX_LINE_OCTETS } from "./lineLength.ts";
 
 export {
   buildVerp,

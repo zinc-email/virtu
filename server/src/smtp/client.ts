@@ -33,6 +33,17 @@ import {
   takeLine,
 } from "./wire.ts";
 
+/**
+ * Unconsumed server bytes the client will hold: a reply line with no end
+ * yet, or bytes sent while nothing is waiting for a reply (mid-DATA, say).
+ * Nothing legitimate needs more than a reply's worth; a peer streaming
+ * past this is choosing how much memory deliverd spends, and deliverd
+ * shares its process with the listeners. Past it the connection is torn
+ * down and the attempt fails as a protocol error (a transient step for the
+ * queue, like any other transport failure).
+ */
+const MAX_UNREAD_BYTES = 64 * 1024;
+
 /** SNI must be a hostname, never an IP literal (RFC 6066). */
 function sniFor(host: string): { servername?: string } {
   return net.isIP(host) === 0 ? { servername: host } : {};
@@ -141,7 +152,17 @@ class Session implements SmtpClient {
 
   private onData(chunk: Buffer): void {
     this.buf = this.buf.length > 0 ? Buffer.concat([this.buf, chunk]) : chunk;
+    if (this.buf.length > MAX_UNREAD_BYTES) {
+      this.abort(new SmtpClientError("Server sent too much unread data", "PROTOCOL"));
+      return;
+    }
     this.drain();
+  }
+
+  /** Tear the session down and fail whoever is waiting on it. */
+  private abort(err: SmtpClientError): void {
+    this.destroy();
+    this.failWaiter(err);
   }
 
   private drain(): void {
@@ -153,7 +174,8 @@ class Session implements SmtpClient {
       try {
         complete = this.parser.feed(split.line.toString("utf8"));
       } catch (err) {
-        this.failWaiter(new SmtpClientError((err as Error).message, "PROTOCOL"));
+        // The stream is no longer in sync with any reply we could parse.
+        this.abort(new SmtpClientError((err as Error).message, "PROTOCOL"));
         return;
       }
       if (complete) {

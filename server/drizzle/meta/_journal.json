@@ -22,6 +22,13 @@
       "when": 1788838425111,
       "tag": "0002_smtp-credentials-selector",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788935167112,
+      "tag": "0003_email-logs-return-path",
+      "breakpoints": true
     }
   ]
 }

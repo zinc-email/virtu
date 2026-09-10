@@ -134,6 +134,11 @@ services:
     command: ["bun", "src/maild.ts"]
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     restart: unless-stopped
+    # Safety net, not a fix: the SMTP server bounds what a peer can make it
+    # hold (smtp/server.ts backpressure), but a future leak should restart
+    # THIS container, not swap the box. Working set is tens of MB plus a few
+    # in-flight 25 MiB messages; 1 GiB leaves room for a busy hour.
+    mem_limit: "${MAILD_MEM_LIMIT:-1g}"
     environment:
       DATABASE_URL: "postgres://virtu:${POSTGRES_PASSWORD:-virtu}@db:5432/virtu"
       VIRTU_ENV: "${VIRTU_ENV:-}"

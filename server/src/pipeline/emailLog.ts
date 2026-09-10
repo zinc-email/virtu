@@ -47,7 +47,13 @@ function spamColumns(flag: string | null | undefined): {
 }
 
 /** Create the log row for a forward (phase: contact → alias → mailbox). */
-export async function createForwardLog(db: Db, input: EmailLogInput): Promise<EmailLog> {
+const MAX_ENVELOPE_FROM = 512;
+
+/** Create the log row for a forward (phase: contact → alias → mailbox). */
+export async function createForwardLog(
+  db: Db,
+  input: EmailLogInput & { envelopeFrom?: string; senderAuthenticated?: boolean },
+): Promise<EmailLog> {
   const rows = await db
     .insert(emailLogs)
     .values({
@@ -57,6 +63,8 @@ export async function createForwardLog(db: Db, input: EmailLogInput): Promise<Em
       mailboxId: input.mailboxId,
       isReply: false,
       messageId: clip(input.messageId, MAX_MESSAGE_ID),
+      envelopeFrom: clip(input.envelopeFrom ?? null, MAX_ENVELOPE_FROM),
+      senderAuthenticated: input.senderAuthenticated ?? false,
       ...spamColumns(input.spamFlag),
     })
     .returning();

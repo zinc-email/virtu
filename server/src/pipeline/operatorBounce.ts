@@ -47,6 +47,7 @@ export type BounceSkipReason =
   | "raw_cleared"
   | "email_log_missing"
   | "originator_unresolvable"
+  | "originator_unauthenticated"
   | "alias_unresolvable"
   // The inbound message was accepted flagged (unauthenticated sender);
   // bouncing it would be backscatter — see dsnDelivery.ts.

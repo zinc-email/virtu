@@ -6,7 +6,16 @@ import {
   makeStubResolver,
   type TestKeyPair,
 } from "./test-fixtures.ts";
-import { DEFAULT_VERIFY_POLICY, mapVerdict, VERDICT_RULES, verifyInbound } from "./verify.ts";
+import { createBulkhead } from "../pipeline/verifyBulkhead.ts";
+import {
+  boundSignatureHeaders,
+  DEFAULT_VERIFY_POLICY,
+  MAX_BODY_HASH_VARIANTS,
+  MAX_DKIM_SIGNATURES,
+  mapVerdict,
+  VERDICT_RULES,
+  verifyInbound,
+} from "./verify.ts";
 
 let initechKey: TestKeyPair;
 
@@ -156,11 +165,12 @@ describe("verifyInbound", () => {
 });
 
 describe("mapVerdict table", () => {
-  test("rules are ordered dmarc-reject, dmarc-quarantine, spf-hardfail", () => {
+  test("rules are ordered dmarc-reject, dmarc-quarantine, spf-hardfail, dkim-body-length-limited", () => {
     expect(VERDICT_RULES.map((r) => r.reason)).toEqual([
       "dmarc-reject",
       "dmarc-quarantine",
       "spf-hardfail",
+      "dkim-body-length-limited",
     ]);
   });
 
@@ -169,6 +179,7 @@ describe("mapVerdict table", () => {
       onDmarcReject: "reject",
       onDmarcQuarantine: "flag",
       onSpfHardFailWithoutDmarc: "flag",
+      onDkimBodyLengthLimited: "flag",
     });
   });
 
@@ -184,5 +195,180 @@ describe("mapVerdict table", () => {
     expect(mapVerdict(res, { ...DEFAULT_VERIFY_POLICY, onDmarcReject: "accept" })).toEqual({
       action: "accept",
     });
+  });
+});
+
+describe("verifyInbound bounds the sender-controlled work (review round 2)", () => {
+  test("DKIM `l=`: a pass over a body prefix is flagged, not accepted", async () => {
+    const covered = "Please find attached.\r\n";
+    const res = await dkimSign(MESSAGE, {
+      signingDomain: "initech.com",
+      selector: "sel1",
+      privateKey: initechKey.privateKeyPem,
+      signatureData: [
+        {
+          signingDomain: "initech.com",
+          selector: "sel1",
+          privateKey: initechKey.privateKeyPem,
+          canonicalization: "relaxed/relaxed",
+          maxBodyLength: covered.length,
+        },
+      ] as never,
+    });
+    const appended = res.signatures + MESSAGE + "PS: wire the money to attacker\r\n";
+    const result = await verifyInbound(SESSION, appended, {
+      resolver: makeStubResolver(zonesFor("reject")),
+    });
+    expect(result.verdict).toEqual({ action: "flag", reason: "dkim-body-length-limited" });
+    // The unlimited signature from signedByInitech still accepts.
+    const clean = await verifyInbound(SESSION, await signedByInitech(), {
+      resolver: makeStubResolver(zonesFor("reject")),
+    });
+    expect(clean.verdict).toEqual({ action: "accept" });
+  });
+
+  test("more DKIM-Signature headers than the cap cost no extra lookups", async () => {
+    const signed = await signedByInitech();
+    const sigLine = signed.slice(0, signed.indexOf(MESSAGE));
+    // 40 copies of the signature, each naming a different selector.
+    const many =
+      Array.from({ length: 40 }, (_, i) => sigLine.replace("s=sel1", `s=sel${i}`)).join("") +
+      MESSAGE;
+    const looked: string[] = [];
+    const stub = makeStubResolver(zonesFor("none"));
+    const resolver: typeof stub = async (name, rrtype) => {
+      if (name.endsWith("._domainkey.initech.com")) looked.push(name);
+      return stub(name, rrtype);
+    };
+    await verifyInbound(SESSION, many, { resolver });
+    expect(new Set(looked).size).toBeLessThanOrEqual(MAX_DKIM_SIGNATURES);
+    expect(boundSignatureHeaders(Buffer.from(signed))).toEqual(Buffer.from(signed));
+  });
+
+  test("a resolver that never answers becomes a 451 within the budget", async () => {
+    const started = Date.now();
+    const result = await verifyInbound(SESSION, await signedByInitech(), {
+      resolver: () => new Promise(() => {}),
+      timeoutMs: 100,
+    });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(result.verdict).toMatchObject({ action: "reject", code: 451, reason: "verify-timeout" });
+    expect(result.prependHeaders).toBe("");
+  });
+
+  test("a saturated bulkhead tempfails before any work", async () => {
+    const bulkhead = createBulkhead(1);
+    expect(bulkhead.tryAcquire()).toBe(true);
+    let lookups = 0;
+    const result = await verifyInbound(SESSION, MESSAGE, {
+      resolver: async () => {
+        lookups++;
+        return [];
+      },
+      bulkhead,
+    });
+    expect(result.verdict).toMatchObject({
+      action: "reject",
+      code: 451,
+      reason: "verify-bulkhead",
+    });
+    expect(lookups).toBe(0);
+    bulkhead.release();
+  });
+});
+
+describe("verifyInbound enforces what mailauth leaves to policy (review round 3)", () => {
+  // SPF fails from here (initech publishes -all for one address), so DMARC
+  // can only pass through an aligned DKIM signature.
+  const ELSEWHERE = { ...SESSION, remoteAddress: "198.51.100.7" };
+
+  async function initechSigned(extra: Record<string, unknown>, headerList?: string) {
+    const res = await dkimSign(MESSAGE, {
+      signingDomain: "initech.com",
+      selector: "sel1",
+      privateKey: initechKey.privateKeyPem,
+      // mailauth's types say string[]; its signer only honours the
+      // colon-separated string form (lib/tools.js getSigningHeaderLines).
+      headerList: headerList as never,
+      signatureData: [
+        {
+          signingDomain: "initech.com",
+          selector: "sel1",
+          privateKey: initechKey.privateKeyPem,
+          canonicalization: "relaxed/relaxed",
+          ...extra,
+        },
+      ] as never,
+    });
+    return res.signatures + MESSAGE;
+  }
+
+  test("a signature whose h= omits From is not a pass (RFC 6376 §5.4)", async () => {
+    const unsigned = await initechSigned({}, "to:subject:date");
+    expect(unsigned).toMatch(/h=[^;]*to/i);
+    expect(unsigned).not.toMatch(/h=[^;]*from/i);
+    const result = await verifyInbound(ELSEWHERE, unsigned, {
+      resolver: makeStubResolver(zonesFor("reject")),
+    });
+    expect(result.verdict).toMatchObject({ action: "reject", code: 550, reason: "dmarc-reject" });
+    // The same message with From signed passes DMARC through DKIM alone.
+    const signed = await verifyInbound(ELSEWHERE, await initechSigned({}), {
+      resolver: makeStubResolver(zonesFor("reject")),
+    });
+    expect(signed.verdict).toEqual({ action: "accept" });
+  });
+
+  test("rsa-sha1 signatures are dropped (RFC 8301)", async () => {
+    const sha1 = await initechSigned({ algorithm: "rsa-sha1" });
+    expect(sha1).toContain("a=rsa-sha1");
+    const result = await verifyInbound(ELSEWHERE, sha1, {
+      resolver: makeStubResolver(zonesFor("reject")),
+    });
+    expect(result.verdict).toMatchObject({ action: "reject", reason: "dmarc-reject" });
+  });
+
+  test("distinct body-hash variants beyond the cap are dropped before any lookup", async () => {
+    const signed = await signedByInitech();
+    const sigLine = signed.slice(0, signed.indexOf(MESSAGE));
+    // Six signatures, each naming its own selector and its own l= value.
+    const many =
+      Array.from({ length: 6 }, (_, i) =>
+        sigLine.replace("s=sel1", `s=sel${i}`).replace("bh=", `l=${100 + i}; bh=`),
+      ).join("") + MESSAGE;
+    const looked = new Set<string>();
+    const stub = makeStubResolver(zonesFor("none"));
+    const resolver: typeof stub = async (name, rrtype) => {
+      if (name.endsWith("._domainkey.initech.com")) looked.add(name);
+      return stub(name, rrtype);
+    };
+    await verifyInbound(SESSION, many, { resolver });
+    expect(looked.size).toBe(MAX_BODY_HASH_VARIANTS);
+  });
+
+  test("the bulkhead slot stays taken until timed-out work settles", async () => {
+    const bulkhead = createBulkhead(1);
+    // Every lookup hangs until told otherwise; mailauth issues several.
+    let open = false;
+    const pending: (() => void)[] = [];
+    const resolver = () =>
+      open
+        ? Promise.reject(new Error("done"))
+        : new Promise<never>((_, reject) => {
+            pending.push(() => reject(new Error("done")));
+          });
+    const result = await verifyInbound(SESSION, await signedByInitech(), {
+      resolver,
+      timeoutMs: 50,
+      bulkhead,
+    });
+    expect(result.verdict).toMatchObject({ code: 451, reason: "verify-timeout" });
+    expect(bulkhead.tryAcquire()).toBe(false);
+    open = true;
+    for (let i = 0; i < 10 && !bulkhead.tryAcquire(); i++) {
+      for (const reject of pending.splice(0)) reject();
+      await Bun.sleep(10);
+    }
+    expect(bulkhead.tryAcquire()).toBe(false); // the one slot is ours now
+    bulkhead.release();
   });
 });

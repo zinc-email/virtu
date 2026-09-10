@@ -17,9 +17,12 @@
  * enqueue sites bypass it on purpose, each bounded elsewhere: transactional
  * code mail (login codes must go out; per-address budget + global ceiling),
  * DSNs (small, and dsnDelivery.ts's own sent_alerts rate control), and
- * operator role mail (the service's own mail to admins). So "at most N
- * pending rows per user" is a bound on what a user can CAUSE, not a queue
- * invariant — enqueue.ts stays dumb by design (PLAN Lane D).
+ * operator role mail (the service's own mail to admins — bounded instead
+ * by its own per-minute budget and size cap, pipeline/roleMailBudget.ts,
+ * and an operator whose own queue is full is left out of the copy set).
+ * So "at most N pending rows per user" is a bound on what a user can
+ * CAUSE, not a queue invariant — enqueue.ts stays dumb by design (PLAN
+ * Lane D).
  */
 
 import { and, count, eq, inArray, sql } from "drizzle-orm";

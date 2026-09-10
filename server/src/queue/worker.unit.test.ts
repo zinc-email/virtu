@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import type { OutboundMessage } from "../db/schema.ts";
 import type { SmtpReply, SmtpSendResult } from "../smtp/index.ts";
+import { parseIpv6 } from "../pipeline/ipAddress.ts";
 import {
   classifySendResult,
   deliverOverSmtp,
@@ -215,5 +216,96 @@ describe("resolveMxTargets", () => {
         throw refused;
       }),
     ).rejects.toThrow("query refused");
+  });
+});
+
+describe("isBlockedAddress classifies IPv6 by value, not spelling", () => {
+  test("every spelling of loopback and unspecified is blocked", () => {
+    for (const ip of ["0:0:0:0:0:0:0:1", "0000::1", "0:0:0:0:0:0:0:0", "::1%lo0"]) {
+      expect(isBlockedAddress(ip)).toBe(true);
+    }
+  });
+
+  test("IPv4-mapped private targets in hex, dotted, and mixed forms are blocked", () => {
+    for (const ip of [
+      "::ffff:7f00:1", // 127.0.0.1
+      "::ffff:0a00:0001", // 10.0.0.1
+      "::ffff:c0a8:1", // 192.168.0.1
+      "::ffff:a9fe:a9fe", // 169.254.169.254 (cloud metadata)
+      "0:0:0:0:0:ffff:10.0.0.1",
+      "::10.0.0.1", // deprecated IPv4-compatible
+      "64:ff9b::7f00:1", // NAT64 of 127.0.0.1
+      "2002:0a00:0001::1", // 6to4 of 10.0.0.1
+      "2001:0:c0a8:1::1", // Teredo server 192.168.0.1
+    ]) {
+      expect(isBlockedAddress(ip)).toBe(true);
+    }
+  });
+
+  test("public addresses in the same forms are allowed", () => {
+    for (const ip of [
+      "::ffff:808:808",
+      "64:ff9b::808:808",
+      "2002:808:808::1",
+      "2001:4860:4860::8888",
+    ]) {
+      expect(isBlockedAddress(ip)).toBe(false);
+    }
+  });
+
+  test("malformed IPv6 is blocked", () => {
+    for (const ip of ["1::2::3", "12345::1", ":::", "::ffff:300.1.1.1", "g::1"]) {
+      expect(isBlockedAddress(ip)).toBe(true);
+    }
+  });
+
+  test("parseIpv6 round-trips the canonical forms", () => {
+    expect(Array.from(parseIpv6("::1")!)).toEqual([...new Array(15).fill(0), 1]);
+    expect(Array.from(parseIpv6("::ffff:127.0.0.1")!).slice(10)).toEqual([255, 255, 127, 0, 0, 1]);
+    expect(parseIpv6("8.8.8.8")).toBeNull();
+  });
+});
+
+describe("deliverOverSmtp refuses an MX exchange that is an IP literal", () => {
+  test("IPv6 literal exchange never reaches the connect", async () => {
+    let looked = 0;
+    const outcome = await deliverOverSmtp(outboundRow({ envelopeTo: "victim@evil.example" }), {
+      heloName: "mail.virtu.email",
+      resolveMx: async () => [{ exchange: "::ffff:0a00:0001", priority: 0 }],
+      resolveHost: async (h) => {
+        looked++;
+        return [h];
+      },
+    });
+    expect(outcome).toMatchObject({ kind: "permanent" });
+    expect((outcome as { error: string }).error).toContain("IP literal");
+    expect(looked).toBe(0);
+  });
+});
+
+describe("deliverOverSmtp delivery deadline", () => {
+  test("a destination that greets and then says nothing is a transient timeout that signals a pause", async () => {
+    const net = await import("node:net");
+    const tarpit = net.createServer((sock) => {
+      sock.write("220 tarpit ready\r\n"); // then never answer EHLO
+    });
+    await new Promise<void>((r) => tarpit.listen(0, "127.0.0.1", () => r()));
+    const port = (tarpit.address() as { port: number }).port;
+    // connectSmtp always dials 25, so route through resolveHost → a loopback
+    // literal and monkey-patch the port via the private-target allowance.
+    const started = Date.now();
+    const { deliverOverSmtp: deliver } = await import("./worker.ts");
+    const outcome = await deliver(outboundRow({ envelopeTo: "x@tarpit.example" }), {
+      heloName: "mail.virtu.email",
+      resolveMx: async () => [{ exchange: "127.0.0.1", priority: 0 }],
+      allowPrivateTargets: true,
+      timeoutMs: 10_000,
+      deadlineMs: 300,
+      port,
+    });
+    tarpit.close();
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(outcome.kind).toBe("transient");
+    expect((outcome as { timeout?: unknown }).timeout).toMatchObject({ step: "ehlo" });
   });
 });

@@ -95,6 +95,7 @@ export const AdminBounceSkipReason = z
     "raw_cleared",
     "email_log_missing",
     "originator_unresolvable",
+    "originator_unauthenticated",
     "alias_unresolvable",
     "flagged_inbound",
     "in_flight",

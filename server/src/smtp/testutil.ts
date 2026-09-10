@@ -51,6 +51,16 @@ export class RawClient {
     this.socket.write(s);
   }
 
+  /** Bytes queued in this client's own write buffer (what the server has not taken). */
+  get writableLength(): number {
+    return this.socket.writableLength;
+  }
+
+  /** Stop reading replies (a peer that pipelines and never reads). */
+  pauseReading(): void {
+    this.socket.pause();
+  }
+
   /** All text received so far. */
   get all(): string {
     return this.received;

@@ -11,6 +11,7 @@ import type { SmtpParams, SmtpReply } from "./types.ts";
 const CR = 0x0d;
 const LF = 0x0a;
 const DOT = 0x2e;
+const SP = 0x20;
 
 /** Command lines longer than this (content, excluding line break) are refused. */
 export const MAX_COMMAND_LINE = 2048;
@@ -52,6 +53,16 @@ export class DataDecoder {
    * command line that opened the transaction did (takeLine strips it).
    */
   private prevCrlf = true;
+  /**
+   * Still inside the header section (before the first empty line). A bare
+   * CR there is replaced by a space: our parser (and mailauth's) ends a
+   * header at LF, but some receivers end one at a lone CR too, and that
+   * disagreement is a header-injection vector — `Subject: x<CR>From: …`
+   * is one field to the whitelist and the signer, and a second From to a
+   * receiver that splits on CR. With the CR gone there is nothing to
+   * disagree about. Bodies keep bare CR as content (Postfix parity).
+   */
+  private inHeaders = true;
   /** Normalized message size in bytes (approximate once discarding). */
   size = 0;
   tooBig = false;
@@ -105,7 +116,11 @@ export class DataDecoder {
       }
       // A "." line off a bare LF on either side is content: unstuffed to an
       // empty line, exactly like any other dot-led line.
-      const line = content[0] === DOT ? content.subarray(1) : content;
+      let line = content[0] === DOT ? content.subarray(1) : content;
+      if (this.inHeaders) {
+        if (line.length === 0) this.inHeaders = false;
+        else if (line.includes(CR)) line = Buffer.from(line.map((b) => (b === CR ? SP : b)));
+      }
       this.size += line.length + 2;
       if (line.length > this.maxLineLength) {
         this.lineTooLong = true;
@@ -194,16 +209,36 @@ const REPLY_LINE = /^(\d{3})([ -])?(.*)$/s;
 const ENHANCED = /^([245])\.\d{1,3}\.\d{1,3}(?=\s|$)/;
 
 /**
+ * Reply text the client will hold for a server. A reply is a few lines of
+ * a few dozen bytes; a server that streams `220-` lines forever, or one
+ * line with no end, is the peer choosing how much memory we spend
+ * (Postfix smtp_chat.c: "limiting the amount of multi-line text that we
+ * are willing to store"). Past either bound the reply is unparseable and
+ * the connection is torn down.
+ */
+export const MAX_REPLY_LINE = 2048;
+export const MAX_REPLY_LINES = 64;
+
+/**
  * Incremental reply parser for the client: feed complete lines (sans CRLF),
- * get the full SmtpReply once the final line arrives.
+ * get the full SmtpReply once the final line arrives. Throws on a line that
+ * is not an SMTP reply line, longer than {@link MAX_REPLY_LINE}, or the
+ * line past {@link MAX_REPLY_LINES} of one reply.
  */
 export class ReplyParser {
   private lines: string[] = [];
 
   /** Returns the completed reply, or null if more lines are needed. */
   feed(rawLine: string): SmtpReply | null {
+    if (rawLine.length > MAX_REPLY_LINE) {
+      throw new Error(`SMTP reply line too long (${rawLine.length} bytes)`);
+    }
     const m = REPLY_LINE.exec(rawLine);
     if (!m) throw new Error(`Unparseable SMTP reply line: ${JSON.stringify(rawLine)}`);
+    if (this.lines.length >= MAX_REPLY_LINES) {
+      this.lines = [];
+      throw new Error(`SMTP reply has more than ${MAX_REPLY_LINES} lines`);
+    }
     const code = Number(m[1]);
     const text = m[3] ?? "";
     this.lines.push(text);

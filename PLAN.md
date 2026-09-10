@@ -523,4 +523,35 @@ Settled (2026-08-08):
     ops is deferred to Lane K P2 with the `sudoGuard.ts` seam extracted
     now. See Lane K.
 
+17. **The mail path bounds what a peer can make it hold, and budgets
+    count the transaction** (2026-09-09, from the round-2 review in
+    `plans/2026-09-08-security-review-mail.md`). The SMTP server pauses
+    the socket for every hook and honours its own write backpressure —
+    TCP's window is the flood control, never a buffer of ours. Every
+    inbound budget (per-mailbox copies, per-owner queue rows and bytes,
+    catch-all mints per domain, role-address messages per minute) is
+    decided against what the current transaction has already accepted,
+    before any row exists; RCPT never writes an alias row. Forward-failure
+    DSNs go to the envelope return path only when SPF vouched for it, and
+    never to the header From. deliverd treats a destination that says
+    nothing as one that said 421.
+
+18. **The memory bound is arithmetic, every peer action is counted, and
+    RFC floors live in code** (2026-09-09, from the round-3 review in
+    `plans/2026-09-09-security-review-postfix-lens.md`, which holds virtu
+    against Postfix's and dkim-milter's explicit defences). Postfix's
+    memory bound is its process count; ours is one process, so it is
+    written down instead: one in-flight DATA byte budget shared by every
+    listener (`smtp/dataBudget.ts`), sized against `MAILD_MEM_LIMIT`, and
+    a cap on every other buffer a peer can fill — the outbound client's
+    reply buffer included. What a peer does is counted, not only what it
+    gets wrong: junk commands, total commands, errors (with a sleep past
+    the soft limit), bytes per second in DATA. A client is a /64, not an
+    address. Rules the RFCs make mandatory but `mailauth` leaves to policy
+    (From must be signed, exactly one From, no sha1, a signature expiry)
+    are enforced before mailauth sees the message, so the policy never
+    reads "not evaluated" as "nothing to enforce". And whatever changes
+    the bytes — CR normalization, line folding — happens before signing,
+    so the signature covers exactly what goes on the wire.
+
 Open: none.

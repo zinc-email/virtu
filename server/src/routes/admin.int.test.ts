@@ -263,7 +263,15 @@ async function forwardVerpFixture(status: "pending" | "failed" = "pending") {
     .returning({ id: contacts.id });
   const [logRow] = await db
     .insert(emailLogs)
-    .values({ userId: ownerRow!.id, contactId: contactRow!.id, aliasId: alias.id })
+    .values({
+      userId: ownerRow!.id,
+      contactId: contactRow!.id,
+      aliasId: alias.id,
+      // The DSN goes to the SPF-authenticated return path (dsnDelivery.ts);
+      // here that is the same address the contact was minted from.
+      envelopeFrom: websiteEmail,
+      senderAuthenticated: true,
+    })
     .returning();
   const verp = buildVerp({
     type: "bounce_forward",

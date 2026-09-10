@@ -518,3 +518,195 @@ describe("smtp server: connection cap", () => {
     expect(line).toContain("Too many concurrent connections");
   });
 });
+
+describe("smtp server: backpressure", () => {
+  // The peer's view of TCP flow control: once the server stops reading, the
+  // kernel window closes and the peer's own writes pile up on ITS side.
+  // 32 MiB is far beyond any loopback socket buffer, so "most of it is still
+  // in the client's write queue" means the server is not draining it.
+  const FLOOD = 32 * 1024 * 1024;
+
+  test("input sent while a hook is running stays on the peer's side", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { client } = await setup({
+      onData: async () => {
+        await gate;
+        return { accept: true };
+      },
+    });
+    client.write("EHLO x\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await client.waitFor(/^354 /);
+    client.write("Subject: hi\r\n\r\nbody\r\n.\r\n");
+    await Bun.sleep(100); // the hook is now parked
+    client.write(Buffer.alloc(FLOOD, "NOOP\r\n").toString("latin1"));
+    await Bun.sleep(300);
+    expect(client.writableLength).toBeGreaterThan(FLOOD / 2);
+    release();
+    await client.waitFor(/^250 2\.6\.0/, 10_000);
+  }, 20_000);
+
+  test("a peer that never reads replies is not read either", async () => {
+    const { client } = await setup();
+    client.write("EHLO x\r\n");
+    await client.waitFor(/^250 /);
+    client.pauseReading();
+    client.write(Buffer.alloc(FLOOD, "NOOP\r\n").toString("latin1"));
+    await Bun.sleep(500);
+    expect(client.writableLength).toBeGreaterThan(FLOOD / 2);
+  }, 20_000);
+
+  test("session time limit closes a peer that stays active forever", async () => {
+    const { client } = await setup({ commandTimeoutMs: 5000, sessionTimeoutMs: 400 });
+    // Real commands, so the idle timer keeps re-arming; only the absolute
+    // deadline can end this session.
+    const timer = setInterval(() => client.write("NOOP\r\n"), 50);
+    try {
+      await client.waitFor(/^421 4\.4\.2 .*session time limit/, 3000);
+      await client.waitForClose();
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  test("a byte-at-a-time dribble does not count as command activity", async () => {
+    const { client } = await setup({ commandTimeoutMs: 200, sessionTimeoutMs: 60_000 });
+    const timer = setInterval(() => client.write("N"), 50);
+    try {
+      await client.waitFor(/^421 4\.4\.2 .*timeout/, 3000);
+      await client.waitForClose();
+    } finally {
+      clearInterval(timer);
+    }
+  });
+});
+
+describe("smtp server: per-session and process-wide bounds (review round 3)", () => {
+  test("junk commands past the limit count as errors, then 421", async () => {
+    const { client } = await setup({ maxJunkCommands: 3, maxErrors: 2, errorSleepMs: 0 });
+    client.write("EHLO x\r\n"); // junk 1
+    await client.waitFor(/^250 /);
+    for (let i = 0; i < 4; i++) {
+      client.write("NOOP\r\n"); // junk 2, 3, then 4 and 5 are errors 1 and 2 (still answered)
+      await client.waitFor(/^250 2\.0\.0/);
+    }
+    client.write("NOOP\r\n"); // error 3 > maxErrors
+    await client.waitFor(/^421 4\.7\.0 .*too many errors/);
+    await client.waitForClose();
+  });
+
+  test("past the soft error limit every command waits out the error sleep", async () => {
+    const { client } = await setup({ softErrorLimit: 1, errorSleepMs: 300 });
+    client.write("BOGUS\r\n");
+    await client.waitFor(/^500 /);
+    const started = Date.now();
+    client.write("NOOP\r\n");
+    await client.waitFor(/^250 2\.0\.0/);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+  });
+
+  test("a session has a total command ceiling", async () => {
+    const { client } = await setup({ maxCommands: 3, maxJunkCommands: 1000 });
+    for (let i = 0; i < 3; i++) {
+      client.write("NOOP\r\n");
+      await client.waitFor(/^250 2\.0\.0/);
+    }
+    client.write("NOOP\r\n");
+    await client.waitFor(/^421 4\.7\.0 .*too many commands/);
+    await client.waitForClose();
+  });
+
+  test("the DATA byte budget refuses DATA while spent and cuts a transfer that would overrun it", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { port, client } = await setup({
+      maxDataBytesInFlight: 1000,
+      onData: async () => {
+        await gate;
+        return { accept: true };
+      },
+    });
+    // Session 1 parks 600 bytes in the DATA hook.
+    client.write("EHLO x\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await client.waitFor(/^354 /);
+    client.write(`Subject: hi\r\n\r\n${"x".repeat(580)}\r\n.\r\n`);
+    await Bun.sleep(100);
+
+    // Session 2 asks for DATA with 400 bytes left: allowed, then cut mid-transfer.
+    const second = await RawClient.connect(port);
+    clients.push(second);
+    await second.waitFor(/^220 /);
+    second.write("EHLO y\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await second.waitFor(/^354 /);
+    second.write(`Subject: big\r\n\r\n${"y".repeat(2000)}\r\n.\r\n`);
+    await second.waitFor(/^421 4\.3\.1 .*insufficient system storage/);
+    await second.waitForClose();
+
+    // Session 1 completes; its bytes are released and a new DATA is fine.
+    release();
+    await client.waitFor(/^250 2\.6\.0/);
+    client.write("MAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await client.waitFor(/^354 /);
+    client.write("Subject: again\r\n\r\nsmall\r\n.\r\n");
+    await client.waitFor(/^250 2\.6\.0/);
+  });
+
+  test("DATA refused with 452 while the budget is fully spent", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { port, client } = await setup({
+      maxDataBytesInFlight: 100,
+      onData: async () => {
+        await gate;
+        return { accept: true };
+      },
+    });
+    client.write("EHLO x\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await client.waitFor(/^354 /);
+    // Exactly 100 bytes: 15 of header + blank line, 80 of body, 5 of terminator.
+    client.write(`Subject: hi\r\n\r\n${"x".repeat(80)}\r\n.\r\n`);
+    await Bun.sleep(100);
+    const second = await RawClient.connect(port);
+    clients.push(second);
+    await second.waitFor(/^220 /);
+    second.write("EHLO y\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await second.waitFor(/^452 4\.3\.1 /);
+    release();
+    await client.waitFor(/^250 2\.6\.0/);
+  });
+
+  test("a DATA dribble below the minimum data rate is cut in about one timeout", async () => {
+    const { client } = await setup({ dataTimeoutMs: 300, minDataRate: 1_000_000 });
+    client.write("EHLO x\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await client.waitFor(/^354 /);
+    const started = Date.now();
+    const timer = setInterval(() => client.write("z"), 50);
+    try {
+      await client.waitFor(/^421 4\.4\.2 .*timeout/, 3000);
+      await client.waitForClose();
+    } finally {
+      clearInterval(timer);
+    }
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  test("a DATA transfer at the minimum data rate outlives the plain timeout", async () => {
+    const { client } = await setup({ dataTimeoutMs: 200, minDataRate: 100 });
+    client.write("EHLO x\r\nMAIL FROM:<a@b.c>\r\nRCPT TO:<r@b.c>\r\nDATA\r\n");
+    await client.waitFor(/^354 /);
+    client.write("Subject: slow\r\n\r\n");
+    // 100 bytes every 100 ms is above 100 B/s; 800 ms is four plain timeouts.
+    for (let i = 0; i < 8; i++) {
+      client.write(`${"w".repeat(98)}\r\n`);
+      await Bun.sleep(100);
+    }
+    client.write(".\r\n");
+    await client.waitFor(/^250 2\.6\.0/);
+  });
+});

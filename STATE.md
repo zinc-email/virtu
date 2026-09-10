@@ -430,6 +430,136 @@ channel remains, by design.
    `/webhooks/stripe` (outside `/api` by design) no longer 404 on the www
    file server — still verify on lmnop before enabling billing on zinc.
 
+### Mail-path review batch, round 2 (2026-09-09)
+
+Second red-team pass, mail side only, the night before launch week;
+findings and mechanisms in `plans/2026-09-08-security-review-mail.md`. All
+five P0s and all nine P1s landed 2026-09-09; the P2 list there is open.
+Verified: `just check`, the int tier (211, incl. the new
+`rcptBudgets.int.test.ts` and `sendQuota.int.test.ts`), the story tier
+(31/31 in the rebuilt test net), and the two OOM floods re-measured against
+the server process alone (20 MB → 22 MB and 52 MB, from 2.2 GB and 2.5 GB).
+
+1. **SMTP server backpressure** (`smtp/server.ts`). The socket is paused
+   for every awaited hook and while our own write buffer needs draining;
+   input is a chunk list joined once per pump run, never a `Buffer.concat`
+   per segment; a peer can hold at most `maxPipelinedBytes` (1 MiB) beyond
+   what the pump consumed. An absolute `sessionTimeoutMs` (30 min) ends a
+   session no matter how active it is, the command idle timer re-arms only
+   on a consumed line (a byte-per-period dribble is not activity), and
+   `maxConnectionsPerIp` is 20. Duplicate RCPTs collapse to one recipient
+   (the peer still gets its 250). `docker-compose.serve.yml` gives maild
+   `mem_limit` 1 GiB as the safety net. Pinned in `server.unit.test.ts`
+   (both floods stay on the peer's side; the dribble; the deadline).
+2. **Egress guard by value** (`queue/worker.ts` `parseIpv6` +
+   `isBlockedIpv6`): IPv6 is parsed to bytes before classifying, so every
+   spelling of loopback / IPv4-mapped / NAT64 / 6to4 / Teredo private
+   targets is refused, and an MX exchange that is an IP literal is refused
+   outright.
+3. **Budgets count the transaction and run before any row**
+   (`pipeline/policy.ts`). `evaluateRcpt` takes what the transaction has
+   already accepted (copies per mailbox, rows and bytes per owner — the mx
+   keeps it per session at RCPT and accumulates it with the real size at
+   DATA). Catch-all: the budgets and a new per-domain hourly mint cap
+   (`CATCH_ALL_MINTS_PER_HOUR`, 50) are decided on the would-be mailbox
+   first; RCPT never writes the alias row (minted at DATA); over-length or
+   non-ASCII localparts are plain "user unknown". Role addresses: a
+   per-localpart trailing-minute budget (`OPERATOR_MAIL_PER_MINUTE`, 10,
+   in memory — `pipeline/roleMailBudget.ts`), a size cap
+   (`OPERATOR_MAIL_MAX_BYTES`, 5 MiB → 552, or the operator copies left
+   out when user recipients remain), and an operator whose own queue is
+   full is left out of the copy set. The per-alias inbound count is rows
+   per mailbox group, never distinct Message-IDs.
+4. **verifyInbound is bounded** (`mailauth/verify.ts`): at most 8
+   DKIM-Signature and 10 ARC sets are evaluated (extras stripped from the
+   verification input only), a 20 s budget and a 16-wide bulkhead answer
+   `451 4.7.1` instead of stalling, and a DKIM pass that covered only a
+   body prefix (`l=`) is the new `flag` rule `dkim-body-length-limited`.
+5. **Bare CR in the header section becomes a space** (`smtp/wire.ts`
+   `DataDecoder`): a receiver that ends a header at a lone CR can no longer
+   see a From/Reply-To/Received our whitelist and signer never saw. Bodies
+   keep bare CR (Postfix parity).
+6. **Send quota is serialized per user** (`submission.ts`
+   `withUserSendLock`): the quota check and the rows it counts run one
+   submission at a time per user (one maild process; a second process
+   would at worst double the quota).
+7. **Forward-failure DSNs go to the return path, and only when SPF
+   vouched for it** (migration `0003_email-logs-return-path`:
+   `email_logs.envelope_from` + `sender_authenticated`, written by the mx;
+   `pipeline/dsnDelivery.ts`). The header-From contact address is never a
+   DSN recipient. Skip reason `originator_unauthenticated` is in the admin
+   bounce response enum (spec regenerated).
+8. **deliverd tarpit bounds** (`queue/worker.ts`): a whole-attempt
+   `deadlineMs` (5 min) closes the socket, a timeout is a deferral signal
+   that pauses the destination like a 421 (recorded with code 0), and a
+   batch runs its destination domains concurrently (`concurrency`, 8) with
+   one row at a time per domain, re-reading the pause map per row.
+9. **Per-message work is capped** (`mail/rewriteForward.ts`,
+   `mail/headers.ts`): the first 20 To/Cc entries map to contacts and the
+   rest ride verbatim, only the newest 20 References ids are translated
+   (sequentially), the whitelist is one linear pass (`HeaderBlock.retain`),
+   and more than `MAX_HEADER_FIELDS` (2000) is `550 5.6.0` at both
+   entrypoints.
+
+### Mail-path review batch, round 3: the Postfix lens (2026-09-09)
+
+Third pass: catalogue the explicitly defensive mechanisms in the Postfix
+3.12 and dkim-milter/viadkim sources (cloned under `tmp/`, gitignored),
+then hold virtu against them — findings and the design reflexes behind
+them in `plans/2026-09-09-security-review-postfix-lens.md`. The P0 and all
+seven P1s landed 2026-09-09; the P2 list there is open. Verified: `just
+check`, the int tier (incl. the new From-cardinality case in
+`rcptBudgets.int.test.ts`), the story tier in the rebuilt test net.
+Smuggling in both directions, backscatter, VERP, loop injection and the
+virtu/mailauth parser differential all held up under direct attack.
+
+1. **deliverd's SMTP client holds a bounded reply** (`smtp/client.ts`,
+   `smtp/wire.ts`): 64 KiB of unread server bytes, 2048 per reply line, 64
+   lines per reply; past any of them the connection is torn down as a
+   `PROTOCOL` transport failure (transient for the queue). Was the outbound
+   mirror of round 2's P0 #1: one alias pointed at a hostile MX streaming
+   `220-` lines OOM-killed maild in seconds.
+2. **Per-session command accounting** (`smtp/server.ts`): junk commands
+   (NOOP/RSET/HELO/EHLO/VRFY) past `maxJunkCommands` (100) count as errors,
+   past `softErrorLimit` (5) every command waits `errorSleepMs` (1 s) with
+   the socket paused, and `maxCommands` (10 000) ends the session with
+   `421 4.7.0`. Successful commands never touched the error count before.
+3. **The in-flight DATA budget and a minimum data rate**
+   (`smtp/dataBudget.ts`, `smtp/server.ts`): every SMTP listener in the
+   process shares one byte budget (`SMTP_MAX_DATA_BYTES_IN_FLIGHT`, 256
+   MiB) reserved per DATA chunk and released when the message is queued or
+   refused — `452 4.3.1` at DATA when spent, `421 4.3.1` mid-transfer. The
+   DATA deadline is credited `bytes / minDataRate` (500 B/s) per chunk,
+   capped at `dataTimeoutMs`, instead of re-armed per byte. Memory is now
+   arithmetic: budget × ~1.5 + baseline < `MAILD_MEM_LIMIT`.
+4. **Client identity is a prefix** (`pipeline/ipAddress.ts` `clientKey`,
+   home of `parseIpv6` now): the per-client connection cap and the AUTH
+   throttle key on the /64 for IPv6, the exact address for IPv4 (mapped
+   addresses folded). README "Deploy" has the once-per-box check that
+   Docker's IPv6 port publishing preserves the source address.
+5. **Exactly one From** (`mx.ts`, `submission.ts`): any other count is
+   `550 5.6.0` before verification. mailauth declines to evaluate DMARC
+   for ≠1 From and the policy read that as "no record", so a second From
+   switched `p=reject` off.
+6. **Signatures are screened before mailauth** (`mailauth/verify.ts`
+   `boundSignatureHeaders`): `h=` without From (RFC 6376 §5.4) and
+   `rsa-sha1` (RFC 8301) are dropped, and only the first
+   `MAX_BODY_HASH_VARIANTS` (2) distinct (body canon, hash, `l=`) triples
+   are kept, so a message costs at most two body passes on the event loop.
+   The bulkhead slot is now held until `authenticate` settles, so work the
+   20 s budget abandoned still counts against concurrency.
+7. **Lines over 998 octets are folded before signing** (`mail/lineLength.ts`
+   `foldLongLines`, applied in `signOutbound` and both unsigned fallbacks):
+   at the last whitespace when the remainder has content, else CRLF+SPACE
+   at 998 on a UTF-8 boundary — Postfix's `smtp_line_length_limit`.
+8. **Our DKIM signatures expire** (`mailauth/sign.ts`): `x=` seven days
+   after `t=`. Found on the way: mailauth honours `headerList` only as a
+   colon-separated string while its types say `string[]`, so the SimpleLogin
+   fallback chain had been re-signing the default header set on every
+   retry; it now passes the string. From is not oversigned — mailauth
+   builds `h=` from the headers it finds and has no oversign hook (P2 in
+   the plan doc).
+
 ## Not started
 
 - **Backups** — planned 2026-09-02 in **`plans/backups.md`**: nightly

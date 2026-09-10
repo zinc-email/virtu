@@ -18,6 +18,7 @@
 
 import { dkimSign, sealMessage } from "mailauth";
 import { type HeaderBlock, serializeMessage } from "../mail/headers.ts";
+import { foldLongLines } from "../mail/lineLength.ts";
 import type { ArcContext } from "./verify.ts";
 
 /** One DKIM signing key. */
@@ -100,6 +101,14 @@ interface MailauthSignError {
   err: Error;
 }
 
+/**
+ * How long our DKIM signatures stay valid (`x=`). A signature without an
+ * expiry vouches for a captured message forever; RFC 6376 §3.5 recommends
+ * setting one. Seven days covers the RFC 5321 retry window (Postfix and
+ * viadkim use five) with room for a slow receiver.
+ */
+export const DKIM_SIGNATURE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Run one dkimSign pass over `message` for `keys` with an optional headerList. */
 async function signPass(
   message: Buffer,
@@ -107,6 +116,16 @@ async function signPass(
   headerList: readonly string[] | undefined,
   signTime: Date | undefined,
 ): Promise<{ signatures: string; errors: MailauthSignError[] }> {
+  // Two places mailauth's published option type and its signer disagree
+  // (lib/dkim/dkim-signer.js, lib/tools.js getSigningHeaderLines): the
+  // signer reads `expires`, which the type omits, and honours `headerList`
+  // only as a colon-separated string, where the type says string[] (an
+  // array is silently ignored and the default set signed instead). Spread
+  // both from a plain record so no literal is asserted over.
+  const untyped: Record<string, Date | string> = {
+    expires: new Date((signTime ?? new Date()).getTime() + DKIM_SIGNATURE_LIFETIME_MS),
+  };
+  if (headerList !== undefined) untyped.headerList = headerList.join(":");
   const res = await dkimSign(message, {
     // DkimSigner reads signatureData only; the top-level key fields are
     // present to satisfy the declared option type and are ignored upstream.
@@ -120,8 +139,8 @@ async function signPass(
       algorithm: k.algorithm,
       canonicalization: k.canonicalization ?? "relaxed/relaxed",
     })) as never,
-    headerList: headerList === undefined ? undefined : [...headerList],
     signTime,
+    ...untyped,
   });
   return {
     signatures: res.signatures.trim() === "" ? "" : res.signatures,
@@ -146,7 +165,9 @@ export async function signOutbound(
   if (opts.dkimKeys.length === 0) {
     throw new Error("signOutbound requires at least one DKIM key");
   }
-  const base = Buffer.from(serializeMessage(headers, body));
+  // Fold before signing: the signature must cover the bytes that go on the
+  // wire, and lines over 998 octets are folded there (mail/lineLength.ts).
+  const base = Buffer.from(foldLongLines(serializeMessage(headers, body)));
 
   // DKIM: mailauth's default (full) header set first, then the SimpleLogin
   // fallback chains for any key that failed the previous attempt.

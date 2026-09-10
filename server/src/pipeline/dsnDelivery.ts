@@ -19,7 +19,7 @@
 import { eq } from "drizzle-orm";
 import { config } from "../config.ts";
 import type { Db } from "../db/index.ts";
-import { aliases, contacts, type EmailLog, mailboxes } from "../db/schema.ts";
+import { aliases, type EmailLog, mailboxes } from "../db/schema.ts";
 import { createLogger } from "../log.ts";
 import { buildDsn, sanitizeForwardDiagnostic } from "../mail/dsn.ts";
 import { parseMessage, serializeMessage, type VerpInfo } from "../mail/index.ts";
@@ -41,12 +41,13 @@ export async function resolveDsnRecipient(
   verp: VerpInfo,
 ): Promise<string | null> {
   if (verp.type === "bounce_forward") {
-    const rows = await db
-      .select({ websiteEmail: contacts.websiteEmail })
-      .from(contacts)
-      .where(eq(contacts.id, log.contactId))
-      .limit(1);
-    return rows[0]?.websiteEmail ?? null;
+    // The return path, and only when SPF vouched for it. The contact's
+    // address is the header From — the sender's choice, so a DSN there is
+    // backscatter to whoever they named (mx.ts records both facts).
+    if (log.envelopeFrom === null || log.envelopeFrom === "" || !log.senderAuthenticated) {
+      return null;
+    }
+    return log.envelopeFrom;
   }
   if (log.mailboxId === null) return null;
   const rows = await db
@@ -73,7 +74,11 @@ export type FailureDsnOutcome =
   | { outcome: "suppressed" }
   | {
       outcome: "skipped";
-      reason: "originator_unresolvable" | "alias_unresolvable" | "flagged_inbound";
+      reason:
+        | "originator_unresolvable"
+        | "originator_unauthenticated"
+        | "alias_unresolvable"
+        | "flagged_inbound";
     };
 
 /** Compose, sign and enqueue the DSN for one failed row. */
@@ -100,9 +105,19 @@ export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<Fa
 
   const recipient = await resolveDsnRecipient(db, emailLog, verp);
   if (recipient === null) {
+    // A forward whose envelope sender SPF could not vouch for: the failure
+    // is still booked against the mailbox; only the outbound DSN is
+    // withheld (a DSN to an unauthenticated return path is backscatter).
+    const reason =
+      verp.type === "bounce_forward" &&
+      emailLog.envelopeFrom !== null &&
+      emailLog.envelopeFrom !== "" &&
+      !emailLog.senderAuthenticated
+        ? "originator_unauthenticated"
+        : "originator_unresolvable";
     dsnTotal.inc({ outcome: "skipped" });
-    logger.info("dsn_skipped", { queueId: row.id, reason: "originator_unresolvable" });
-    return { outcome: "skipped", reason: "originator_unresolvable" };
+    logger.info("dsn_skipped", { queueId: row.id, reason });
+    return { outcome: "skipped", reason };
   }
 
   let failedRecipient = row.envelopeTo;

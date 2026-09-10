@@ -61,3 +61,5 @@ export type {
   SmtpSendResult,
   SmtpRcptResult,
 } from "./types.ts";
+
+export { createDataBudget, type DataBudget, processDataBudget } from "./dataBudget.ts";

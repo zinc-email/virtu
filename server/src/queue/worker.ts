@@ -17,10 +17,12 @@
  */
 
 import { promises as dns } from "node:dns";
+import net from "node:net";
 import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { type OutboundMessage, outboundMessages } from "../db/schema.ts";
 import { createLogger, type Logger } from "../log.ts";
+import { parseIpv6 } from "../pipeline/ipAddress.ts";
 import {
   destinationPausesTotal,
   providerFor,
@@ -41,6 +43,7 @@ import {
   type SmtpSendResult,
 } from "../smtp/index.ts";
 import { backoffDelayMs } from "./backoff.ts";
+import type { DeliveryStep } from "../db/schema.ts";
 import {
   type DeliveryReply,
   destinationDomain,
@@ -83,6 +86,13 @@ export type DeliveryOutcome =
        * reply metrics and the domain pause (destinationThrottle.ts).
        */
       reply?: DeliveryReply;
+      /**
+       * The attempt ended on a timeout (connect, a reply, or the whole
+       * delivery deadline) rather than a reply. A destination that accepts
+       * the connection and then says nothing is the tarpit shape; it pauses
+       * the domain like a 421 would, so its rows stop occupying the worker.
+       */
+      timeout?: { step: DeliveryStep; text: string };
     };
 
 /** Format one SMTP reply for last_error. */
@@ -181,7 +191,10 @@ function isBlockedIpv4(ip: string): boolean {
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
     return true; // unparseable => refuse
   }
-  const [a, b] = parts as [number, number, number, number];
+  return isBlockedIpv4Octets(parts as [number, number, number, number]);
+}
+
+function isBlockedIpv4Octets([a, b]: [number, number, number, number]): boolean {
   if (a === 0) return true; // 0.0.0.0/8 "this network"
   if (a === 10) return true; // 10/8 private
   if (a === 127) return true; // 127/8 loopback
@@ -192,26 +205,60 @@ function isBlockedIpv4(ip: string): boolean {
   return false;
 }
 
+function ipv4Octets(bytes: Uint8Array, offset: number): [number, number, number, number] {
+  return [bytes[offset]!, bytes[offset + 1]!, bytes[offset + 2]!, bytes[offset + 3]!];
+}
+
+/** IPv6 addresses deliverd must never open an SMTP connection to (by value). */
+function isBlockedIpv6(bytes: Uint8Array): boolean {
+  const allZeroThrough = (end: number) => bytes.slice(0, end).every((b) => b === 0);
+  // :: (unspecified) and ::1 (loopback)
+  if (allZeroThrough(15) && (bytes[15] === 0 || bytes[15] === 1)) return true;
+  // ::ffff:a.b.c.d — IPv4-mapped (any spelling: the bytes decide)
+  if (allZeroThrough(10) && bytes[10] === 0xff && bytes[11] === 0xff) {
+    return isBlockedIpv4Octets(ipv4Octets(bytes, 12));
+  }
+  // ::a.b.c.d — deprecated IPv4-compatible; nothing legitimate uses it
+  if (allZeroThrough(12)) return true;
+  // 64:ff9b::/96 — NAT64 well-known prefix: the embedded IPv4 decides
+  if (
+    bytes[0] === 0 &&
+    bytes[1] === 0x64 &&
+    bytes[2] === 0xff &&
+    bytes[3] === 0x9b &&
+    bytes.slice(4, 12).every((b) => b === 0)
+  ) {
+    return isBlockedIpv4Octets(ipv4Octets(bytes, 12));
+  }
+  // 2002::/16 — 6to4: the embedded IPv4 decides
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) return isBlockedIpv4Octets(ipv4Octets(bytes, 2));
+  // 2001:0::/32 — Teredo: the server IPv4 decides (the client one is obfuscated)
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0 && bytes[3] === 0) {
+    return isBlockedIpv4Octets(ipv4Octets(bytes, 4));
+  }
+  if ((bytes[0]! & 0xfe) === 0xfc) return true; // fc00::/7 unique-local
+  if (bytes[0] === 0xfe && (bytes[1]! & 0xc0) === 0x80) return true; // fe80::/10 link-local
+  return false;
+}
+
 /**
  * True for addresses deliverd must never connect to: loopback, RFC1918
  * private, link-local, CGNAT, unspecified — and their IPv6 equivalents
  * (loopback ::1, unspecified ::, unique-local fc00::/7, link-local fe80::/10),
- * plus IPv4-mapped IPv6 (::ffff:a.b.c.d). This is the SSRF guard: a recipient
+ * plus every IPv6 form that embeds an IPv4 (mapped ::ffff:a.b.c.d in any
+ * spelling, NAT64, 6to4, Teredo). This is the SSRF guard: a recipient
  * domain whose MX (or implicit-MX A record) points at the internal network
- * would otherwise make deliverd open a blind SMTP connection there. Anything
- * unparseable is treated as blocked (fail closed).
+ * would otherwise make deliverd open a blind SMTP connection there. The
+ * decision is made on the parsed bytes, never on the text — `dns.lookup` on
+ * an IP-literal MX hands back whatever spelling the zone published.
+ * Anything unparseable is treated as blocked (fail closed).
  */
 export function isBlockedAddress(ip: string): boolean {
   const addr = ip.trim().toLowerCase();
   if (addr === "") return true;
   if (addr.includes(":")) {
-    if (addr === "::" || addr === "::1") return true;
-    const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(addr);
-    if (mapped !== null) return isBlockedIpv4(mapped[1]!);
-    const head = addr.split(":")[0] ?? "";
-    if (/^f[cd][0-9a-f]{0,2}$/.test(head)) return true; // fc00::/7 unique-local
-    if (/^fe[89ab][0-9a-f]?$/.test(head)) return true; // fe80::/10 link-local
-    return false;
+    const bytes = parseIpv6(addr);
+    return bytes === null ? true : isBlockedIpv6(bytes);
   }
   return isBlockedIpv4(addr);
 }
@@ -220,10 +267,19 @@ export function isBlockedAddress(ip: string): boolean {
 export interface SmtpDeliveryOptions {
   /** EHLO name (config.mailHostname). */
   heloName: string;
-  /** Per-connection/per-reply timeout. */
+  /** Per-connection/per-reply timeout. Default 30 s. */
   timeoutMs?: number;
+  /**
+   * Whole-attempt deadline across every host, ms. Per-reply timeouts alone
+   * let a destination that answers each command just inside the limit hold
+   * one delivery for minutes; past this the connection is closed and the
+   * attempt is a transient timeout. Default 5 min.
+   */
+  deadlineMs?: number;
   /** How many MX hosts to try per attempt. */
   maxHosts?: number;
+  /** Destination port; SMTP relay is 25. Tests point it at a local listener. */
+  port?: number;
   /** Injectable MX resolution (tests). */
   resolveMx?: (domain: string) => Promise<MxTarget[]>;
   /** Injectable host->IP resolution for the egress guard (tests). */
@@ -265,14 +321,30 @@ export async function deliverOverSmtp(
 
   let lastError = `no MX targets for ${domain}`;
   let lastReply: DeliveryReply | undefined;
+  let lastTimeout: { step: DeliveryStep; text: string } | undefined;
   let attempted = false;
   let sawBlocked = false;
+  const deadlineAt = Date.now() + (opts.deadlineMs ?? 5 * 60_000);
   for (const target of targets.slice(0, opts.maxHosts ?? 3)) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      lastError = `delivery deadline exceeded before ${target.exchange}`;
+      lastTimeout = { step: "greeting", text: lastError };
+      break;
+    }
     // Egress guard (SSRF): resolve the MX ourselves and refuse anything on the
     // internal network, then connect to the vetted IP so no re-resolution can
     // swap in a private address after the check.
     let connectHost = target.exchange;
     if (!allowPrivate) {
+      // A real MX names a host. An IP literal in the exchange (a hostile
+      // zone; RFC 5321 forbids it) skips resolution entirely, so it never
+      // gets the canonical spelling the guard would otherwise see.
+      if (net.isIP(target.exchange) !== 0) {
+        sawBlocked = true;
+        lastError = `refusing MX that is an IP literal: ${target.exchange}`;
+        continue;
+      }
       let addrs: string[];
       try {
         addrs = await resolveHost(target.exchange);
@@ -289,9 +361,14 @@ export async function deliverOverSmtp(
     }
 
     attempted = true;
+    lastTimeout = undefined;
+    const step = { current: "greeting" as DeliveryStep };
     try {
-      return await deliverToHost(row, connectHost, opts, true);
+      return await deliverToHost(row, connectHost, opts, true, deadlineAt, step);
     } catch (err) {
+      if (err instanceof SmtpClientError && err.kind === "TIMEOUT") {
+        lastTimeout = { step: step.current, text: `${connectHost}: ${err.message}` };
+      }
       if (err instanceof SmtpCommandError) {
         const outcome = describeReply(`${connectHost} ${err.command}`, err.reply);
         const reply = toDeliveryReply(stepForCommand(err.command), err.reply);
@@ -314,7 +391,7 @@ export async function deliverOverSmtp(
   // that will never become deliverable, so fail permanently instead of burning
   // the full retry schedule reconnecting to nothing.
   if (!attempted && sawBlocked) return { kind: "permanent", error: lastError };
-  return { kind: "transient", error: lastError, reply: lastReply };
+  return { kind: "transient", error: lastError, reply: lastReply, timeout: lastTimeout };
 }
 
 /** One host attempt; throws SmtpClientError/SmtpCommandError upward. */
@@ -323,19 +400,35 @@ async function deliverToHost(
   host: string,
   opts: SmtpDeliveryOptions,
   tryStartTls: boolean,
+  deadlineAt: number,
+  step: { current: DeliveryStep },
 ): Promise<DeliveryOutcome> {
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) throw new SmtpClientError("delivery deadline exceeded", "TIMEOUT");
   const client = await connectSmtp({
     host,
-    port: 25,
+    port: opts.port ?? 25,
     name: opts.heloName,
-    timeoutMs: opts.timeoutMs ?? 30_000,
+    timeoutMs: Math.min(opts.timeoutMs ?? 30_000, remainingMs),
     // Opportunistic TLS: encrypt when offered, verify nothing (deliverd
     // would otherwise refuse most of the real world's self-signed MTAs).
     tls: { rejectUnauthorized: false },
   });
+  // The whole-attempt deadline: closing the socket fails whatever reply is
+  // being awaited, and the catch below turns that into a TIMEOUT.
+  let deadlineHit = false;
+  const deadline = setTimeout(
+    () => {
+      deadlineHit = true;
+      client.close();
+    },
+    Math.max(1, deadlineAt - Date.now()),
+  );
   try {
+    step.current = "ehlo";
     await client.ehlo();
     if (tryStartTls && client.capabilities.has("STARTTLS")) {
+      step.current = "starttls";
       try {
         await client.startTls();
       } catch (err) {
@@ -343,9 +436,12 @@ async function deliverToHost(
         // plaintext rather than skipping it.
         client.close();
         if (err instanceof SmtpCommandError) throw err;
-        return deliverToHost(row, host, opts, false);
+        if (deadlineHit) throw new SmtpClientError("delivery deadline exceeded", "TIMEOUT");
+        clearTimeout(deadline);
+        return deliverToHost(row, host, opts, false, deadlineAt, step);
       }
     }
+    step.current = "data";
     const result = await client.send({
       mailFrom: row.envelopeFrom,
       rcptTo: [row.envelopeTo],
@@ -355,7 +451,10 @@ async function deliverToHost(
     return classifySendResult(result);
   } catch (err) {
     client.close();
+    if (deadlineHit) throw new SmtpClientError("delivery deadline exceeded", "TIMEOUT");
     throw err;
+  } finally {
+    clearTimeout(deadline);
   }
 }
 
@@ -363,6 +462,14 @@ async function deliverToHost(
 export interface QueueWorkerOptions {
   batchSize: number;
   maxTries: number;
+  /**
+   * Destination domains delivered at once within a batch (rows for one
+   * domain always go one at a time). Default 8. One slow destination then
+   * costs the batch one slot, not the whole batch — and once its first row
+   * times out the domain pause (destinationThrottle.ts) defers the rest
+   * without an attempt.
+   */
+  concurrency?: number;
   deliver: DeliverFn;
   /** Called once per row that permanently failed (bounce accounting, DSN,
    * mailbox suppression — `enhancedCode` is the refusing reply's RFC 3463
@@ -443,7 +550,8 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
           now(),
         );
 
-  for (const row of claimed) {
+  // One claimed row, start to finish. `continue` in the old loop is `return`.
+  const processRow = async (row: OutboundMessage): Promise<void> => {
     opts.onRowStart?.();
     const domain = destinationDomain(row.envelopeTo);
     const pausedUntil = paused.get(domain);
@@ -477,7 +585,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
             pausedUntil: pausedUntil.toISOString(),
           });
       }
-      continue;
+      return;
     }
     // Every line below is about THIS row: bind its id once instead of
     // repeating `queueId` at each call site, so a grep/Loki filter on
@@ -506,7 +614,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
       .returning({ id: outboundMessages.id });
     if (refreshed.length === 0) {
       rowLogger.warn("delivery_skipped_row_taken_over");
-      continue;
+      return;
     }
 
     const tries = row.tries + 1; // the claim above counted this attempt
@@ -543,17 +651,29 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
         if (await recordSuccess(db, domain, now())) {
           rowLogger.info("destination_recovered", { domain });
         }
-      } else if (outcome.reply !== undefined && isDeferralSignal(outcome.reply)) {
-        const recorded = await recordDeferral(db, domain, outcome.reply, throttle, now());
-        destinationPausesTotal.inc({ provider });
-        rowLogger.warn("destination_paused", {
-          domain,
-          strikes: recorded.strikes,
-          pausedUntil: recorded.pausedUntil.toISOString(),
-          code: outcome.reply.code,
-          enhanced: outcome.reply.enhancedCode ?? null,
-          step: outcome.reply.step,
-        });
+      } else {
+        // A deferral reply, or a timeout (the tarpit shape — no reply at
+        // all), pauses the domain. Code 0 records "no reply" honestly.
+        const signal: DeliveryReply | undefined =
+          outcome.reply !== undefined && isDeferralSignal(outcome.reply)
+            ? outcome.reply
+            : outcome.kind === "transient" && outcome.timeout !== undefined
+              ? { code: 0, step: outcome.timeout.step, text: outcome.timeout.text }
+              : undefined;
+        if (signal !== undefined) {
+          const recorded = await recordDeferral(db, domain, signal, throttle, now());
+          // The rest of this batch's rows for the domain see the pause too.
+          paused.set(domain, recorded.pausedUntil);
+          destinationPausesTotal.inc({ provider });
+          rowLogger.warn("destination_paused", {
+            domain,
+            strikes: recorded.strikes,
+            pausedUntil: recorded.pausedUntil.toISOString(),
+            code: signal.code,
+            enhanced: signal.enhancedCode ?? null,
+            step: signal.step,
+          });
+        }
       }
     }
 
@@ -631,8 +751,28 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
         break;
       }
     }
-  }
+  };
 
+  // Rows grouped by destination domain: domains run concurrently (bounded),
+  // a domain's own rows one after another, so one destination can never
+  // hold more than one slot of the batch. The pause map is re-read per row
+  // because a deferral earlier in this batch updates it.
+  const groups = new Map<string, OutboundMessage[]>();
+  for (const row of claimed) {
+    const domain = destinationDomain(row.envelopeTo);
+    const group = groups.get(domain);
+    if (group === undefined) groups.set(domain, [row]);
+    else group.push(row);
+  }
+  const queue = [...groups.values()];
+  const limit = Math.max(1, opts.concurrency ?? 8);
+  await Promise.all(
+    Array.from({ length: Math.min(limit, queue.length) }, async () => {
+      for (let group = queue.shift(); group !== undefined; group = queue.shift()) {
+        for (const row of group) await processRow(row);
+      }
+    }),
+  );
   return claimed.length;
 }
 

@@ -14,7 +14,13 @@ import { createForwardLog } from "./emailLog.ts";
 
 const tag = () => crypto.randomUUID().slice(0, 8);
 
-async function fixture(spamFlag: string | null) {
+async function fixture(
+  spamFlag: string | null,
+  sender: { envelopeFrom?: string; senderAuthenticated?: boolean } = {
+    envelopeFrom: "bounces@example.com",
+    senderAuthenticated: true,
+  },
+) {
   const t = tag();
   const user = (
     await db
@@ -52,6 +58,7 @@ async function fixture(spamFlag: string | null) {
     mailboxId: mailbox.id,
     messageId: `<${t}@example.com>`,
     spamFlag,
+    ...sender,
   });
   const raw = new TextEncoder().encode(
     `From: sender-${t}@example.com\r\nTo: ${alias.email}\r\nSubject: hi\r\nMessage-ID: <${t}@example.com>\r\n\r\nbody\r\n`,
@@ -80,9 +87,10 @@ describe("sendFailureDsn backscatter guard", () => {
     expect(queued).toHaveLength(0);
   });
 
-  test("clean inbound: the DSN is enqueued to the originator", async () => {
+  test("clean inbound: the DSN is enqueued to the SPF-authenticated return path, not the header From", async () => {
     const f = await fixture(null);
     expect(f.emailLog.isSpam).toBe(false);
+    expect(f.emailLog.senderAuthenticated).toBe(true);
 
     const outcome = await sendFailureDsn(db, {
       row: { id: 0, raw: f.raw, envelopeTo: f.mailbox.email },
@@ -99,7 +107,33 @@ describe("sendFailureDsn backscatter guard", () => {
       })
       .from(outboundMessages)
       .where(eq(outboundMessages.emailLogId, f.emailLog.id));
-    expect(queued).toEqual([{ envelopeTo: f.contact.websiteEmail, envelopeFrom: "" }]);
+    expect(queued).toEqual([{ envelopeTo: "bounces@example.com", envelopeFrom: "" }]);
+    expect(f.contact.websiteEmail).not.toBe("bounces@example.com");
+  });
+
+  test("return path without an SPF pass: no DSN (it would be backscatter)", async () => {
+    const f = await fixture(null, {
+      envelopeFrom: "forged@victim.example",
+      senderAuthenticated: false,
+    });
+    const outcome = await sendFailureDsn(db, {
+      row: { id: 0, raw: f.raw, envelopeTo: f.mailbox.email },
+      verp: { type: "bounce_forward", id: f.emailLog.id },
+      emailLog: f.emailLog,
+      diagnostic: "550 5.7.1 rejected",
+    });
+    expect(outcome).toEqual({ outcome: "skipped", reason: "originator_unauthenticated" });
+  });
+
+  test("null envelope sender: no DSN", async () => {
+    const f = await fixture(null, { envelopeFrom: "", senderAuthenticated: false });
+    const outcome = await sendFailureDsn(db, {
+      row: { id: 0, raw: f.raw, envelopeTo: f.mailbox.email },
+      verp: { type: "bounce_forward", id: f.emailLog.id },
+      emailLog: f.emailLog,
+      diagnostic: "550 5.1.1 no such user",
+    });
+    expect(outcome).toEqual({ outcome: "skipped", reason: "originator_unresolvable" });
   });
 
   test("reply-phase DSNs ignore the flag (they go to our own user)", async () => {

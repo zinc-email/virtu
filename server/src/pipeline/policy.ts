@@ -11,7 +11,7 @@
  * blocked and never queued. Nonexistent aliases on our domains get 550.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, count, eq, gt } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import {
   type Alias,
@@ -39,6 +39,7 @@ import {
   type InboundRateLimitScope,
 } from "./inboundRateLimit.ts";
 import { effectiveOperators, listOperators, operatorLocalpart } from "./operatorMail.ts";
+import type { RoleMailBudget } from "./roleMailBudget.ts";
 
 /**
  * The one bar a mailbox must clear to receive mail, shared by every site
@@ -287,7 +288,57 @@ export interface EvaluateRcptOptions {
    * 450 would tempfail the whole message for its healthy co-recipients.
    */
   budgetDrops?: boolean;
+  /**
+   * What this SMTP transaction has already accepted. Every budget below
+   * reads rows that exist, and a transaction writes none until DATA — so
+   * without this, a hundred fresh catch-all localparts (or a hundred
+   * aliases of one user) each see an empty window. The mx keeps it per
+   * session at RCPT and accumulates it per recipient at DATA.
+   */
+  transaction?: RcptTransaction;
+  /**
+   * Create the catch-all alias row when the decision is deliver (default
+   * true). The mx passes false at RCPT — the address is accepted on the
+   * would-be delivery set and the row is minted at DATA, when a message
+   * actually arrives. RCPT alone must never write an alias.
+   */
+  mintCatchAll?: boolean;
+  /** Catch-all mints per domain per trailing hour; omitted/0 = unlimited. */
+  catchAllMintsPerHour?: number;
+  /** Role-address budget (pipeline/roleMailBudget.ts); omitted = unlimited. */
+  roleMailBudget?: RoleMailBudget;
   now?: Date;
+}
+
+/** What the current transaction has accepted so far (see EvaluateRcptOptions). */
+export interface RcptTransaction {
+  /** Forward copies accepted per delivery mailbox. */
+  copiesByMailbox: Map<number, number>;
+  /** Queue rows accepted per owning user. */
+  rowsByUser: Map<number, number>;
+  /** Queue bytes accepted per owning user (known at DATA; 0 at RCPT). */
+  bytesByUser: Map<number, number>;
+}
+
+/** An empty transaction (nothing accepted yet). */
+export function emptyRcptTransaction(): RcptTransaction {
+  return { copiesByMailbox: new Map(), rowsByUser: new Map(), bytesByUser: new Map() };
+}
+
+/** Record one accepted delivery (its copies, rows and bytes) in the transaction. */
+export function addToRcptTransaction(
+  tx: RcptTransaction,
+  rcpt: EvaluatedRcpt,
+  bytesPerCopy: number,
+): void {
+  if (rcpt.decision.kind !== "deliver" || rcpt.facts.user === null) return;
+  const copies = rcpt.facts.deliveryMailboxes.length;
+  for (const mb of rcpt.facts.deliveryMailboxes) {
+    tx.copiesByMailbox.set(mb.id, (tx.copiesByMailbox.get(mb.id) ?? 0) + 1);
+  }
+  const userId = rcpt.facts.user.id;
+  tx.rowsByUser.set(userId, (tx.rowsByUser.get(userId) ?? 0) + copies);
+  tx.bytesByUser.set(userId, (tx.bytesByUser.get(userId) ?? 0) + copies * bytesPerCopy);
 }
 
 /** A decision plus the rows it was made from (the mx reuses them at DATA). */
@@ -442,6 +493,7 @@ export async function evaluateRcpt(
     queueFull: false,
   };
   let decision = decideRcpt(facts);
+  const now = opts.now ?? new Date();
 
   // Trash delivery targets ONLY the trash mailbox: swap it in so the mx's
   // forward pipeline (which reads the delivery set) needs no special case.
@@ -450,58 +502,152 @@ export async function evaluateRcpt(
     facts.deliveryMailboxes = [trashMailbox];
   }
 
-  // Perform the catch-all mint here so callers only ever see "deliver": the
-  // alias row must exist before DATA runs the forward pipeline anyway.
+  // Catch-all: the would-be delivery set is the owner's default mailbox.
+  // Every budget below is decided on THAT set before any row exists; the
+  // alias row is minted last, and only when the answer is still deliver
+  // (and only when the caller asked — RCPT alone never writes one).
+  let mintPending = false;
   if (decision.kind === "mint" && catchAll !== null && catchAll.mailbox !== null) {
-    const minted = await mintCatchAllAlias(db, normalized, {
-      domain: catchAll.domain,
-      owner: catchAll.owner,
-      mailbox: catchAll.mailbox,
-    });
-    if (minted !== null) {
-      facts.alias = minted;
-      facts.user = catchAll.owner;
-      facts.mailbox = catchAll.mailbox;
-      facts.deliveryMailboxes = [catchAll.mailbox];
-      decision = { kind: "deliver" };
-    } else {
-      // Lost every race AND the row vanished (concurrent delete): the
-      // address is tombstoned now — same answer a fresh evaluation gives.
+    facts.user = catchAll.owner;
+    facts.mailbox = catchAll.mailbox;
+    facts.deliveryMailboxes = [catchAll.mailbox];
+    if (!isMintableAddress(normalized)) {
+      decision = userUnknownReject();
+    } else if (
+      opts.catchAllMintsPerHour !== undefined &&
+      opts.catchAllMintsPerHour > 0 &&
+      (await countRecentMints(db, catchAll.domain.id, now)) >= opts.catchAllMintsPerHour
+    ) {
       decision = {
         kind: "reject",
-        code: 550,
-        enhanced: "5.1.1",
-        message: "Recipient address rejected: User unknown",
+        code: 450,
+        enhanced: "4.7.1",
+        message: "Domain is creating new addresses too fast, try again later",
       };
+    } else {
+      decision = { kind: "deliver" };
+      mintPending = true;
+    }
+  }
+
+  // Role addresses: the one recipient kind with no alias and no user ledger,
+  // so its trailing-minute budget lives in memory (roleMailBudget.ts), taken
+  // at RCPT (budgetDrops marks the RCPT-time call). An operator whose own
+  // queue is at its cap is left out of the copy set — postmaster must never
+  // bounce, and an operator's full queue is not the reporter's problem.
+  if (decision.kind === "operator") {
+    if (
+      opts.budgetDrops !== false &&
+      opts.roleMailBudget !== undefined &&
+      !opts.roleMailBudget.take(decision.localpart, now)
+    ) {
+      decision = {
+        kind: "reject",
+        code: 450,
+        enhanced: "4.7.1",
+        message: "Role address is receiving mail too fast, try again later",
+      };
+    } else if (opts.queueQuota !== undefined) {
+      const kept: { user: User; mailbox: Mailbox }[] = [];
+      for (const r of decision.recipients) {
+        if (!decideQueueQuota(opts.queueQuota, await pendingUsage(db, r.user.id))) kept.push(r);
+      }
+      decision = { ...decision, recipients: kept };
     }
   }
 
   // Inbound rate limit: counted once the recipient would deliver or drop
-  // (the delivery set as finally settled above — trash swap, catch-all mint
+  // (the delivery set as finally settled above — trash swap, catch-all
   // — is exactly what the mailbox scope must measure; a drop has no
-  // mailboxes and is bounded by the alias scope alone), then the table
-  // re-decides with the fact filled in.
+  // mailboxes and is bounded by the alias scope alone), plus what this
+  // transaction already accepted, then the table re-decides with the fact
+  // filled in.
   if (
     (decision.kind === "deliver" || (decision.kind === "drop" && opts.budgetDrops !== false)) &&
-    opts.inboundRateLimits !== undefined &&
-    facts.alias !== null
+    opts.inboundRateLimits !== undefined
   ) {
     const counts = await countRecentInbound(
       db,
-      { aliasId: facts.alias.id, mailboxIds: facts.deliveryMailboxes.map((mb) => mb.id) },
-      opts.now,
+      { aliasId: facts.alias?.id ?? null, mailboxIds: facts.deliveryMailboxes.map((mb) => mb.id) },
+      now,
+      opts.transaction,
     );
     facts.rateLimited = decideInboundRateLimit(opts.inboundRateLimits, counts);
-    if (facts.rateLimited !== null) decision = decideRcpt(facts);
+    if (facts.rateLimited !== null) {
+      decision = mintPending ? rateLimitReject(facts.rateLimited) : decideRcpt(facts);
+    }
   }
 
-  // Pending-queue cap: only a delivery enqueues, so only a delivery asks.
+  // Pending-queue cap: only a delivery enqueues, so only a delivery asks —
+  // counting the rows and bytes this transaction has already accepted.
   if (decision.kind === "deliver" && opts.queueQuota !== undefined && facts.user !== null) {
-    facts.queueFull = decideQueueQuota(opts.queueQuota, await pendingUsage(db, facts.user.id));
-    if (facts.queueFull) decision = decideRcpt(facts);
+    const usage = await pendingUsage(db, facts.user.id);
+    usage.rows += opts.transaction?.rowsByUser.get(facts.user.id) ?? 0;
+    usage.bytes += opts.transaction?.bytesByUser.get(facts.user.id) ?? 0;
+    facts.queueFull = decideQueueQuota(opts.queueQuota, usage);
+    if (facts.queueFull) decision = mintPending ? queueFullReject() : decideRcpt(facts);
+  }
+
+  // The mint itself, last (SimpleLogin's on-the-fly creation).
+  if (
+    decision.kind === "deliver" &&
+    mintPending &&
+    catchAll !== null &&
+    catchAll.mailbox !== null
+  ) {
+    if (opts.mintCatchAll !== false) {
+      const minted = await mintCatchAllAlias(db, normalized, {
+        domain: catchAll.domain,
+        owner: catchAll.owner,
+        mailbox: catchAll.mailbox,
+      });
+      if (minted !== null) {
+        facts.alias = minted;
+      } else {
+        // Lost every race AND the row vanished (concurrent delete): the
+        // address is tombstoned now — same answer a fresh evaluation gives.
+        decision = userUnknownReject();
+      }
+    }
   }
 
   return { address: normalized, decision, facts };
+}
+
+function userUnknownReject(): RcptDecision {
+  return {
+    kind: "reject",
+    code: 550,
+    enhanced: "5.1.1",
+    message: "Recipient address rejected: User unknown",
+  };
+}
+
+/**
+ * An address a catch-all may mint: RFC 5321 lengths (64-char localpart,
+ * 254-char address) and printable ASCII without whitespace. Anything else
+ * is "user unknown" — the same answer as any other address that does not
+ * exist, and never a Postgres overflow out of the RCPT hook.
+ */
+export function isMintableAddress(address: string): boolean {
+  const at = address.lastIndexOf("@");
+  if (at <= 0 || at > 64 || address.length > 254) return false;
+  return /^[\x21-\x7e]+$/.test(address);
+}
+
+/** Catch-all aliases minted on `domainId` in the trailing hour. */
+async function countRecentMints(db: Db, domainId: number, now: Date): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(aliases)
+    .where(
+      and(
+        eq(aliases.domainId, domainId),
+        eq(aliases.automaticCreation, true),
+        gt(aliases.createdAt, new Date(now.getTime() - 60 * 60_000)),
+      ),
+    );
+  return row?.n ?? 0;
 }
 
 /**

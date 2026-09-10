@@ -24,7 +24,7 @@
  * DB-touching function. The MX turns a hit into `450 4.7.1` at RCPT.
  */
 
-import { and, countDistinct, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, count, eq, gt, inArray } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { emailLogs } from "../db/schema.ts";
 
@@ -73,30 +73,35 @@ export function decideInboundRateLimit(
  */
 export async function countRecentInbound(
   db: Db,
-  scope: { aliasId: number; mailboxIds: number[] },
+  scope: { aliasId: number | null; mailboxIds: number[] },
   now: Date = new Date(),
+  transaction?: InboundTransaction,
 ): Promise<InboundRateCounts> {
   const windowStart = new Date(now.getTime() - MINUTE_MS);
-
-  const [aliasRow] = await db
-    .select({
-      // One message fans out to one row per delivery mailbox; collapse the
-      // copies on the original Message-ID (rows without one stand alone).
-      n: countDistinct(sql`coalesce(${emailLogs.messageId}, ${emailLogs.id}::text)`),
-    })
-    .from(emailLogs)
-    .where(
-      and(
-        eq(emailLogs.aliasId, scope.aliasId),
-        eq(emailLogs.isReply, false),
-        gt(emailLogs.createdAt, windowStart),
-      ),
-    );
-
+  let aliasMessages = 0;
+  // One message fans out to one row per delivery mailbox, so "messages" is
+  // the busiest mailbox's row count (drops have no mailbox and land in the
+  // NULL group, one row per message). Counting rows per group — never
+  // collapsing on the sender-controlled Message-ID — is what keeps a
+  // sender who repeats one Message-ID from reading as one message forever.
+  if (scope.aliasId !== null) {
+    const perGroup = await db
+      .select({ mailboxId: emailLogs.mailboxId, n: count() })
+      .from(emailLogs)
+      .where(
+        and(
+          eq(emailLogs.aliasId, scope.aliasId),
+          eq(emailLogs.isReply, false),
+          gt(emailLogs.createdAt, windowStart),
+        ),
+      )
+      .groupBy(emailLogs.mailboxId);
+    for (const row of perGroup) aliasMessages = Math.max(aliasMessages, row.n);
+  }
   let mailboxCopiesMax = 0;
   if (scope.mailboxIds.length > 0) {
     const perMailbox = await db
-      .select({ mailboxId: emailLogs.mailboxId, n: countDistinct(emailLogs.id) })
+      .select({ mailboxId: emailLogs.mailboxId, n: count() })
       .from(emailLogs)
       .where(
         and(
@@ -106,8 +111,22 @@ export async function countRecentInbound(
         ),
       )
       .groupBy(emailLogs.mailboxId);
-    for (const row of perMailbox) mailboxCopiesMax = Math.max(mailboxCopiesMax, row.n);
+    const byMailbox = new Map<number, number>();
+    for (const row of perMailbox) if (row.mailboxId !== null) byMailbox.set(row.mailboxId, row.n);
+    for (const id of scope.mailboxIds) {
+      const inFlight = transaction?.copiesByMailbox.get(id) ?? 0;
+      mailboxCopiesMax = Math.max(mailboxCopiesMax, (byMailbox.get(id) ?? 0) + inFlight);
+    }
   }
+  return { aliasMessages, mailboxCopiesMax };
+}
 
-  return { aliasMessages: aliasRow?.n ?? 0, mailboxCopiesMax };
+/**
+ * What the current SMTP transaction has already accepted (nothing of it is
+ * in email_logs yet — that happens at DATA). Without it, a hundred RCPTs
+ * for a hundred fresh addresses on one mailbox each see an empty window.
+ */
+export interface InboundTransaction {
+  /** Forward copies already accepted for each delivery mailbox. */
+  copiesByMailbox: Map<number, number>;
 }

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import {
   DataDecoder,
+  MAX_REPLY_LINE,
+  MAX_REPLY_LINES,
   ReplyParser,
   bracket,
   decodeBase64,
@@ -123,6 +125,21 @@ describe("DataDecoder", () => {
     expect(d.lineTooLong).toBe(true);
     const rest = d.push(Buffer.from("zzz\r\n.\r\nNEXT"));
     expect(rest?.toString()).toBe("NEXT");
+  });
+
+  test("a bare CR inside a header line becomes a space (no header smuggling)", () => {
+    const d = new DataDecoder(1e6, 1000);
+    const rest = d.push(
+      Buffer.from(
+        "Subject: hi\rFrom: CEO <ceo@victim.example>\rReply-To: a@evil.example\r\n" +
+          "From: real@zinc.example\r\n\r\nbody with a bare\rCR stays\r\n.\r\n",
+      ),
+    );
+    expect(rest).not.toBeNull();
+    expect(d.message().toString("latin1")).toBe(
+      "Subject: hi From: CEO <ceo@victim.example> Reply-To: a@evil.example\r\n" +
+        "From: real@zinc.example\r\n\r\nbody with a bare\rCR stays\r\n",
+    );
   });
 
   test("a lone dot inside a line is not a terminator", () => {
@@ -293,5 +310,20 @@ describe("bracket / base64", () => {
   test("decodeBase64 rejects invalid input", () => {
     expect(decodeBase64("!!!")).toBeNull();
     expect(decodeBase64("abc")).toBeNull();
+  });
+});
+
+describe("ReplyParser bounds what a server can make the client hold (review round 3)", () => {
+  test("a reply line past MAX_REPLY_LINE is unparseable", () => {
+    const p = new ReplyParser();
+    expect(() => p.feed(`220-${"x".repeat(MAX_REPLY_LINE)}`)).toThrow(/too long/);
+  });
+
+  test("more than MAX_REPLY_LINES continuation lines is unparseable", () => {
+    const p = new ReplyParser();
+    for (let i = 0; i < MAX_REPLY_LINES; i++) expect(p.feed(`220-line ${i}`)).toBeNull();
+    expect(() => p.feed("220-one more")).toThrow(/more than/);
+    // The parser is usable again afterwards.
+    expect(p.feed("250 Ok")?.code).toBe(250);
   });
 });

@@ -39,9 +39,11 @@ import {
   type Address,
   buildVerp,
   FORWARD_HOPS_HEADER,
+  foldLongLines,
   formatDateHeader,
   type HeaderBlock,
   MAX_FORWARD_HOPS,
+  MAX_HEADER_FIELDS,
   parseAddressList,
   parseForwardHops,
   parseMessage,
@@ -73,7 +75,14 @@ import {
   resolveOriginalMessageId,
 } from "./pipeline/emailLog.ts";
 import type { InboundRateLimits } from "./pipeline/inboundRateLimit.ts";
-import { type EvaluatedRcpt, evaluateRcpt } from "./pipeline/policy.ts";
+import {
+  addToRcptTransaction,
+  emptyRcptTransaction,
+  type EvaluatedRcpt,
+  evaluateRcpt,
+  type RcptTransaction,
+} from "./pipeline/policy.ts";
+import { createRoleMailBudget, type RoleMailBudget } from "./pipeline/roleMailBudget.ts";
 import { recordSmtpRejection } from "./pipeline/smtpRejection.ts";
 import { loadSmtpTls } from "./pipeline/tls.ts";
 import { enqueue } from "./queue/index.ts";
@@ -84,7 +93,10 @@ import {
   type SmtpDataEvent,
   type SmtpHookResult,
   type SmtpServer,
+  type SmtpSession,
   type SmtpTlsConfig,
+  type DataBudget,
+  processDataBudget,
 } from "./smtp/index.ts";
 
 const encoder = new TextEncoder();
@@ -110,6 +122,14 @@ export interface MxOptions {
   operatorLocalparts?: readonly string[];
   /** Per-user pending-queue cap (queue/quota.ts); omitted = not enforced (tests). */
   queueQuota?: QueueQuotaLimits;
+  /** Catch-all mints per domain per hour (policy.ts); omitted = unlimited (tests). */
+  catchAllMintsPerHour?: number;
+  /** Role-address budget (pipeline/roleMailBudget.ts); omitted = unlimited (tests). */
+  roleMailBudget?: RoleMailBudget;
+  /** Largest message a role address accepts; omitted = maxMessageSize. */
+  operatorMailMaxBytes?: number;
+  /** In-flight DATA byte budget shared with the other listeners (smtp/dataBudget.ts). */
+  dataBudget?: DataBudget;
   tls?: SmtpTlsConfig;
   /**
    * DNS resolver override for verifyInbound. Defaults to
@@ -141,20 +161,26 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   });
 
   // Policy re-evaluation per recipient (RCPT accepted them; rows may have
-  // changed since — the DATA-time decision is authoritative).
+  // changed since — the DATA-time decision is authoritative). Now the size
+  // is known, so each recipient is decided against what the ones before
+  // it in THIS message will queue: copies per mailbox, rows and bytes per
+  // owner. This is also where a catch-all address gets its alias row.
   const evaluated: EvaluatedRcpt[] = [];
+  const transaction = emptyRcptTransaction();
   for (const rcpt of envelope.rcptTo) {
-    evaluated.push(
-      await evaluateRcpt(opts.db, rcpt.address, {
-        verpSecret: opts.verpSecret,
-        mailDomain: opts.mailDomain,
-        inboundRateLimits: opts.inboundRateLimits,
-        operatorLocalparts: opts.operatorLocalparts,
-        queueQuota: opts.queueQuota,
-        // A drop stays a drop here — RCPT already gated it (policy.ts).
-        budgetDrops: false,
-      }),
-    );
+    const result = await evaluateRcpt(opts.db, rcpt.address, {
+      verpSecret: opts.verpSecret,
+      mailDomain: opts.mailDomain,
+      inboundRateLimits: opts.inboundRateLimits,
+      operatorLocalparts: opts.operatorLocalparts,
+      queueQuota: opts.queueQuota,
+      catchAllMintsPerHour: opts.catchAllMintsPerHour,
+      transaction,
+      // A drop stays a drop here — RCPT already gated it (policy.ts).
+      budgetDrops: false,
+    });
+    addToRcptTransaction(transaction, result, event.raw.length);
+    evaluated.push(result);
   }
 
   // A DELIVERY that re-evaluates to a tempfail here (its budget or its
@@ -172,6 +198,21 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   }
 
   const parsed = parseMessage(event.raw);
+  if (parsed.headers.fields.length > MAX_HEADER_FIELDS) {
+    mxMessagesTotal.inc({ outcome: "rejected" });
+    log.info("inbound_rejected", { from: envelope.mailFrom || "<>", reason: "too_many_headers" });
+    return rejectWith(550, "5.6.0", "Too many header fields");
+  }
+  // RFC 5322 §3.6.2: exactly one From. mailauth's DMARC step declines to
+  // evaluate any other count, and "not evaluated" looks exactly like "no
+  // record" to the policy — so a second From switched p=reject off for the
+  // forged one on top, which the rewrite then displayed. RFC 7489 §6.6.1
+  // says to reject such messages outright; so do we.
+  if (parsed.headers.getFields("From").length !== 1) {
+    mxMessagesTotal.inc({ outcome: "rejected" });
+    log.info("inbound_rejected", { from: envelope.mailFrom || "<>", reason: "from_count" });
+    return rejectWith(550, "5.6.0", "Message must have exactly one From header");
+  }
 
   // 1. Bounce handling: VERP recipients route straight to their email_log
   //    (or, for transactional mail, to the verification_codes row).
@@ -237,7 +278,21 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
 
   const deliverable = evaluated.filter((r) => r.decision.kind === "deliver");
   const drops = evaluated.filter((r) => r.decision.kind === "drop");
-  const operatorRcpts = evaluated.filter((r) => r.decision.kind === "operator");
+  let operatorRcpts = evaluated.filter((r) => r.decision.kind === "operator");
+  // Role mail has a smaller size cap than user mail (an abuse report is
+  // small; a full-size copy per operator at SMTP speed is not a report).
+  // Over it: refuse when the message is only for operators, otherwise
+  // deliver the user recipients and leave the operator copies out.
+  const operatorMax = opts.operatorMailMaxBytes ?? opts.maxMessageSize;
+  if (operatorRcpts.length > 0 && event.raw.length > operatorMax) {
+    if (deliverable.length === 0 && drops.length === 0) {
+      mxMessagesTotal.inc({ outcome: "operator_too_large" });
+      log.info("operator_mail_too_large", { bytes: event.raw.length, max: operatorMax });
+      return rejectWith(552, "5.3.4", "Message too large for a role address");
+    }
+    log.warn("operator_copies_skipped_too_large", { bytes: event.raw.length, max: operatorMax });
+    operatorRcpts = [];
+  }
   if (deliverable.length === 0 && drops.length === 0 && operatorRcpts.length === 0) {
     return { accept: true, message: "Ok" };
   }
@@ -275,6 +330,12 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   // The verdict rides into email_logs (is_spam/spam_status) so the bounce
   // path can refuse to DSN a flagged message's sender — see dsnDelivery.ts.
   const spamFlag = verification.verdict.action === "flag" ? verification.verdict.reason : null;
+  // And so does the return path with its SPF standing: a forward-failure
+  // DSN goes to the envelope sender only when its domain authorized this
+  // IP (dsnDelivery.ts) — never to the header From.
+  const spf = verification.raw.spf;
+  const senderAuthenticated =
+    envelope.mailFrom !== "" && spf !== false && spf !== undefined && spf.status.result === "pass";
   const prepended = parseMessage(encoder.encode(verification.prependHeaders));
   const needsKey = deliverable.length > 0 || operatorRcpts.length > 0;
   const dkimKey = needsKey ? await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector) : null;
@@ -368,6 +429,8 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
         mailboxId: mailbox.id,
         messageId: originalMessageId,
         spamFlag,
+        envelopeFrom: envelope.mailFrom,
+        senderAuthenticated,
       });
 
       const rewritten = await rewriteForwardForAlias(opts, {
@@ -487,7 +550,7 @@ async function signCopy(
   verification: VerifyResult,
   dkimKey: DkimKeyConfig | null,
 ): Promise<Uint8Array> {
-  if (dkimKey === null) return serializeMessage(headers, body);
+  if (dkimKey === null) return foldLongLines(serializeMessage(headers, body));
   const signed = await signOutbound(headers, body, {
     dkimKeys: [dkimKey],
     arc:
@@ -545,23 +608,57 @@ async function rewriteForwardForAlias(
 
 /** Build the port-25 server (listeners not yet bound). */
 export function createMxServer(opts: MxOptions): SmtpServer {
+  // Recipients accepted so far on each session, by address. At RCPT the
+  // transaction's own accepted set is rebuilt from the live envelope
+  // (`event.rcptTo`, which RSET/MAIL clear), so the budgets see what this
+  // message will queue before any row exists.
+  const accepted = new WeakMap<SmtpSession, Map<string, EvaluatedRcpt>>();
+  const transactionSoFar = (
+    session: SmtpSession,
+    rcptTo: readonly { address: string }[],
+  ): RcptTransaction => {
+    const tx = emptyRcptTransaction();
+    const cache = accepted.get(session);
+    if (cache === undefined) return tx;
+    for (const r of rcptTo) {
+      const prior = cache.get(r.address.trim().toLowerCase());
+      // Bytes are unknown until DATA; rows and copies are what RCPT can bound.
+      if (prior !== undefined) addToRcptTransaction(tx, prior, 0);
+    }
+    return tx;
+  };
   return createSmtpServer({
     hostname: opts.mailHostname,
     banner: "virtu mx",
     tls: opts.tls,
     maxMessageSize: opts.maxMessageSize,
+    dataBudget: opts.dataBudget,
     onConnect: () => {
       smtpConnectionsTotal.inc({ listener: "mx" });
       return { accept: true };
     },
     onRcptTo: async (event) => {
-      const { decision, facts } = await evaluateRcpt(opts.db, event.address, {
+      const result = await evaluateRcpt(opts.db, event.address, {
         verpSecret: opts.verpSecret,
         mailDomain: opts.mailDomain,
         inboundRateLimits: opts.inboundRateLimits,
         operatorLocalparts: opts.operatorLocalparts,
         queueQuota: opts.queueQuota,
+        catchAllMintsPerHour: opts.catchAllMintsPerHour,
+        roleMailBudget: opts.roleMailBudget,
+        transaction: transactionSoFar(event.session, event.rcptTo),
+        // The alias row for a catch-all address is minted at DATA.
+        mintCatchAll: false,
       });
+      const { decision, facts } = result;
+      if (decision.kind !== "reject") {
+        let cache = accepted.get(event.session);
+        if (cache === undefined) {
+          cache = new Map();
+          accepted.set(event.session, cache);
+        }
+        cache.set(result.address, result);
+      }
       mxRcptTotal.inc({ decision: decision.kind });
       if (facts.rateLimited !== null) mxRateLimitedTotal.inc({ scope: facts.rateLimited });
       if (decision.kind === "reject") {
@@ -624,6 +721,10 @@ export function mxOptionsFromConfig(): MxOptions {
       maxPendingRows: config.queueMaxPendingRowsPerUser,
       maxPendingBytes: config.queueMaxPendingBytesPerUser,
     },
+    catchAllMintsPerHour: config.catchAllMintsPerHour,
+    roleMailBudget: createRoleMailBudget(config.operatorMailPerMinute),
+    operatorMailMaxBytes: config.operatorMailMaxBytes,
+    dataBudget: processDataBudget(config.smtpMaxDataBytesInFlight),
     tls: loadSmtpTls(config.smtpTlsCertFile, config.smtpTlsKeyFile),
   };
 }

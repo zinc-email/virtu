@@ -15,9 +15,10 @@
  */
 
 import { promises as dnsPromises } from "node:dns";
+import { arcFieldInstance } from "./arcInstance.ts";
 import { authenticate } from "mailauth";
 import type { AuthenticateResult } from "mailauth";
-import { type HeaderField, parseMessage, serializeMessage, unfoldValue } from "../mail/headers.ts";
+import { parseMessage, unfoldValue } from "../mail/headers.ts";
 import { type Bulkhead, createBulkhead } from "../pipeline/verifyBulkhead.ts";
 
 /**
@@ -44,14 +45,14 @@ export type PolicyAction = "accept" | "flag" | "reject";
 
 /**
  * Configurable verdict policy. Defaults are conservative:
- * - DMARC p=reject + fail → reject (550 5.7.1)
+ * - DMARC p=reject + fail → annotate; local abuse evidence is required for rejection
  * - DMARC p=quarantine + fail → flag (deliver annotated, never bounce)
  * - SPF hard-fail with no DMARC record → flag (PLAN: over-rejection is how
  *   forwarders lose mail; set to "reject" to harden)
  */
 export interface VerifyPolicy {
-  onDmarcReject: PolicyAction;
-  onDmarcQuarantine: PolicyAction;
+  onDmarcReject: "accept" | "flag";
+  onDmarcQuarantine: "accept" | "flag";
   onSpfHardFailWithoutDmarc: PolicyAction;
   /**
    * A DKIM pass whose signature covered only a prefix of the body (`l=`):
@@ -63,7 +64,7 @@ export interface VerifyPolicy {
 
 /** Default policy (see {@link VerifyPolicy}). */
 export const DEFAULT_VERIFY_POLICY: VerifyPolicy = {
-  onDmarcReject: "reject",
+  onDmarcReject: "flag",
   onDmarcQuarantine: "flag",
   onSpfHardFailWithoutDmarc: "flag",
   onDkimBodyLengthLimited: "flag",
@@ -73,6 +74,9 @@ export const DEFAULT_VERIFY_POLICY: VerifyPolicy = {
 export interface VerifyOptions {
   /** Injectable DNS resolver; defaults to node:dns `promises.resolve`. */
   resolver?: DnsResolver;
+  /** Privileged local evidence, never inferred from sender-supplied headers or ARC pass alone. */
+  acceptanceEvidence?: AcceptanceEvidence;
+  flagDisposition?: "reject" | "forward";
   /** Policy overrides, merged over {@link DEFAULT_VERIFY_POLICY}. */
   policy?: Partial<VerifyPolicy>;
   /** Minimum accepted DKIM/ARC key length in bits (mailauth default: 1024). */
@@ -87,21 +91,22 @@ export interface VerifyOptions {
   bulkhead?: Bulkhead;
 }
 
-/** Signatures evaluated per message; the rest are dropped before verifying. */
+/** Maximum DKIM signatures evaluated; exceeding the budget yields incomplete/451. */
 export const MAX_DKIM_SIGNATURES = 8;
 /**
  * Distinct body-hash inputs — (body canonicalization, hash, `l=`) triples —
  * hashed per message. mailauth shares one body pass per triple, so eight
  * signatures that agree cost one pass, and eight that each carry a
  * different `l=` cost eight: a 20 MiB body is ~300 ms of the one event
- * loop per pass. Signatures past the second variant are dropped.
+ * loop per pass. Exceeding this budget yields incomplete/451.
  */
 export const MAX_BODY_HASH_VARIANTS = 2;
-/** ARC sets evaluated per message; more than this and the chain is ignored. */
+/** ARC sets evaluated per message; exceeding this budget yields incomplete/451. */
 export const MAX_ARC_SETS = 10;
 export const VERIFY_TIMEOUT_MS = 20_000;
 /** In-flight verifications process-wide before new ones tempfail. */
-export const VERIFY_CONCURRENCY = 16;
+// Match the SMTP materialization budget: timed-out work retains its message until settled.
+export const VERIFY_CONCURRENCY = 1;
 
 const defaultBulkhead = createBulkhead(VERIFY_CONCURRENCY);
 
@@ -125,69 +130,9 @@ function parseSignatureTags(value: string): Map<string, string> {
   return tags;
 }
 
-/**
- * Whether one DKIM-Signature is worth verifying at all. Two of these are
- * rules mailauth does not enforce and our policy assumes it does:
- *
- * - RFC 6376 §5.4: `From` MUST be signed. A signature whose `h=` omits it
- *   verified as `pass` in mailauth, and DMARC aligned that pass with the
- *   From domain — so anyone holding such a message could rewrite From and
- *   keep DKIM+DMARC pass.
- * - RFC 8301: `rsa-sha1` MUST NOT be accepted (mailauth verifies it).
- *
- * The third is cost: each distinct (body canonicalization, hash, `l=`)
- * triple is a full pass over the body, see {@link MAX_BODY_HASH_VARIANTS}.
- */
-function keepSignature(tags: Map<string, string>, variants: Set<string>): boolean {
-  const algorithm = (tags.get("a") ?? "").toLowerCase();
-  if (algorithm.endsWith("-sha1")) return false;
-  const signed = (tags.get("h") ?? "").toLowerCase().split(":");
-  if (!signed.some((name) => name.trim() === "from")) return false;
-  const canon = (tags.get("c") ?? "simple/simple").toLowerCase();
-  const bodyCanon = canon.split("/")[1] ?? "simple";
-  const hash = algorithm.split("-")[1] ?? "";
-  const variant = `${bodyCanon}:${hash}:${tags.get("l") ?? ""}`;
-  if (!variants.has(variant)) {
-    if (variants.size >= MAX_BODY_HASH_VARIANTS) return false;
-    variants.add(variant);
-  }
-  return true;
-}
-
-/**
- * Bound the sender-controlled work before mailauth sees the message:
- * keep the first {@link MAX_DKIM_SIGNATURES} DKIM-Signature fields that
- * pass {@link keepSignature} (top-most first, as viadkim does), and, past
- * {@link MAX_ARC_SETS} ARC-Seal fields, drop every ARC header (a chain that
- * long is not one we can vouch for anyway — cv=none is the honest answer).
- * Only the verification input is trimmed; the forwarded copy is rebuilt
- * from the whitelist and never carries these headers.
- */
-export function boundSignatureHeaders(raw: Uint8Array): Uint8Array {
-  const parsed = parseMessage(raw);
-  const fields = parsed.headers.fields;
-  const variants = new Set<string>();
-  let kept = 0;
-  let arcSeals = 0;
-  const keep = new Map<HeaderField, boolean>();
-  for (const f of fields) {
-    const name = f.name.toLowerCase();
-    if (name === "dkim-signature") {
-      const ok =
-        keepSignature(parseSignatureTags(f.rawValue), variants) && ++kept <= MAX_DKIM_SIGNATURES;
-      keep.set(f, ok);
-    } else if (name === "arc-seal") arcSeals++;
-  }
-  const dropArc = arcSeals > MAX_ARC_SETS;
-  const dropping = dropArc || [...keep.values()].some((ok) => !ok);
-  if (!dropping) return raw;
-  parsed.headers.retain((f) => {
-    const decided = keep.get(f);
-    if (decided !== undefined) return decided;
-    return !(dropArc && f.name.toLowerCase().startsWith("arc-"));
-  });
-  return serializeMessage(parsed.headers, parsed.body);
-}
+export type AcceptanceEvidence =
+  | { kind: "trusted-indirect"; source: string }
+  | { kind: "abuse"; reason: string };
 
 /** The pre-queue verdict for an inbound message. */
 export type Verdict =
@@ -204,16 +149,17 @@ export type Verdict =
       reason: string;
     };
 
-/** ARC context captured pre-rewrite, in the exact shape the sealer consumes. */
-export interface ArcContext {
-  /** `res.arc.authResults` — the Authentication-Results content for the AAR header. */
-  authResults: string;
-  /** `res.arc.status.result` — chain validation state to stamp as cv= on the new seal. */
-  cv: "none" | "pass" | "fail";
-}
+/** Completed custody transitions; incomplete verification never supplies a seal context. */
+export type ArcContext = { authResults: string } & (
+  | { state: "no-chain"; cv: "none"; nextInstance: 1 }
+  | { state: "valid"; cv: "pass"; nextInstance: number }
+  | { state: "newly-failed"; cv: "fail"; nextInstance: number }
+  | { state: "already-failed"; cv: "fail" }
+);
 
 /** Result of {@link verifyInbound}. */
 export interface VerifyResult {
+  completion: "complete" | "incomplete";
   verdict: Verdict;
   /**
    * Ready-to-prepend header text from mailauth (`Received-SPF` +
@@ -275,8 +221,8 @@ function dkimPassOnlyBodyLengthLimited(res: AuthenticateResult): boolean {
 }
 
 /**
- * The verdict table, evaluated top to bottom; first match wins, no match
- * means accept. Exported as data so wave 2 (and ops) can read the policy at
+ * Authentication findings, evaluated together; independent rejection takes priority
+ * over a DMARC annotation. Exported as data so wave 2 (and ops) can read the policy at
  * a glance.
  */
 export const VERDICT_RULES: readonly VerdictRule[] = [
@@ -317,12 +263,31 @@ export const VERDICT_RULES: readonly VerdictRule[] = [
 ];
 
 /** Map a mailauth result to a verdict using the table + policy. */
-export function mapVerdict(res: AuthenticateResult, policy: VerifyPolicy): Verdict {
+export function mapVerdict(
+  res: AuthenticateResult,
+  policy: VerifyPolicy,
+  evidence?: AcceptanceEvidence,
+  flagDisposition: "reject" | "forward" = "forward",
+): Verdict {
+  if (evidence?.kind === "abuse")
+    return {
+      action: "reject",
+      code: 550,
+      enhanced: "5.7.1",
+      message: "Message rejected by local abuse policy",
+      reason: evidence.reason,
+    };
+  let annotation: Extract<Verdict, { action: "flag" }> | undefined;
   for (const rule of VERDICT_RULES) {
     if (!rule.when(res)) continue;
+    if (rule.reason.startsWith("dmarc-") && evidence?.kind === "trusted-indirect") continue;
     const action = policy[rule.policyKey];
-    if (action === "accept") return { action: "accept" };
-    if (action === "flag") return { action: "flag", reason: rule.reason };
+    if (action === "accept") continue;
+    // A domain assessment is evidence, not independent abuse evidence (RFC 9989 7.4).
+    if (rule.reason.startsWith("dmarc-") || (action === "flag" && flagDisposition === "forward")) {
+      annotation ??= { action: "flag", reason: rule.reason };
+      continue;
+    }
     return {
       action: "reject",
       code: rule.rejectCode,
@@ -331,7 +296,7 @@ export function mapVerdict(res: AuthenticateResult, policy: VerifyPolicy): Verdi
       reason: rule.reason,
     };
   }
-  return { action: "accept" };
+  return annotation ?? { action: "accept" };
 }
 
 /** Default resolver: the container's configured DNS via node:dns. */
@@ -350,7 +315,7 @@ export async function verifyInbound(
 ): Promise<VerifyResult> {
   const policy: VerifyPolicy = { ...DEFAULT_VERIFY_POLICY, ...opts.policy };
   const bytes = typeof rawMessage === "string" ? Buffer.from(rawMessage) : rawMessage;
-  const input = Buffer.from(boundSignatureHeaders(bytes));
+  const input = Buffer.from(bytes);
 
   const bulkhead = opts.bulkhead ?? defaultBulkhead;
   if (!bulkhead.tryAcquire()) return unavailable("bulkhead");
@@ -358,13 +323,30 @@ export async function verifyInbound(
   // completion. The bulkhead slot is therefore held until the work truly
   // settles, so leaked verifications count against concurrency instead of
   // stacking up uncounted behind a 451.
+  let dnsUnavailable = false;
+  const resolver: DnsResolver = async (name, type) => {
+    try {
+      return await (opts.resolver ?? defaultResolver)(name, type);
+    } catch (error) {
+      if (!["ENOTFOUND", "ENODATA"].includes((error as { code?: string }).code ?? ""))
+        dnsUnavailable = true;
+      throw error;
+    }
+  };
   const work = authenticate(input, {
     ip: session.remoteAddress,
     helo: session.heloHostname,
     sender: session.envelopeFrom,
     mta: session.mta,
-    resolver: (opts.resolver ?? defaultResolver) as never,
-    minBitLength: opts.minBitLength,
+    resolver: resolver as never,
+    minBitLength: Math.max(1024, opts.minBitLength ?? 1024),
+    ...{
+      verificationLimits: {
+        dkimSignatures: MAX_DKIM_SIGNATURES,
+        bodyHashVariants: MAX_BODY_HASH_VARIANTS,
+        arcSets: MAX_ARC_SETS,
+      },
+    },
     disableBimi: true,
   });
   work.finally(() => bulkhead.release()).catch(() => {});
@@ -377,20 +359,56 @@ export async function verifyInbound(
     const outcome = await Promise.race([work, budget]);
     if (outcome === null) return unavailable("timeout");
     res = outcome;
+  } catch (error) {
+    if ((error as { code?: string }).code === "EAUTHINCOMPLETE") return unavailable("budget");
+    throw error;
   } finally {
     clearTimeout(timer);
   }
 
-  const arcContext: ArcContext | null =
-    res.arc !== false && typeof res.arc.authResults === "string"
-      ? {
-          authResults: res.arc.authResults,
-          cv: res.arc.status.result as ArcContext["cv"],
-        }
-      : null;
+  // DNS/verification unavailability is not evidence that a chain or identity failed.
+  if (
+    dnsUnavailable ||
+    (res.dmarc !== false && res.dmarc.status.result === "temperror") ||
+    (res.spf !== false && res.spf.status.result === "temperror") ||
+    res.dkim.results.some((r) => r.status.result === "temperror")
+  )
+    return unavailable("dns");
+  const parsed = parseMessage(bytes);
+  const arcFields = parsed.headers.fields.filter((f) =>
+    ["arc-seal", "arc-message-signature", "arc-authentication-results"].includes(
+      f.name.toLowerCase(),
+    ),
+  );
+  let highest = 0;
+  let alreadyFailed = false;
+  let highestSeal = 0;
+  for (const field of arcFields) {
+    const tags = parseSignatureTags(field.rawValue);
+    const instance = arcFieldInstance(field.rawValue);
+    if (instance !== null) {
+      highest = Math.max(highest, instance);
+      if (field.name.toLowerCase() === "arc-seal" && instance >= highestSeal) {
+        if (instance > highestSeal) alreadyFailed = false;
+        highestSeal = instance;
+        if (tags.get("cv")?.toLowerCase() === "fail") alreadyFailed = true;
+      }
+    }
+  }
+  const authResults = res.arc !== false ? res.arc.authResults : undefined;
+  if (typeof authResults !== "string") return unavailable("arc");
+  let arcContext: ArcContext;
+  if (alreadyFailed) arcContext = { state: "already-failed", cv: "fail", authResults };
+  else if (highest >= 50) return unavailable("arc-limit");
+  else if (res.arc !== false && res.arc.status.result === "pass")
+    arcContext = { state: "valid", cv: "pass", authResults, nextInstance: highest + 1 };
+  else if (arcFields.length === 0)
+    arcContext = { state: "no-chain", cv: "none", authResults, nextInstance: 1 };
+  else arcContext = { state: "newly-failed", cv: "fail", authResults, nextInstance: highest + 1 };
 
   return {
-    verdict: mapVerdict(res, policy),
+    completion: "complete",
+    verdict: mapVerdict(res, policy, opts.acceptanceEvidence, opts.flagDisposition),
     prependHeaders: res.headers,
     arcContext,
     raw: res,
@@ -398,8 +416,9 @@ export async function verifyInbound(
 }
 
 /** The 451 result: nothing to prepend, no ARC context, an empty raw. */
-function unavailable(reason: "timeout" | "bulkhead"): VerifyResult {
+function unavailable(reason: string): VerifyResult {
   return {
+    completion: "incomplete",
     verdict: { ...VERIFY_UNAVAILABLE, reason: `verify-${reason}` },
     prependHeaders: "",
     arcContext: null,

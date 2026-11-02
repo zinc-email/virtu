@@ -165,3 +165,30 @@ describe("buildDsn", () => {
     expect(text).toMatch(/\r\n--=_vt-dsn-test-boundary--\r\n$/);
   });
 });
+
+test("long or Unicode diagnostics survive losslessly in MIME and remain signable", async () => {
+  const { signOutbound } = await import("../mailauth/sign.ts");
+  const { makeRsaKeyPair } = await import("../mailauth/test-fixtures.ts");
+  const { assertLineLengths } = await import("./lineLength.ts");
+  const diagnostic = `550 5.1.1 ${"é".repeat(3000)}`;
+  const dsn = build({ remoteReply: diagnostic });
+  const text = decoder.decode(dsn.body);
+  const human = text.split("Content-Transfer-Encoding: base64\r\n\r\n")[1]!.split("\r\n\r\n--")[0]!;
+  expect(Buffer.from(human.replace(/\r\n/g, ""), "base64").toString()).toContain(diagnostic);
+  expect(text).toContain("Status: 5.1.1");
+  expect(text).not.toContain("Diagnostic-Code:");
+  const key = makeRsaKeyPair();
+  const signed = await signOutbound(dsn.headers, dsn.body, {
+    dkimKeys: [{ signingDomain: "virtu.email", selector: "test", privateKey: key.privateKeyPem }],
+  });
+  expect(() => assertLineLengths(signed.message)).not.toThrow();
+});
+
+test("header-heavy original cannot make a DSN exceed the queue size", () => {
+  const headers = sampleOriginalHeaders();
+  headers.append("X-Huge", "x".repeat(100000));
+  const dsn = build({ originalHeaders: headers });
+  expect(dsn.body.length).toBeLessThan(10000);
+  expect(decoder.decode(dsn.body)).toContain("X-Virtu-DSN-Headers-Omitted: 1");
+  expect(decoder.decode(dsn.body)).toContain("Message-ID: <orig-id@initech.com>");
+});

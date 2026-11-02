@@ -1,20 +1,9 @@
 /**
- * The process-wide bound on message bytes held in DATA.
- *
- * Postfix's memory bound is its process count: one hung client is one
- * process holding at most one message, and `default_process_limit` says
- * how many of those there can be. A single-process server has no such
- * arithmetic unless it writes it down. Every connection in DATA holds its
- * message until the DATA hook has queued or refused it, so the worst case
- * was `maxConnections × maxMessageSize` — 25 GiB against a 1 GiB
- * container — and a peer needed no bandwidth to reach it, only patience.
- *
- * This budget is that arithmetic: bytes are reserved as they arrive in
- * DATA and released when the message is disposed of. A DATA command that
- * finds the budget spent is refused with `452 4.3.1` (the sender queues and
- * retries); a message that would overrun it mid-transfer is cut with
- * `421 4.3.1`. Every listener in the process shares one budget, since
- * they share the one heap.
+ * Process-wide reservation for unaccepted DATA, spooled to disk.
+ * Bytes are reserved as they arrive and released after acceptance/refusal.
+ * A full budget refuses DATA with 452; a mid-transfer overrun closes with
+ * 421, leaving the sender responsible for retrying. All listeners share
+ * this disk budget; spool.ts separately serializes buffer materialization.
  */
 
 export interface DataBudget {

@@ -327,3 +327,21 @@ describe("ReplyParser bounds what a server can make the client hold (review roun
     expect(p.feed("250 Ok")?.code).toBe(250);
   });
 });
+
+describe("RFC 5321 §§4.5.2 and 4.5.3.1.6 boundaries", () => {
+  test("transparency dot and CRLF never change the 998-octet content limit at any split", () => {
+    for (const dotted of [false, true]) {
+      for (const length of [997, 998, 999]) {
+        const content = (dotted ? "." : "x") + "x".repeat(length - 1);
+        const wire = Buffer.from(`\r\n${dotted ? "." : ""}${content}\r\n.\r\n`);
+        for (let split = 0; split < wire.length; split++) {
+          const d = new DataDecoder(10000, 998);
+          expect(d.push(wire.subarray(0, split))).toBeNull();
+          expect(d.push(wire.subarray(split))).toEqual(Buffer.alloc(0));
+          expect(d.lineTooLong).toBe(length > 998);
+          if (length <= 998) expect(d.message().toString()).toBe(`\r\n${content}\r\n`);
+        }
+      }
+    }
+  });
+});

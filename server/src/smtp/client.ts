@@ -26,7 +26,7 @@ import type {
 import {
   ReplyParser,
   bracket,
-  dotStuff,
+  dotStuffChunks,
   encodeBase64,
   parseCapabilities,
   renderParams,
@@ -331,12 +331,47 @@ class Session implements SmtpClient {
 
     const bytes =
       typeof options.data === "string" ? Buffer.from(options.data, "utf8") : options.data;
-    this.socket.write(dotStuff(bytes));
+    for (const block of dotStuffChunks(bytes)) {
+      if (this.closed) throw new SmtpClientError("Connection closed during DATA", "CLOSED");
+      if (!this.socket.write(block)) await this.waitForDataDrain();
+    }
     this.socket.write(".\r\n");
     const final = await this.readReply();
     result.data = final;
     result.accepted = final.code >= 200 && final.code < 300;
     return result;
+  }
+
+  private waitForDataDrain(): Promise<void> {
+    const socket = this.socket;
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.off("drain", drained);
+        socket.off("close", closed);
+        socket.off("error", failed);
+      };
+      const drained = () => {
+        cleanup();
+        resolve();
+      };
+      const closed = () => {
+        cleanup();
+        reject(new SmtpClientError("Connection closed during DATA", "CLOSED"));
+      };
+      const failed = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        this.destroy();
+        reject(new SmtpClientError("DATA write timeout", "TIMEOUT"));
+      }, this.timeoutMs);
+      socket.once("drain", drained);
+      socket.once("close", closed);
+      socket.once("error", failed);
+    });
   }
 
   async quit(): Promise<void> {

@@ -25,8 +25,11 @@
     "drizzle-zod": "^0.8.3",
     "fastify": "^5.11.3",
     "fastify-zod-openapi": "^5.7.0",
-    "mailauth": "^5.0.0",
+    "mailauth": "5.0.0",
     "zod": "^4.4.3",
     "zod-openapi": "^6.0.0"
+  },
+  "patchedDependencies": {
+    "mailauth@5.0.0": "patches/mailauth@5.0.0.patch"
   }
 }

@@ -1,11 +1,16 @@
 /**
- * Lane B public surface: inbound verification (SPF/DKIM/DMARC/ARC via one
- * in-process mailauth call, mapped to a pre-queue verdict) and outbound
- * DKIM signing + ARC sealing. Wave 2 (mx/submission wiring) codes against
- * these interfaces; all DNS goes through the injectable resolver.
+ * Authentication boundary: verify original bytes, decide local acceptance, then
+ * sign the final rewritten bytes. The pinned mailauth patch owns RFC 9989 DNS
+ * discovery/alignment and verification budgets without altering ARC input.
+ * verify.ts owns explicit custody transitions and local acceptance policy;
+ * sign.ts requires the final author's key and never weakens header coverage.
+ *
+ * On dependency upgrades, retain engine.unit.test.ts and the downstream
+ * pipeline verification tests as compatibility checks before removing the patch.
  */
 
 export {
+  type AcceptanceEvidence,
   type ArcContext,
   DEFAULT_VERIFY_POLICY,
   type DnsResolver,
@@ -22,9 +27,8 @@ export {
 
 export {
   type ArcSealConfig,
-  DKIM_HEADER_FALLBACK_CHAINS,
+  DKIM_SIGNED_HEADERS,
   type DkimKeyConfig,
-  type SignError,
   type SignOutboundOptions,
   type SignOutboundResult,
   signOutbound,

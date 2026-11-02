@@ -1,24 +1,16 @@
+import { createPrivateKey } from "node:crypto";
+import { createLogger } from "../log.ts";
+import { signingFailuresTotal } from "../metrics/index.ts";
 /**
- * Outbound signing: DKIM (our domain for forwards, alias domain for replies —
- * key selection is the caller's concern, this takes explicit keys) plus an
- * optional ARC seal using the context captured by `verifyInbound` BEFORE the
- * rewrite. Per-forward flow is exactly what mailauth documents for
- * forwarders: `authenticate(original)` → capture `arc.authResults` +
- * `arc.status.result` → rewrite headers → `dkimSign()` + `sealMessage()`.
- *
- * Error handling / fallback chain: mailauth's `dkimSign` does NOT throw per
- * signature — it collects `{ selector, signingDomain, err }` entries in
- * `result.errors` and simply omits the failed signature (this is the per-
- * signature granularity SimpleLogin lacked with dkimpy's DKIMException). We
- * replicate SimpleLogin's header-set fallback chain on top of that: any key
- * that errors with mailauth's default header set is retried with
- * progressively smaller `headerList`s ([Message-ID,Date,Subject,From,To] →
- * [From,To] → [Message-ID,Date] → [From]) before being reported as failed.
+ * Required outbound DKIM signatures use one fixed header policy. ARC sealing
+ * follows all message modifications, including DKIM, using the inbound
+ * validation context. No signing failure weakens the policy or sends unsigned.
  */
 
 import { dkimSign, sealMessage } from "mailauth";
-import { type HeaderBlock, serializeMessage } from "../mail/headers.ts";
-import { foldLongLines } from "../mail/lineLength.ts";
+import { type HeaderBlock, parseAddressList, serializeMessage } from "../mail/headers.ts";
+import { assertLineLengths } from "../mail/lineLength.ts";
+import { arcFieldInstance } from "./arcInstance.ts";
 import type { ArcContext } from "./verify.ts";
 
 /** One DKIM signing key. */
@@ -47,25 +39,38 @@ export interface ArcSealConfig {
   context: ArcContext;
 }
 
-/**
- * SimpleLogin's DKIM header-set fallback chain (app/email/headers.py
- * DKIM_HEADERS), tried in order for any key that fails to sign with
- * mailauth's default header set.
- */
-export const DKIM_HEADER_FALLBACK_CHAINS: readonly (readonly string[])[] = [
-  ["Message-ID", "Date", "Subject", "From", "To"],
-  ["From", "To"],
-  ["Message-ID", "Date"],
-  ["From"],
+/** RFC 6376 §5.4/5.4.1: authenticate the author and core displayed/MIME fields. */
+export const DKIM_SIGNED_HEADERS: readonly string[] = [
+  "From",
+  "Sender",
+  "Reply-To",
+  "To",
+  "Cc",
+  "Subject",
+  "Date",
+  "Message-ID",
+  "In-Reply-To",
+  "References",
+  "MIME-Version",
+  "Content-Type",
+  "Content-Transfer-Encoding",
+  "Content-Disposition",
+  "Content-ID",
+  "Content-Description",
+  "Resent-Date",
+  "Resent-From",
+  "Resent-To",
+  "Resent-Cc",
+  "Resent-Message-ID",
+  "List-Id",
+  "List-Help",
+  "List-Unsubscribe",
+  "List-Unsubscribe-Post",
+  "List-Subscribe",
+  "List-Post",
+  "List-Owner",
+  "List-Archive",
 ];
-
-/** A signing failure that survived every fallback attempt. */
-export interface SignError {
-  selector?: string;
-  signingDomain?: string;
-  /** The underlying error from mailauth/node:crypto. */
-  err: Error;
-}
 
 /** Options for {@link signOutbound}. */
 export interface SignOutboundOptions {
@@ -90,8 +95,6 @@ export interface SignOutboundResult {
   arcHeaders: string;
   /** True when an ARC seal was added. */
   sealed: boolean;
-  /** Keys that failed to produce a signature after every fallback. */
-  errors: SignError[];
 }
 
 /** Shape of mailauth's per-signature error entries (untyped upstream). */
@@ -109,11 +112,40 @@ interface MailauthSignError {
  */
 export const DKIM_SIGNATURE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Run one dkimSign pass over `message` for `keys` with an optional headerList. */
+/** RFC 8301/8463: reject historic hashes, undersized RSA and mismatched keys. */
+function assertSigningKey(key: DkimKeyConfig): void {
+  const algorithm = key.algorithm ?? "rsa-sha256";
+  if (algorithm !== "rsa-sha256" && algorithm !== "ed25519-sha256") {
+    throw new Error("Required DKIM key uses an unsupported signing algorithm");
+  }
+  const privateKey = createPrivateKey(key.privateKey);
+  const type = algorithm === "rsa-sha256" ? "rsa" : "ed25519";
+  if (privateKey.asymmetricKeyType !== type) throw new Error("Required signing key type mismatch");
+  if (type === "rsa" && (privateKey.asymmetricKeyDetails?.modulusLength ?? 0) < 1024) {
+    throw new Error("Required RSA signing key must be at least 1024 bits");
+  }
+}
+
+/** The transport may dot-stuff, but must not normalize signed message bytes. */
+function assertDataReady(message: Uint8Array): void {
+  if (
+    message.length < 2 ||
+    message[message.length - 2] !== 13 ||
+    message[message.length - 1] !== 10
+  ) {
+    throw new Error("Signing requires a CRLF-terminated message");
+  }
+  for (let i = 0; i < message.length; i++) {
+    if (message[i] === 10 && message[i - 1] !== 13) {
+      throw new Error("Signing requires CRLF line endings");
+    }
+  }
+}
+
+/** Exactly one signing pass; no reduced-header retries. */
 async function signPass(
   message: Buffer,
   keys: DkimKeyConfig[],
-  headerList: readonly string[] | undefined,
   signTime: Date | undefined,
 ): Promise<{ signatures: string; errors: MailauthSignError[] }> {
   // Two places mailauth's published option type and its signer disagree
@@ -124,8 +156,8 @@ async function signPass(
   // both from a plain record so no literal is asserted over.
   const untyped: Record<string, Date | string> = {
     expires: new Date((signTime ?? new Date()).getTime() + DKIM_SIGNATURE_LIFETIME_MS),
+    headerList: DKIM_SIGNED_HEADERS.join(":"),
   };
-  if (headerList !== undefined) untyped.headerList = headerList.join(":");
   const res = await dkimSign(message, {
     // DkimSigner reads signatureData only; the top-level key fields are
     // present to satisfy the declared option type and are ignored upstream.
@@ -149,15 +181,26 @@ async function signPass(
 }
 
 /**
- * Sign a rewritten message: serialize headers+body, add one DKIM-Signature
- * per key (with the SimpleLogin fallback chain on per-key failures), then
- * optionally ARC-seal the DKIM-signed message with the pre-rewrite context.
- *
- * Per RFC 8617 a sealer must not extend a chain that failed validation, so
- * when `arc.context.cv === "fail"` the seal is skipped (`sealed: false`)
- * rather than producing an invalid chain.
+ * Require one generated author and an exact-domain DKIM key. This is our
+ * outgoing identity policy (stricter than relaxed DMARC alignment), not a
+ * replacement for complete inbound RFC 5322 mailbox syntax validation.
  */
-export async function signOutbound(
+function assertSigningIdentity(headers: HeaderBlock, keys: DkimKeyConfig[]): void {
+  const fromFields = headers.getFields("From");
+  const authors = fromFields.length === 1 ? parseAddressList(headers.get("From") ?? "") : [];
+  if (authors.length !== 1) throw new Error("Signing requires exactly one From author");
+  const address = authors[0]!.address;
+  const at = address.lastIndexOf("@");
+  const domain = address.slice(at + 1);
+  if (at <= 0 || domain === "" || /[\s<>@]/.test(domain)) {
+    throw new Error("Signing requires a From author domain");
+  }
+  if (!keys.some((key) => key.signingDomain.toLowerCase() === domain.toLowerCase())) {
+    throw new Error("Required DKIM key must match the From author domain");
+  }
+}
+
+async function signRequired(
   headers: HeaderBlock,
   body: Uint8Array,
   opts: SignOutboundOptions,
@@ -165,51 +208,79 @@ export async function signOutbound(
   if (opts.dkimKeys.length === 0) {
     throw new Error("signOutbound requires at least one DKIM key");
   }
-  // Fold before signing: the signature must cover the bytes that go on the
-  // wire, and lines over 998 octets are folded there (mail/lineLength.ts).
-  const base = Buffer.from(foldLongLines(serializeMessage(headers, body)));
+  const base = Buffer.from(serializeMessage(headers, body));
+  assertLineLengths(base);
+  assertDataReady(base);
 
-  // DKIM: mailauth's default (full) header set first, then the SimpleLogin
-  // fallback chains for any key that failed the previous attempt.
-  const attempts: (readonly string[] | undefined)[] = [undefined, ...DKIM_HEADER_FALLBACK_CHAINS];
-  let dkimHeaders = "";
-  const finalErrors: SignError[] = [];
-  let remaining = [...opts.dkimKeys];
-
-  for (let i = 0; i < attempts.length && remaining.length > 0; i++) {
-    const isLastAttempt = i === attempts.length - 1;
-    const { signatures, errors } = await signPass(base, remaining, attempts[i], opts.signTime);
-    if (signatures !== "") dkimHeaders += signatures;
-
-    const failed: DkimKeyConfig[] = [];
-    for (const e of errors) {
-      const key = remaining.find(
-        (k) => k.selector === e.selector && k.signingDomain === e.signingDomain,
-      );
-      if (key !== undefined && !isLastAttempt) {
-        failed.push(key);
-      } else {
-        // last attempt, or an error we cannot map to a key: report it
-        finalErrors.push({ selector: e.selector, signingDomain: e.signingDomain, err: e.err });
-      }
-    }
-    remaining = failed;
+  assertSigningIdentity(headers, opts.dkimKeys);
+  try {
+    for (const key of opts.dkimKeys) assertSigningKey(key);
+  } catch (error) {
+    throw new AggregateError([error], "Required DKIM signing failed");
+  }
+  const { signatures: dkimHeaders, errors } = await signPass(base, opts.dkimKeys, opts.signTime);
+  const signatureCount = dkimHeaders.match(/^DKIM-Signature:/gim)?.length ?? 0;
+  if (errors.length > 0 || signatureCount !== opts.dkimKeys.length) {
+    throw new AggregateError(
+      errors.map((error) => error.err),
+      "Required DKIM signing failed",
+    );
   }
 
   const dkimSigned = dkimHeaders === "" ? base : Buffer.concat([Buffer.from(dkimHeaders), base]);
 
-  // ARC seal (over the DKIM-signed message so the AMS covers the final state).
+  // RFC 8617 §5.1: a newly detected failure gets its own cv=fail set;
+  // an incoming chain whose newest seal already says fail is not extended.
   let arcHeaders = "";
-  if (opts.arc !== undefined && opts.arc.context.cv !== "fail") {
+  const arc = opts.arc;
+  if (arc !== undefined && arc.context.state !== "already-failed") {
+    const context = arc.context;
+    const incoming = headers.fields.filter((field) =>
+      ["arc-seal", "arc-message-signature", "arc-authentication-results"].includes(
+        field.name.toLowerCase(),
+      ),
+    );
+    if (context.state === "no-chain" && incoming.length !== 0) {
+      throw new Error("Cannot start ARC chain over existing ARC fields");
+    }
+    if (context.state !== "no-chain" && incoming.length === 0) {
+      throw new Error("Incoming ARC fields missing from rewritten message");
+    }
+    const instances = incoming.flatMap((field) => {
+      const instance = arcFieldInstance(field.rawValue);
+      return instance === null ? [] : [instance];
+    });
+    const expectedInstance = Math.max(0, ...instances) + 1;
+    if (
+      !Number.isSafeInteger(context.nextInstance) ||
+      context.nextInstance < 1 ||
+      context.nextInstance > 50 ||
+      context.nextInstance !== expectedInstance
+    ) {
+      throw new Error("Invalid ARC sealing instance for incoming chain");
+    }
+    assertSigningKey({
+      signingDomain: arc.signingDomain,
+      selector: arc.selector,
+      privateKey: arc.privateKey,
+      algorithm: "rsa-sha256",
+    });
     const sealBuffer = await sealMessage(dkimSigned, {
-      signingDomain: opts.arc.signingDomain,
-      selector: opts.arc.selector,
-      privateKey: opts.arc.privateKey,
-      authResults: opts.arc.context.authResults,
-      cv: opts.arc.context.cv,
+      signingDomain: arc.signingDomain,
+      selector: arc.selector,
+      privateKey: arc.privateKey,
+      authResults: context.authResults,
+      cv: context.cv,
+      i: context.nextInstance,
       signTime: opts.signTime,
     } as never);
     arcHeaders = sealBuffer.toString("utf-8");
+    // mailauth can report signer failures by omitting individual fields.
+    // Require a complete set before returning any message bytes.
+    for (const field of ["ARC-Seal", "ARC-Message-Signature", "ARC-Authentication-Results"]) {
+      const count = arcHeaders.match(new RegExp(`^${field}:`, "gim"))?.length ?? 0;
+      if (count !== 1) throw new Error("Required ARC sealing failed");
+    }
   }
 
   const message =
@@ -217,11 +288,34 @@ export async function signOutbound(
       ? new Uint8Array(dkimSigned)
       : new Uint8Array(Buffer.concat([Buffer.from(arcHeaders), dkimSigned]));
 
+  assertLineLengths(message);
+  assertDataReady(message);
   return {
     message,
     dkimHeaders,
     arcHeaders,
     sealed: arcHeaders !== "",
-    errors: finalErrors,
   };
+}
+
+/** Operator-visible failure signal; alert on virtu_signing_failures_total. */
+export function reportSigningFailure(error: unknown): void {
+  signingFailuresTotal.inc();
+  createLogger("mailauth").error("required_signing_failed", {
+    error: error instanceof Error ? error.message : String(error),
+    consequence: "message not accepted or queued",
+  });
+}
+
+export async function signOutbound(
+  headers: HeaderBlock,
+  body: Uint8Array,
+  opts: SignOutboundOptions,
+): Promise<SignOutboundResult> {
+  try {
+    return await signRequired(headers, body, opts);
+  } catch (error) {
+    reportSigningFailure(error);
+    throw error;
+  }
 }

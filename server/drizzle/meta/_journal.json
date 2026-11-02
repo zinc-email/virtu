@@ -29,6 +29,13 @@
       "when": 1788935167112,
       "tag": "0003_email-logs-return-path",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793418593905,
+      "tag": "0004_durable-failure-jobs",
+      "breakpoints": true
     }
   ]
 }

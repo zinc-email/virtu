@@ -9,8 +9,8 @@
  *   2. message/delivery-status  the machine-readable per-message/per-recipient
  *                               fields (Reporting-MTA, Final-Recipient,
  *                               Action, Status, Diagnostic-Code)
- *   3. text/rfc822-headers      the failed message's full header block,
- *                               byte-faithful (returning only headers keeps
+ *   3. text/rfc822-headers      the failed message's header block,
+ *                               bounded to 64 KiB (returning headers keeps
  *                               DSNs small and never re-leaks large bodies)
  *
  * The caller owns the envelope contract (RFC 5321 §4.5.5): a DSN is sent
@@ -18,6 +18,7 @@
  * message that itself had a null reverse path — deliverd enforces both.
  */
 
+import { assertLineLengths } from "./lineLength.ts";
 import { randomBytes } from "node:crypto";
 import { formatDateHeader, HeaderBlock } from "./headers.ts";
 
@@ -33,9 +34,8 @@ export const MAILER_DAEMON = "MAILER-DAEMON";
 export interface BuildDsnOptions {
   /**
    * Header block of the failed message (as parsed off the queue row's raw
-   * bytes). Returned verbatim in the text/rfc822-headers part, so anything
-   * the sender needs to correlate (Message-ID, X-Virtu-Test-Id, ...) is
-   * preserved.
+   * bytes). Complete fields are returned within a 64 KiB budget; omitted
+   * fields are counted in X-Virtu-DSN-Headers-Omitted.
    */
   originalHeaders: HeaderBlock;
   /** The envelope recipient that permanently failed (queue row envelope_to). */
@@ -108,6 +108,43 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
   return out;
 }
 
+/** Encode only generated/returned MIME parts; never fold an original body. */
+function textPart(contentType: string, bytes: Uint8Array): Uint8Array {
+  let encoded = bytes.some((b) => b > 127);
+  try {
+    assertLineLengths(bytes);
+  } catch {
+    encoded = true;
+  }
+  if (!encoded) return concatBytes([encoder.encode(`Content-Type: ${contentType}\r\n\r\n`), bytes]);
+  const base64 =
+    Buffer.from(bytes)
+      .toString("base64")
+      .match(/.{1,76}/g)
+      ?.join("\r\n") ?? "";
+  return encoder.encode(
+    `Content-Type: ${contentType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64}`,
+  );
+}
+
+/** Bound returned headers so even a header-heavy original can be bounced. */
+function returnedHeaders(original: HeaderBlock): Uint8Array {
+  const fields = [];
+  let size = 0;
+  let omitted = 0;
+  for (const field of original.fields) {
+    const bytes = new HeaderBlock([field]).serialize();
+    if (size + bytes.length > 64 * 1024) {
+      omitted++;
+      continue;
+    }
+    fields.push(bytes);
+    size += bytes.length;
+  }
+  if (omitted > 0) fields.push(encoder.encode(`X-Virtu-DSN-Headers-Omitted: ${omitted}\r\n`));
+  return concatBytes(fields);
+}
+
 /**
  * Build a multipart/report delivery-status notification for one permanently
  * failed recipient. Returns headers + body separately so the caller can DKIM
@@ -149,6 +186,12 @@ export function buildDsn(opts: BuildDsnOptions): BuiltDsn {
     `<${opts.failedRecipient}>: ${reply}`,
   ].join("\r\n");
 
+  // RFC 3464 §2.3.6 makes Diagnostic-Code optional. Keep the actual
+  // diagnostic when representable in a legal 7-bit field; otherwise the
+  // full diagnostic remains lossless in the encoded human-readable part.
+  const diagnosticField = `Diagnostic-Code: smtp; ${reply}`;
+  const includeDiagnostic =
+    /^[\x20-\x7e\t]*$/.test(diagnosticField) && Buffer.byteLength(diagnosticField) <= 998;
   const statusPart = [
     `Reporting-MTA: dns; ${opts.reportingMta}`,
     `Arrival-Date: ${date}`,
@@ -156,33 +199,18 @@ export function buildDsn(opts: BuildDsnOptions): BuiltDsn {
     `Final-Recipient: rfc822; ${opts.failedRecipient}`,
     "Action: failed",
     `Status: ${status}`,
-    `Diagnostic-Code: smtp; ${reply}`,
+    ...(includeDiagnostic ? [diagnosticField] : []),
   ].join("\r\n");
 
-  const originalHeaderBytes = opts.originalHeaders.serialize();
-  const needsBreak =
-    originalHeaderBytes.length > 0 && originalHeaderBytes[originalHeaderBytes.length - 1] !== 0x0a;
-
+  const originalHeaderBytes = returnedHeaders(opts.originalHeaders);
   const body = concatBytes([
+    encoder.encode(`This is a MIME-encapsulated message.\r\n\r\n--${boundary}\r\n`),
+    textPart("text/plain; charset=utf-8", encoder.encode(humanPart)),
     encoder.encode(
-      "This is a MIME-encapsulated message.\r\n" +
-        "\r\n" +
-        `--${boundary}\r\n` +
-        "Content-Type: text/plain; charset=utf-8\r\n" +
-        "\r\n" +
-        `${humanPart}\r\n` +
-        "\r\n" +
-        `--${boundary}\r\n` +
-        "Content-Type: message/delivery-status\r\n" +
-        "\r\n" +
-        `${statusPart}\r\n` +
-        "\r\n" +
-        `--${boundary}\r\n` +
-        "Content-Type: text/rfc822-headers\r\n" +
-        "\r\n",
+      `\r\n\r\n--${boundary}\r\nContent-Type: message/delivery-status\r\n\r\n${statusPart}\r\n\r\n--${boundary}\r\n`,
     ),
-    originalHeaderBytes,
-    encoder.encode(`${needsBreak ? "\r\n" : ""}\r\n--${boundary}--\r\n`),
+    textPart("text/rfc822-headers", originalHeaderBytes),
+    encoder.encode(`\r\n\r\n--${boundary}--\r\n`),
   ]);
 
   return { headers, body };

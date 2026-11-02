@@ -12,6 +12,7 @@
  * are performed by piping the accepted socket's encrypted bytes through a
  * one-shot loopback `tls.Server`. See `upgradeServerSocket`.
  */
+import { DataSpool, withDataProcessing } from "./spool.ts";
 import net from "node:net";
 import tls from "node:tls";
 import { Buffer } from "node:buffer";
@@ -48,7 +49,7 @@ const DEFAULTS = {
   // relay for anyone needs far fewer, and every slot a dribbling peer holds
   // is one an honest MTA cannot have (sessionTimeoutMs bounds the hold).
   maxConnectionsPerIp: 20,
-  maxDataLineLength: 10_000,
+  maxDataLineLength: 998,
   commandTimeoutMs: 300_000,
   dataTimeoutMs: 600_000,
   sessionTimeoutMs: 30 * 60_000,
@@ -219,6 +220,7 @@ class Connection {
   private destroyed = false;
   private greeted = false;
   private pumping = false;
+  private finishingData = false;
   private skipUntilLf = false;
   private greetingRejected = false;
   private errors = 0;
@@ -236,6 +238,7 @@ class Connection {
   private mailParams: SmtpParams = {};
   private rcptTo: SmtpRecipient[] = [];
   private dataDecoder: DataDecoder | null = null;
+  private dataSpool: DataSpool | null = null;
 
   // AUTH continuation state
   private authDialog: { mechanism: "PLAIN" | "LOGIN"; username?: string } | null = null;
@@ -289,6 +292,8 @@ class Connection {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.sessionTimer) clearTimeout(this.sessionTimer);
     this.releaseDataHeld();
+    void this.dataSpool?.close().catch(() => {});
+    this.dataSpool = null;
     this.socket.destroy();
     if (this.bridgeSocket) this.bridgeSocket.destroy();
     if (this.rawSocket !== this.socket) this.rawSocket.destroy();
@@ -429,7 +434,7 @@ class Connection {
     } catch {
       return { reject: { code: 451, enhanced: "4.3.0", message: "Internal server error" } };
     } finally {
-      if (!this.destroyed && this.socket === socket) socket.resume();
+      if (!this.destroyed && !this.finishingData && this.socket === socket) socket.resume();
     }
   }
 
@@ -475,8 +480,16 @@ class Connection {
           if (this.buf.length === 0) break;
           const chunk = this.buf;
           this.buf = Buffer.alloc(0);
+          this.socket.pause();
           const rest = this.dataDecoder!.push(chunk);
-          if (rest === null) break;
+          const decoded = this.dataDecoder!.drain();
+          await this.dataSpool!.write(decoded);
+          if (this.destroyed) break;
+          if (rest === null) {
+            this.socket.resume();
+            if (this.chunks.length > 0) continue;
+            break;
+          }
           this.buf = Buffer.from(rest);
           this.mode = "command";
           this.armIdleTimer();
@@ -530,6 +543,10 @@ class Connection {
         this.armIdleTimer();
         await this.handleLine(split.line.toString("utf8"));
       }
+    } catch {
+      // Disk/transport failure before acceptance: the sender retains the mail.
+      this.write(reply(451, "4.3.0", "Temporary mail storage failure"));
+      this.destroy();
     } finally {
       this.pumping = false;
     }
@@ -716,13 +733,21 @@ class Connection {
     this.write(reply(250, "2.1.5", "Ok"));
   }
 
-  private handleData(arg: string): void {
+  private async handleData(arg: string): Promise<void> {
     if (arg.trim() !== "") return this.sayError(501, "5.5.4", "DATA takes no arguments");
     if (this.mailFrom === null) return this.sayError(503, "5.5.1", "Need MAIL command first");
     if (this.rcptTo.length === 0) return this.sayError(503, "5.5.1", "Need RCPT command first");
     if (this.dataBudget.inFlight() >= this.dataBudget.maxBytes) {
       return this.sayError(452, "4.3.1", "Insufficient system storage, try again later");
     }
+    this.socket.pause();
+    const spool = await DataSpool.create();
+    if (this.destroyed) {
+      await spool.close();
+      return;
+    }
+    this.dataSpool = spool;
+    this.socket.resume();
     this.dataDecoder = new DataDecoder(this.opts.maxMessageSize, this.opts.maxDataLineLength);
     this.mode = "data";
     this.dataDeadlineAt = Date.now() + this.opts.dataTimeoutMs;
@@ -731,11 +756,21 @@ class Connection {
   }
 
   private async finishData(): Promise<void> {
+    const spool = this.dataSpool!;
+    this.finishingData = true;
+    this.socket.pause();
     try {
-      await this.disposeData();
+      await withDataProcessing(async () => {
+        if (!this.destroyed) await this.disposeData();
+      });
     } finally {
-      // The message is queued or refused either way: its bytes are free.
+      // Acceptance may already be committed and acknowledged. Cleanup must
+      // never turn that success into a second, contradictory SMTP reply.
+      await spool.close().catch(() => {});
+      this.dataSpool = null;
+      this.finishingData = false;
       this.releaseDataHeld();
+      if (!this.destroyed) this.socket.resume();
     }
   }
 
@@ -756,7 +791,8 @@ class Connection {
     if (decoder.lineTooLong) {
       return this.sayError(500, "5.6.0", "Line too long");
     }
-    const raw = decoder.message();
+    const raw = await this.dataSpool!.read();
+
     const { headers, body } = splitMessage(raw);
     const result = await this.runHook(this.opts.onData, {
       session: this.session,

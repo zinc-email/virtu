@@ -50,7 +50,11 @@ export async function deleteMessages(db: Db, ids: number[]): Promise<number[]> {
   const rows = await db
     .delete(outboundMessages)
     .where(
-      and(inArray(outboundMessages.id, ids), inArray(outboundMessages.status, ["failed", "sent"])),
+      and(
+        inArray(outboundMessages.id, ids),
+        eq(outboundMessages.failurePending, false),
+        inArray(outboundMessages.status, ["failed", "sent"]),
+      ),
     )
     .returning({ id: outboundMessages.id });
   queueAdminTotal.inc({ op: "delete" }, rows.length);
@@ -73,6 +77,7 @@ export async function requeueMessages(db: Db, ids: number[]): Promise<number[]> 
       and(
         inArray(outboundMessages.id, ids),
         eq(outboundMessages.status, "failed"),
+        eq(outboundMessages.failurePending, false),
         sql`octet_length(${outboundMessages.raw}) > 0`,
       ),
     )

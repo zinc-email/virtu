@@ -1,3 +1,6 @@
+import { beforeAll } from "bun:test";
+import { ensureTestSigningKey } from "../routes/intHarness.ts";
+beforeAll(ensureTestSigningKey);
 /**
  * The round-2 review's budget doors, closed, through the real MX against
  * the dockerized Postgres: duplicate RCPTs collapse to one copy, fresh
@@ -271,7 +274,11 @@ describe("rcpt budgets (review round 2)", () => {
     });
     await envelope(big, `reporter-${t}@peer.int.test`, [`${localpart}@virtu.email`]);
     expect(
-      await data(big, `From: reporter-${t}@peer.int.test\r\nSubject: big`, "x".repeat(4096)),
+      await data(
+        big,
+        `From: reporter-${t}@peer.int.test\r\nSubject: big`,
+        ("x".repeat(512) + "\r\n").repeat(8),
+      ),
     ).toMatch(/^552 5\.3\.4/);
   });
 });

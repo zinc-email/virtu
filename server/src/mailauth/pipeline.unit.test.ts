@@ -24,6 +24,7 @@ import {
   makeStubResolver,
   type TestKeyPair,
 } from "./test-fixtures.ts";
+import { DataDecoder, dotStuffChunks } from "../smtp/wire.ts";
 import { verifyInbound } from "./verify.ts";
 
 const enc = new TextEncoder();
@@ -160,9 +161,59 @@ describe("mx pipeline: verify → rewrite → sign/seal → re-verify", () => {
       },
     });
 
-    expect(sealed.errors).toEqual([]);
+    // Transport transparency must preserve the signed bytes exactly.
+    const receiver = new DataDecoder(sealed.message.length, 998);
+    for (const chunk of dotStuffChunks(sealed.message, 127)) receiver.push(chunk);
+    receiver.push(Buffer.from(".\r\n"));
+    expect(receiver.message().equals(Buffer.from(sealed.message))).toBe(true);
+
     expect(sealed.sealed).toBe(true);
     expect(sealed.arcHeaders).toContain("cv=none");
+
+    // Forward a message which already has a valid ARC set. The old set
+    // must survive byte-for-byte and the downstream verifier must accept i=2.
+    const chainedVerification = await verifyInbound(
+      { remoteAddress: OUR_IP, envelopeFrom: "sender@virtu.test", mta: "mx.virtu.test" },
+      sealed.message,
+      { resolver: makeStubResolver(mailboxProviderZones()) },
+    );
+    expect(
+      chainedVerification.raw.arc !== false && chainedVerification.raw.arc.status,
+    ).toMatchObject({ result: "pass" });
+    const chainedParsed = parseMessage(sealed.message);
+    const chainedRewrite = await rewriteForward(
+      { headers: chainedParsed.headers },
+      {
+        alias: { email: "another@virtu.test" },
+        mailbox: { email: "private@qmail.com" },
+        envelopeFrom: "sender@virtu.test",
+        emailLogId: 43,
+        getOrCreateContact: async () => ({ replyEmail: "reverse@virtu.test" }),
+      },
+    );
+    const chained = await signOutbound(chainedRewrite.headers, chainedParsed.body, {
+      dkimKeys: [
+        { signingDomain: "virtu.test", selector: "vs1", privateKey: ourDkimKey.privateKeyPem },
+      ],
+      arc: {
+        signingDomain: "virtu.test",
+        selector: "arc1",
+        privateKey: ourArcKey.privateKeyPem,
+        context: chainedVerification.arcContext!,
+      },
+    });
+    expect(chained.arcHeaders).toContain("i=2");
+    expect(chained.arcHeaders).toContain("cv=pass");
+    const chainedAuth = await authenticate(Buffer.from(chained.message), {
+      resolver: makeStubResolver(mailboxProviderZones()) as never,
+      disableBimi: true,
+      ip: OUR_IP,
+      sender: "sender@virtu.test",
+      mta: "downstream.test",
+    });
+    expect(chainedAuth.arc !== false && chainedAuth.arc.status.result).toBe("pass");
+    expect(chainedAuth.arc !== false && chainedAuth.arc.i).toBe(2);
+    expect(parseMessage(chained.message).body).toEqual(parsed.body);
 
     // envelope from is a VERP bounce address on our domain (SPF-aligned)
     const envelopeFrom = buildVerp({

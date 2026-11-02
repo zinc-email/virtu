@@ -55,6 +55,9 @@ const ConfigSchema = z.object({
   mailDomain: z.string().default("virtu.email"),
   // Our MX hostname: SMTP banner, EHLO, Authentication-Results stamps.
   mailHostname: z.string().default("mail.virtu.email"),
+  // Disposition for non-DMARC authentication flags. DMARC alone does not
+  // establish abuse; those messages retain their annotation when forwarded.
+  inboundFlagDisposition: z.enum(["reject", "forward"]).default("reject"),
   // DKIM selector for our signing key in dkim_keys ({selector}._domainkey.{domain}).
   dkimSelector: z.string().default("mail"),
   // Role addresses on the service domain (RFC 2142) routed to the operators
@@ -90,12 +93,9 @@ const ConfigSchema = z.object({
     .number()
     .int()
     .default(25 * 1024 * 1024),
-  // Message bytes all SMTP listeners together may hold in DATA (received,
-  // not yet queued or refused — smtp/dataBudget.ts). The one bound on what
-  // peers can make the mail process hold: past it DATA is refused with
-  // 452 4.3.1 and an in-flight transfer is cut with 421. Size it so this
-  // plus the process baseline fits the container's mem_limit (RSS runs
-  // ~1.5× the bytes held).
+  // Unaccepted DATA bytes across all listeners, spooled to disk. Past this
+  // disk reservation DATA is refused with 452; an overrun gets 421.
+  // Verification/signing materializes only one inbound message at a time.
   smtpMaxDataBytesInFlight: z.coerce
     .number()
     .int()

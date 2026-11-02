@@ -18,7 +18,7 @@
 
 import { promises as dns } from "node:dns";
 import net from "node:net";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, inArray, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { type OutboundMessage, outboundMessages } from "../db/schema.ts";
 import { createLogger, type Logger } from "../log.ts";
@@ -464,20 +464,21 @@ export interface QueueWorkerOptions {
   maxTries: number;
   /**
    * Destination domains delivered at once within a batch (rows for one
-   * domain always go one at a time). Default 8. One slow destination then
-   * costs the batch one slot, not the whole batch — and once its first row
-   * times out the domain pause (destinationThrottle.ts) defers the rest
-   * without an attempt.
+   * domain always go one at a time). Default 1 bounds materialized mail.
+   * Raising this requires memory for additional message buffers. After a
+   * destination timeout, its domain pause defers the remaining rows.
    */
   concurrency?: number;
   deliver: DeliverFn;
-  /** Called once per row that permanently failed (bounce accounting, DSN,
+  /** Retried transactionally for each permanent failure; all database effects
+   * MUST use the supplied transaction. No external side effects. (bounce accounting, DSN,
    * mailbox suppression — `enhancedCode` is the refusing reply's RFC 3463
    * code when the remote sent one). */
   onPermanentFailure?: (
     row: OutboundMessage,
     error: string,
-    enhancedCode?: string,
+    enhancedCode: string | undefined,
+    transaction: Db,
   ) => Promise<void>;
   /** Retry-delay shape; defaults are the ~4-day horizon (backoff.ts). */
   backoff?: { baseMs?: number; maxMs?: number };
@@ -507,10 +508,13 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
   const now = opts.now ?? (() => new Date());
   const logger = opts.logger ?? defaultLogger();
 
+  await processFailureJobs(db, opts);
+
+  const { raw: _raw, ...metadata } = getTableColumns(outboundMessages);
   const batchClaimTime = now();
   const claimed = await db.transaction(async (tx) => {
     const rows = await tx
-      .select()
+      .select(metadata)
       .from(outboundMessages)
       .where(
         and(eq(outboundMessages.status, "pending"), lte(outboundMessages.nextAttemptAt, now())),
@@ -551,7 +555,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
         );
 
   // One claimed row, start to finish. `continue` in the old loop is `return`.
-  const processRow = async (row: OutboundMessage): Promise<void> => {
+  const processRow = async (row: (typeof claimed)[number]): Promise<void> => {
     opts.onRowStart?.();
     const domain = destinationDomain(row.envelopeTo);
     const pausedUntil = paused.get(domain);
@@ -611,7 +615,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
           eq(outboundMessages.claimedAt, batchClaimTime),
         ),
       )
-      .returning({ id: outboundMessages.id });
+      .returning({ id: outboundMessages.id, raw: outboundMessages.raw });
     if (refreshed.length === 0) {
       rowLogger.warn("delivery_skipped_row_taken_over");
       return;
@@ -621,7 +625,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
     const startedMs = now().getTime();
     let outcome: DeliveryOutcome;
     try {
-      outcome = await opts.deliver({ ...row, tries });
+      outcome = await opts.deliver({ ...row, raw: refreshed[0]!.raw, tries });
     } catch (err) {
       outcome = { kind: "transient", error: `deliver threw: ${(err as Error).message}` };
     }
@@ -730,7 +734,14 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
       case "permanent": {
         const updated = await db
           .update(outboundMessages)
-          .set({ status: "failed", lastError: outcome.error, claimedAt: null })
+          .set({
+            status: "failed",
+            lastError: outcome.error,
+            claimedAt: null,
+            failurePending: true,
+            failureEnhancedCode: outcome.enhancedCode ?? null,
+            nextAttemptAt: now(),
+          })
           .where(guard)
           .returning({ id: outboundMessages.id });
         if (updated.length === 0) break; // row taken over: no bounce action
@@ -739,15 +750,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
           durationMs,
           error: outcome.error,
         });
-        if (opts.onPermanentFailure !== undefined) {
-          try {
-            await opts.onPermanentFailure(row, outcome.error, outcome.enhancedCode);
-          } catch (err) {
-            rowLogger.error("permanent_failure_hook_error", {
-              error: (err as Error).message,
-            });
-          }
-        }
+
         break;
       }
     }
@@ -757,7 +760,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
   // a domain's own rows one after another, so one destination can never
   // hold more than one slot of the batch. The pause map is re-read per row
   // because a deferral earlier in this batch updates it.
-  const groups = new Map<string, OutboundMessage[]>();
+  const groups = new Map<string, (typeof claimed)[number][]>();
   for (const row of claimed) {
     const domain = destinationDomain(row.envelopeTo);
     const group = groups.get(domain);
@@ -765,7 +768,7 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
     else group.push(row);
   }
   const queue = [...groups.values()];
-  const limit = Math.max(1, opts.concurrency ?? 8);
+  const limit = Math.max(1, opts.concurrency ?? 1);
   await Promise.all(
     Array.from({ length: Math.min(limit, queue.length) }, async () => {
       for (let group = queue.shift(); group !== undefined; group = queue.shift()) {
@@ -773,7 +776,65 @@ export async function processQueueOnce(db: Db, opts: QueueWorkerOptions): Promis
       }
     }),
   );
+  await processFailureJobs(db, opts);
   return claimed.length;
+}
+
+/**
+ * Failed rows are also durable jobs. Row locks exclude concurrent workers;
+ * a crash/exception rolls back the accounting, suppression, DSN enqueue and
+ * completion marker together. A failed job never re-enters SMTP delivery.
+ */
+export async function processFailureJobs(db: Db, opts: QueueWorkerOptions): Promise<void> {
+  const hook = opts.onPermanentFailure;
+  if (hook === undefined) return;
+  const now = opts.now ?? (() => new Date());
+  const logger = opts.logger ?? defaultLogger();
+  for (let i = 0; i < opts.batchSize; i++) {
+    const processed = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(outboundMessages)
+        .where(
+          and(
+            eq(outboundMessages.status, "failed"),
+            eq(outboundMessages.failurePending, true),
+            lte(outboundMessages.nextAttemptAt, now()),
+          ),
+        )
+        .orderBy(asc(outboundMessages.nextAttemptAt))
+        .limit(1)
+        .for("update", { skipLocked: true });
+      if (row === undefined) return false;
+      try {
+        // Savepoint lets us roll back partial hook effects while retaining
+        // the outer lock to schedule the next attempt safely.
+        await tx.transaction(async (effects) => {
+          await hook(
+            row,
+            row.lastError ?? "Delivery failed",
+            row.failureEnhancedCode ?? undefined,
+            effects,
+          );
+          await effects
+            .update(outboundMessages)
+            .set({ failurePending: false })
+            .where(eq(outboundMessages.id, row.id));
+        });
+      } catch (err) {
+        await tx
+          .update(outboundMessages)
+          .set({ nextAttemptAt: new Date(now().getTime() + 60_000) })
+          .where(eq(outboundMessages.id, row.id));
+        logger.error("permanent_failure_hook_error", {
+          queueId: row.id,
+          error: (err as Error).message,
+        });
+      }
+      return true;
+    });
+    if (!processed) break;
+  }
 }
 
 // Lazy so pure unit tests never construct a logger they didn't inject.

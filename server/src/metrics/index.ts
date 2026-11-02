@@ -20,6 +20,11 @@ export { providerFor } from "./provider.ts";
 export { Counter, Gauge, Histogram, Registry } from "./registry.ts";
 
 export const registry = new Registry();
+export const signingFailuresTotal = registry.counter(
+  "virtu_signing_failures_total",
+  "Required outbound signing failures",
+  [],
+);
 
 // ── Process ─────────────────────────────────────────────────────────────────
 
@@ -213,6 +218,19 @@ let queueCollectorsRegistered = false;
 export function registerQueueCollectors(db: Db): void {
   if (queueCollectorsRegistered) return;
   queueCollectorsRegistered = true;
+
+  registry.gauge(
+    "virtu_failure_jobs_pending",
+    "Permanent failure jobs awaiting completion",
+    [],
+    async (gauge) => {
+      const [row] = await db
+        .select({ n: count() })
+        .from(outboundMessages)
+        .where(eq(outboundMessages.failurePending, true));
+      gauge.set(row?.n ?? 0);
+    },
+  );
 
   registry.gauge(
     "virtu_queue_depth",

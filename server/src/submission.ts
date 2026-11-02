@@ -1,3 +1,5 @@
+import { reportSigningFailure } from "./mailauth/sign.ts";
+import { signedMessageLimit } from "./queue/enqueue.ts";
 /**
  * submission — authenticated mail submission (PLAN Milestone 2): one options
  * object, two listeners — 587 (STARTTLS required before AUTH, always: with
@@ -54,14 +56,7 @@ import {
 } from "./db/schema.ts";
 import { splitSmtpPassword, verifyAgainstDummy, warmDummyHash } from "./auth/smtpPassword.ts";
 import { createLogger, type Logger } from "./log.ts";
-import {
-  buildVerp,
-  foldLongLines,
-  MAX_HEADER_FIELDS,
-  parseMessage,
-  rewriteReply,
-  serializeMessage,
-} from "./mail/index.ts";
+import { buildVerp, MAX_HEADER_FIELDS, parseMessage, rewriteReply } from "./mail/index.ts";
 import { signOutbound } from "./mailauth/index.ts";
 import {
   smtpConnectionsTotal,
@@ -456,7 +451,14 @@ async function handleSubmissionData(
   // pass. One process (maild), one lock map; a second submission process
   // would have its own, which at worst doubles the quota, not unbounds it.
   return withUserSendLock(user.id, () =>
-    completeSubmission(event, opts, log, user, { alias, plan, mode, sendingMailboxId }),
+    opts.db.transaction((tx) =>
+      completeSubmission(event, { ...opts, db: tx }, log, user, {
+        alias,
+        plan,
+        mode,
+        sendingMailboxId,
+      }),
+    ),
   );
 }
 
@@ -657,26 +659,19 @@ async function completeSubmission(
     }
   }
 
-  // Key selection: a custom-domain alias signs with its own domain's key
-  // once the domain's DKIM record is verified (dkim_verified); otherwise —
-  // and for service-domain aliases — the service key.
+  // Resolve the required identity: custom aliases require their own key;
+  // service aliases use the service key. Missing keys defer acceptance.
   const dkimKey = await selectReplyDkimKey(opts.db, alias, {
     serviceDomain: opts.mailDomain,
     serviceSelector: opts.dkimSelector,
   });
   let message: Uint8Array;
   if (dkimKey === null) {
-    log.warn("dkim_key_missing", { domain: aliasDomain, consequence: "sending unsigned" });
-    message = foldLongLines(serializeMessage(result.headers, parsed.body));
+    reportSigningFailure(new Error("Required DKIM key unavailable"));
+    log.error("dkim_key_missing", { domain: aliasDomain, consequence: "acceptance deferred" });
+    throw new Error("Required DKIM key unavailable");
   } else {
     const signed = await signOutbound(result.headers, parsed.body, { dkimKeys: [dkimKey] });
-    for (const err of signed.errors) {
-      log.error("dkim_sign_error", {
-        domain: err.signingDomain,
-        selector: err.selector,
-        error: err.err.message,
-      });
-    }
     message = signed.message;
   }
 
@@ -693,7 +688,7 @@ async function completeSubmission(
       raw: message,
       envelopeFrom,
       envelopeTo: target.contact.websiteEmail,
-      maxRawBytes: opts.maxMessageSize,
+      maxRawBytes: signedMessageLimit(opts.maxMessageSize),
       userId: user.id,
       emailLogId: emailLog.id,
     });

@@ -46,9 +46,9 @@ import {
   formatAddress,
   formatDateHeader,
   HeaderBlock,
-  serializeMessage,
 } from "../mail/index.ts";
 import { createLogger } from "../log.ts";
+import { reportSigningFailure } from "../mailauth/sign.ts";
 import { signOutbound } from "../mailauth/index.ts";
 import { enqueue } from "../queue/index.ts";
 import { loadDkimKey } from "./dkim.ts";
@@ -134,7 +134,7 @@ export interface SendTransactionalResult {
  * is a `transactional` VERP address on our domain, RCPT TO the recipient.
  * Failures (no queue, oversized, DB down) are logged and reported in the
  * result rather than thrown — transactional mail must never break the API
- * flow that triggered it. A missing DKIM key downgrades to unsigned.
+ * flow that triggered it. A missing required key leaves the message unqueued.
  */
 export async function sendTransactional(
   db: Db,
@@ -156,17 +156,11 @@ export async function sendTransactional(
     let raw: Uint8Array;
     const dkimKey = await loadDkimKey(db, config.mailDomain, config.dkimSelector);
     if (dkimKey === null) {
-      log.warn("dkim_key_missing", { domain: config.mailDomain, messageId });
-      raw = serializeMessage(headers, body);
+      const error = new Error("Required transactional DKIM key unavailable");
+      reportSigningFailure(error);
+      throw error;
     } else {
       const signed = await signOutbound(headers, body, { dkimKeys: [dkimKey] });
-      for (const err of signed.errors) {
-        log.error("dkim_sign_error", {
-          domain: err.signingDomain,
-          selector: err.selector,
-          error: err.err.message,
-        });
-      }
       raw = signed.message;
     }
 

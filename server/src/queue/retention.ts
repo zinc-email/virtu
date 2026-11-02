@@ -53,7 +53,13 @@ async function deleteAged(
     const batch = db
       .select({ id: outboundMessages.id })
       .from(outboundMessages)
-      .where(and(eq(outboundMessages.status, status), lt(outboundMessages.updatedAt, cutoff)))
+      .where(
+        and(
+          eq(outboundMessages.status, status),
+          eq(outboundMessages.failurePending, false),
+          lt(outboundMessages.updatedAt, cutoff),
+        ),
+      )
       .limit(batchSize);
     const deleted = await db
       .delete(outboundMessages)

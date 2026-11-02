@@ -341,3 +341,40 @@ don't get re-proposed:
 
 Signup reopens when the concentration detector + abuser archive are
 proven on live traffic — not on a date.
+
+## Forwarding cutover gates (review follow-up)
+
+Authentication and acceptance are separate decisions. Under RFC 9989, DMARC
+failure alone is forwarded with an annotation and DSN suppression; it does not
+establish abuse, and the annotation does not enforce downstream quarantine.
+Independent abuse evidence can justify SMTP rejection. For other authentication
+flags, `INBOUND_FLAG_DISPOSITION=reject` rejects before queueing; `forward` preserves
+the annotation instead. Valid ARC alone never establishes a trusted intermediary.
+This does not detect spam from authenticated senders. A content scanner with
+enforced rejection or quarantine is still required before broad rollout.
+
+Complaint handling also remains a rollout gate. Verify that `abuse@` reaches an
+operator, enroll the sending domains/IPs in provider feedback programs where
+available, and assign an owner to review complaints and provider dashboards. Record
+complaint source, affected alias/account, disposition and recurrence. Apply existing
+account suspension and mailbox suppression controls after validating the report;
+do not trust arbitrary inbound complaint headers as authority to disable an account.
+Automated authenticated feedback ingestion is not implemented by this change.
+
+Before cutover, run a small canary through Gmail, Outlook and Yahoo. Save received
+headers and delivery outcomes for ordinary forwards, a forward carrying an existing
+ARC chain, replies, and DSNs. Verify deployed PTR/forward DNS, EHLO identity, SPF,
+DKIM selectors, DMARC, and certificate renewal. Record the recovery drill and agreed
+accepted-mail RPO from `plans/backups.md` alongside those results.
+
+Alert on increases in `virtu_signing_failures_total` and on
+`virtu_failure_jobs_pending` remaining nonzero for more than five minutes. The
+`required_signing_failed` and `permanent_failure_hook_error` logs identify the
+corresponding failures. Alert routing must be exercised on the deployed monitor;
+these metrics alone do not notify an operator.
+
+Apply `server/drizzle/0004_durable-failure-jobs.sql` through the normal migration
+runner before starting the updated workers. New permanent failures retain a durable
+follow-up marker until accounting, suppression and DSN enqueue commit together.
+Retention and admin requeue/delete leave those jobs alone. The migration does not
+replay historical failed rows; audit them separately for missing follow-up work.

@@ -30,7 +30,12 @@ import {
   OutboundStatusDto,
 } from "./schema";
 
-type QueueRow = Omit<OutboundMessage, "raw"> & { sizeBytes: number };
+type QueueRow = Omit<
+  OutboundMessage,
+  "raw" | "failurePending" | "failureEnhancedCode" | "dsnQueued"
+> & {
+  sizeBytes: number;
+};
 
 /**
  * How much of a row's raw bytes the detail endpoint reads. RFC 5322 caps a

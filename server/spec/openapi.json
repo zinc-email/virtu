@@ -2326,7 +2326,8 @@
           "originator_unauthenticated",
           "alias_unresolvable",
           "flagged_inbound",
-          "in_flight"
+          "in_flight",
+          "temporarily_unavailable"
         ]
       },
       "AdminInviteListResponse": {

@@ -1,3 +1,7 @@
+import { clearDkimKeyCache } from "../pipeline/dkim.ts";
+import { makeRsaKeyPair } from "../mailauth/test-fixtures.ts";
+import { config } from "../config.ts";
+import { dkimKeys } from "../db/schema.ts";
 // Shared helpers for the route int tier (*.int.test.ts). Parallel-safe by
 // construction: every caller registers its own unique user; nothing here
 // truncates or shares state.
@@ -119,4 +123,19 @@ export async function createAlias(
   if (created.statusCode !== 201) throw new Error(`create alias failed: ${created.body}`);
   const body = created.json<{ id: number; email: string }>();
   return { id: body.id, email: body.email, mailboxId };
+}
+
+/** Integration mail delivery needs an active key, just like production. */
+export async function ensureTestSigningKey(): Promise<void> {
+  const key = makeRsaKeyPair();
+  await db
+    .insert(dkimKeys)
+    .values({
+      domain: config.mailDomain,
+      selector: config.dkimSelector,
+      privateKeyPem: key.privateKeyPem,
+      publicKeyBase64: key.publicKeyBase64,
+    })
+    .onConflictDoNothing();
+  clearDkimKeyCache();
 }

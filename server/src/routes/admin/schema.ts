@@ -99,6 +99,7 @@ export const AdminBounceSkipReason = z
     "alias_unresolvable",
     "flagged_inbound",
     "in_flight",
+    "temporarily_unavailable",
   ])
   .meta({ id: "AdminBounceSkipReason" });
 

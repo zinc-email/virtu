@@ -21,10 +21,8 @@
  *   Longer command lines get `500 5.5.2 Line too long` and input is
  *   discarded until the next line break.
  * - DATA lines are capped at `maxDataLineLength` octets of content
- *   (excluding CRLF). RFC 5321 specifies 998; the default here is 10000 —
- *   deliberately tolerant, because rejecting real-world long-line mail is
- *   worse for a forwarder than accepting it. Set it to 998 for strict RFC
- *   behavior. A violating message is consumed to completion and then
+ *   (excluding CRLF). The default is 998, matching RFC 5321. Unsupported
+ *   overlong content is rejected before acceptance without rewriting MIME bytes. A violating message is consumed to completion and then
  *   rejected with `500 5.6.0 Line too long`; the cap also bounds per-line
  *   memory.
  */

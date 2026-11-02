@@ -86,14 +86,24 @@ export class DataDecoder {
         if (this.pendingOverflow) {
           // Still inside an overlong line: drop the bytes, keep scanning.
           this.size += buf.length;
+          // Preserve only a possible CRLF prefix while discarding, so a
+          // split line ending still allows the following terminator.
+          this.pending = buf.at(-1) === CR ? Buffer.from([CR]) : Buffer.alloc(0);
           return null;
         }
-        if (buf.length > this.maxLineLength + 1) {
-          // +1 tolerates a trailing CR of a CRLF split across chunks.
+        // RFC 5321 §§4.5.2, 4.5.3.1.6: the transparency dot does not
+        // count; CR may be the first half of a split CRLF. Count only
+        // content known to belong to the decoded line so chunking cannot
+        // affect whether a legal line is accepted.
+        const contentLength = buf.length - Number(buf[0] === DOT) - Number(buf.at(-1) === CR);
+        if (contentLength > this.maxLineLength) {
           this.lineTooLong = true;
           this.discarding = true;
           this.pendingOverflow = true;
           this.size += buf.length;
+          // Preserve only a possible CRLF prefix while discarding, so a
+          // split line ending still allows the following terminator.
+          this.pending = buf.at(-1) === CR ? Buffer.from([CR]) : Buffer.alloc(0);
           return null;
         }
         this.pending = Buffer.from(buf); // copy: chunk buffers get reused
@@ -136,6 +146,13 @@ export class DataDecoder {
         this.chunks = [];
       }
     }
+  }
+
+  /** Drain decoded bytes to a spool after each input chunk. */
+  drain(): Buffer {
+    const out = Buffer.concat(this.chunks);
+    this.chunks = [];
+    return out;
   }
 
   /** The normalized message received so far (empty once discarding). */
@@ -182,6 +199,42 @@ export function dotStuff(data: Uint8Array): Buffer {
     if (rest.length === 0) break;
   }
   return Buffer.concat(out);
+}
+
+/** Bounded output blocks; callers must await socket backpressure between blocks. */
+export function* dotStuffChunks(data: Uint8Array, blockSize = 64 * 1024): Generator<Buffer> {
+  let block = Buffer.allocUnsafe(blockSize);
+  let used = 0;
+  let atLineStart = true;
+  let previous = -1;
+  if (blockSize < 4) throw new Error("SMTP block size must be at least four bytes");
+  for (const byte of data) {
+    if (used > blockSize - 3) {
+      yield block.subarray(0, used);
+      block = Buffer.allocUnsafe(blockSize);
+      used = 0;
+    }
+    if (byte === LF) {
+      if (previous !== CR) block[used++] = CR;
+      block[used++] = LF;
+      atLineStart = true;
+    } else {
+      if (atLineStart && byte === DOT) block[used++] = DOT;
+      block[used++] = byte;
+      atLineStart = false;
+    }
+    previous = byte;
+  }
+  if (data.length > 0 && previous !== LF) {
+    if (used > blockSize - 2) {
+      yield block.subarray(0, used);
+      block = Buffer.allocUnsafe(blockSize);
+      used = 0;
+    }
+    if (previous !== CR) block[used++] = CR;
+    block[used++] = LF;
+  }
+  if (used > 0) yield block.subarray(0, used);
 }
 
 const DOT_BUF = Buffer.from(".");

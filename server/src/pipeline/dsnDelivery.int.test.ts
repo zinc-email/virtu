@@ -1,3 +1,6 @@
+import { beforeAll } from "bun:test";
+import { ensureTestSigningKey } from "../routes/intHarness.ts";
+beforeAll(ensureTestSigningKey);
 /**
  * sendFailureDsn's backscatter guard against the dockerized Postgres: a
  * forward whose inbound verdict was "flag" (is_spam on the email_log) never
@@ -6,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import { aliases, contacts, emailLogs, mailboxes, outboundMessages, users } from "../db/schema.ts";
 import { sendFailureDsn } from "./dsnDelivery.ts";
@@ -63,7 +66,18 @@ async function fixture(
   const raw = new TextEncoder().encode(
     `From: sender-${t}@example.com\r\nTo: ${alias.email}\r\nSubject: hi\r\nMessage-ID: <${t}@example.com>\r\n\r\nbody\r\n`,
   );
-  return { user, mailbox, alias, contact, emailLog, raw };
+  const [original] = await db
+    .insert(outboundMessages)
+    .values({
+      userId: user.id,
+      emailLogId: emailLog.id,
+      raw,
+      envelopeFrom: "sender@example.com",
+      envelopeTo: mailbox.email,
+      status: "failed",
+    })
+    .returning();
+  return { user, mailbox, alias, contact, emailLog, raw, original: original! };
 }
 
 describe("sendFailureDsn backscatter guard", () => {
@@ -73,7 +87,7 @@ describe("sendFailureDsn backscatter guard", () => {
     expect(f.emailLog.spamStatus).toBe("spf-hardfail");
 
     const outcome = await sendFailureDsn(db, {
-      row: { id: 0, raw: f.raw, envelopeTo: f.mailbox.email },
+      row: { id: f.original.id, raw: f.raw, envelopeTo: f.mailbox.email },
       verp: { type: "bounce_forward", id: f.emailLog.id },
       emailLog: f.emailLog,
       diagnostic: "550 5.1.1 no such user",
@@ -83,7 +97,9 @@ describe("sendFailureDsn backscatter guard", () => {
     const queued = await db
       .select({ id: outboundMessages.id })
       .from(outboundMessages)
-      .where(eq(outboundMessages.emailLogId, f.emailLog.id));
+      .where(
+        and(eq(outboundMessages.emailLogId, f.emailLog.id), eq(outboundMessages.envelopeFrom, "")),
+      );
     expect(queued).toHaveLength(0);
   });
 
@@ -93,7 +109,7 @@ describe("sendFailureDsn backscatter guard", () => {
     expect(f.emailLog.senderAuthenticated).toBe(true);
 
     const outcome = await sendFailureDsn(db, {
-      row: { id: 0, raw: f.raw, envelopeTo: f.mailbox.email },
+      row: { id: f.original.id, raw: f.raw, envelopeTo: f.mailbox.email },
       verp: { type: "bounce_forward", id: f.emailLog.id },
       emailLog: f.emailLog,
       diagnostic: "550 5.1.1 no such user",
@@ -106,9 +122,54 @@ describe("sendFailureDsn backscatter guard", () => {
         envelopeFrom: outboundMessages.envelopeFrom,
       })
       .from(outboundMessages)
-      .where(eq(outboundMessages.emailLogId, f.emailLog.id));
+      .where(
+        and(eq(outboundMessages.emailLogId, f.emailLog.id), eq(outboundMessages.envelopeFrom, "")),
+      );
     expect(queued).toEqual([{ envelopeTo: "bounces@example.com", envelopeFrom: "" }]);
     expect(f.contact.websiteEmail).not.toBe("bounces@example.com");
+  });
+
+  test("distinct failed deliveries each get a notice; replaying one does not", async () => {
+    const f = await fixture(null);
+    try {
+      const send = (id: number) =>
+        sendFailureDsn(db, {
+          row: { id, raw: f.raw, envelopeTo: f.mailbox.email },
+          verp: { type: "bounce_forward", id: f.emailLog.id },
+          emailLog: f.emailLog,
+          diagnostic: "550 5.1.1 no such user",
+        });
+      const [second] = await db
+        .insert(outboundMessages)
+        .values({
+          userId: f.user.id,
+          emailLogId: f.emailLog.id,
+          raw: f.raw,
+          envelopeFrom: "sender@example.com",
+          envelopeTo: f.mailbox.email,
+          status: "failed",
+        })
+        .returning();
+      expect((await send(f.original.id)).outcome).toBe("sent");
+      expect((await send(second!.id)).outcome).toBe("sent");
+      await db
+        .update(outboundMessages)
+        .set({ createdAt: new Date(0) })
+        .where(eq(outboundMessages.id, f.original.id));
+      expect((await send(f.original.id)).outcome).toBe("suppressed");
+      const queued = await db
+        .select({ id: outboundMessages.id })
+        .from(outboundMessages)
+        .where(
+          and(
+            eq(outboundMessages.emailLogId, f.emailLog.id),
+            eq(outboundMessages.envelopeFrom, ""),
+          ),
+        );
+      expect(queued).toHaveLength(2);
+    } finally {
+      await db.delete(users).where(eq(users.id, f.user.id));
+    }
   });
 
   test("return path without an SPF pass: no DSN (it would be backscatter)", async () => {
@@ -117,7 +178,7 @@ describe("sendFailureDsn backscatter guard", () => {
       senderAuthenticated: false,
     });
     const outcome = await sendFailureDsn(db, {
-      row: { id: 0, raw: f.raw, envelopeTo: f.mailbox.email },
+      row: { id: f.original.id, raw: f.raw, envelopeTo: f.mailbox.email },
       verp: { type: "bounce_forward", id: f.emailLog.id },
       emailLog: f.emailLog,
       diagnostic: "550 5.7.1 rejected",
@@ -128,7 +189,7 @@ describe("sendFailureDsn backscatter guard", () => {
   test("null envelope sender: no DSN", async () => {
     const f = await fixture(null, { envelopeFrom: "", senderAuthenticated: false });
     const outcome = await sendFailureDsn(db, {
-      row: { id: 0, raw: f.raw, envelopeTo: f.mailbox.email },
+      row: { id: f.original.id, raw: f.raw, envelopeTo: f.mailbox.email },
       verp: { type: "bounce_forward", id: f.emailLog.id },
       emailLog: f.emailLog,
       diagnostic: "550 5.1.1 no such user",
@@ -146,7 +207,7 @@ describe("sendFailureDsn backscatter guard", () => {
         .returning()
     )[0]!;
     const outcome = await sendFailureDsn(db, {
-      row: { id: 0, raw: f.raw, envelopeTo: f.contact.websiteEmail },
+      row: { id: f.original.id, raw: f.raw, envelopeTo: f.contact.websiteEmail },
       verp: { type: "bounce_reply", id: replyLog.id },
       emailLog: replyLog,
       diagnostic: "550 5.1.1 no such user",

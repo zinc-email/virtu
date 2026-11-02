@@ -5,7 +5,7 @@
  * failure in terms of the ALIAS — never envelope_to, the user's real
  * backing mailbox — and sanitize the diagnostic, which echoes it; leaking
  * either would de-anonymize the alias to anyone who can force a bounce),
- * rate-limit through sent_alerts, DKIM-sign, enqueue with the null reverse
+ * deduplicate on the original queue row, DKIM-sign, enqueue with the null reverse
  * path.
  *
  * Two callers, two policies around this core:
@@ -19,14 +19,13 @@
 import { eq } from "drizzle-orm";
 import { config } from "../config.ts";
 import type { Db } from "../db/index.ts";
-import { aliases, type EmailLog, mailboxes } from "../db/schema.ts";
+import { aliases, type EmailLog, mailboxes, outboundMessages } from "../db/schema.ts";
 import { createLogger } from "../log.ts";
 import { buildDsn, sanitizeForwardDiagnostic } from "../mail/dsn.ts";
-import { parseMessage, serializeMessage, type VerpInfo } from "../mail/index.ts";
+import { parseMessage, type VerpInfo } from "../mail/index.ts";
 import { signOutbound } from "../mailauth/index.ts";
 import { dsnTotal } from "../metrics/index.ts";
 import { enqueue } from "../queue/index.ts";
-import { claimAlertOnce } from "./bounce.ts";
 import { loadDkimKey } from "./dkim.ts";
 
 const logger = createLogger("dsn");
@@ -83,6 +82,10 @@ export type FailureDsnOutcome =
 
 /** Compose, sign and enqueue the DSN for one failed row. */
 export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<FailureDsnOutcome> {
+  return db.transaction((tx) => composeFailureDsn(tx, input));
+}
+
+async function composeFailureDsn(db: Db, input: FailureDsnInput): Promise<FailureDsnOutcome> {
   const { row, verp, emailLog } = input;
 
   // Backscatter guard: a forward the MX accepted only under a "flag" verdict
@@ -141,15 +144,16 @@ export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<Fa
     diagnostic = sanitizeForwardDiagnostic(diagnostic);
   }
 
-  // Rate limit: one DSN per (user, recipient, alias) per 24h via sent_alerts.
-  const claimed = await claimAlertOnce(db, {
-    userId: emailLog.userId,
-    toEmail: recipient,
-    alertType: `dsn_${verp.type}_${emailLog.aliasId ?? emailLog.contactId}`,
-  });
-  if (!claimed) {
+  // The caller holds this lock too; the marker commits with the notice and
+  // survives for exactly as long as the original delivery record.
+  const [original] = await db
+    .select({ dsnQueued: outboundMessages.dsnQueued })
+    .from(outboundMessages)
+    .where(eq(outboundMessages.id, row.id))
+    .for("update");
+  if (!original) throw new Error("Failed delivery row missing");
+  if (original.dsnQueued) {
     dsnTotal.inc({ outcome: "suppressed" });
-    logger.info("dsn_suppressed", { queueId: row.id, to: recipient, reason: "rate_limit" });
     return { outcome: "suppressed" };
   }
 
@@ -162,22 +166,13 @@ export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<Fa
     recipient,
   });
 
-  // Sign with the service key; deliver unsigned rather than not at all.
+  // Required signing: the durable failure job retries with its effects rolled back.
   const key = await loadDkimKey(db, config.mailDomain, config.dkimSelector);
   let raw: Uint8Array;
   if (key === null) {
-    logger.warn("dsn_unsigned", { queueId: row.id, reason: "no_active_dkim_key" });
-    raw = serializeMessage(dsn.headers, dsn.body);
+    throw new Error("Required DSN signing key unavailable");
   } else {
     const signed = await signOutbound(dsn.headers, dsn.body, { dkimKeys: [key] });
-    for (const err of signed.errors) {
-      logger.error("dsn_dkim_sign_error", {
-        queueId: row.id,
-        domain: err.signingDomain,
-        selector: err.selector,
-        error: err.err.message,
-      });
-    }
     raw = signed.message;
   }
 
@@ -191,6 +186,7 @@ export async function sendFailureDsn(db: Db, input: FailureDsnInput): Promise<Fa
     userId: emailLog.userId,
     emailLogId: emailLog.id,
   });
+  await db.update(outboundMessages).set({ dsnQueued: true }).where(eq(outboundMessages.id, row.id));
   dsnTotal.inc({ outcome: "sent" });
   logger.info("dsn_enqueued", { queueId, to: recipient, failedQueueId: row.id });
   return { outcome: "sent", queueId };

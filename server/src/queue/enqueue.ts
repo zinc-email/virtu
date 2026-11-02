@@ -11,6 +11,12 @@ import { outboundMessages } from "../db/schema.ts";
 /** Default size cap, matching the SMTP server's default SIZE. */
 export const DEFAULT_MAX_RAW_BYTES = 25 * 1024 * 1024;
 
+/** Extra queue space for trace, provenance, DKIM and ARC headers after SMTP SIZE validation. */
+export const SIGNED_MESSAGE_HEADROOM = 256 * 1024;
+export function signedMessageLimit(inboundLimit = DEFAULT_MAX_RAW_BYTES): number {
+  return inboundLimit + SIGNED_MESSAGE_HEADROOM;
+}
+
 export interface EnqueueInput {
   /** Full signed RFC 5322 message bytes. */
   raw: Uint8Array;

@@ -1,3 +1,5 @@
+import { reportSigningFailure } from "./mailauth/sign.ts";
+import { signedMessageLimit } from "./queue/enqueue.ts";
 /**
  * mx — port 25 inbound SMTP (PLAN Milestone 1).
  *
@@ -39,7 +41,6 @@ import {
   type Address,
   buildVerp,
   FORWARD_HOPS_HEADER,
-  foldLongLines,
   formatDateHeader,
   type HeaderBlock,
   MAX_FORWARD_HOPS,
@@ -49,7 +50,6 @@ import {
   parseMessage,
   rewriteForward,
   rewriteOperator,
-  serializeMessage,
 } from "./mail/index.ts";
 import {
   type DkimKeyConfig,
@@ -114,6 +114,8 @@ export interface MxOptions {
   mailDomain: string;
   mailHostname: string;
   dkimSelector: string;
+  /** Local disposition for non-DMARC authentication flags. */
+  inboundFlagDisposition?: "reject" | "forward";
   verpSecret: string;
   maxMessageSize: number;
   /** Per-alias / per-mailbox inbound budgets; omitted = not enforced (tests). */
@@ -148,7 +150,10 @@ function defaultMxLogger(): Logger {
 }
 
 /** Handle the completed DATA for one inbound message. */
-async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise<SmtpHookResult> {
+export async function handleInboundData(
+  event: SmtpDataEvent,
+  opts: MxOptions,
+): Promise<SmtpHookResult> {
   const { envelope, session } = event;
   // One inbound message fans out: several RCPTs, several verdicts, several
   // queued forwards, each its own line. Bind the connection id (minted by
@@ -213,6 +218,13 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     log.info("inbound_rejected", { from: envelope.mailFrom || "<>", reason: "from_count" });
     return rejectWith(550, "5.6.0", "Message must have exactly one From header");
   }
+
+  const authors = parseAddressList(parsed.headers.get("From")!);
+  if (authors.length !== 1 || !authors[0]!.address.includes("@")) {
+    mxMessagesTotal.inc({ outcome: "rejected" });
+    return rejectWith(550, "5.6.0", "Message must have exactly one From author");
+  }
+  const fromAddr = authors[0]!;
 
   // 1. Bounce handling: VERP recipients route straight to their email_log
   //    (or, for transactional mail, to the verification_codes row).
@@ -306,7 +318,10 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
       mta: opts.mailHostname,
     },
     event.raw,
-    { resolver: opts.resolver ?? defaultResolver() },
+    {
+      resolver: opts.resolver ?? defaultResolver(),
+      flagDisposition: opts.inboundFlagDisposition ?? "reject",
+    },
   );
   mxAuthVerdictsTotal.inc({ verdict: verification.verdict.action });
   if (verification.verdict.action === "reject") {
@@ -320,12 +335,6 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
     return rejectWith(v.code, v.enhanced, v.message);
   }
 
-  const fromValue = parsed.headers.get("From");
-  const fromAddr: Address = (fromValue !== undefined
-    ? parseAddressList(fromValue)[0]
-    : undefined) ?? {
-    address: envelope.mailFrom !== "" ? envelope.mailFrom : "unknown-sender@invalid",
-  };
   const originalMessageId = parsed.headers.get("Message-ID") ?? null;
   // The verdict rides into email_logs (is_spam/spam_status) so the bounce
   // path can refuse to DSN a flagged message's sender — see dsnDelivery.ts.
@@ -340,217 +349,229 @@ async function handleInboundData(event: SmtpDataEvent, opts: MxOptions): Promise
   const needsKey = deliverable.length > 0 || operatorRcpts.length > 0;
   const dkimKey = needsKey ? await loadDkimKey(opts.db, opts.mailDomain, opts.dkimSelector) : null;
   if (needsKey && dkimKey === null) {
-    log.warn("dkim_key_missing", { domain: opts.mailDomain, consequence: "forwarding unsigned" });
+    reportSigningFailure(new Error("Required DKIM key unavailable"));
+    log.error("dkim_key_missing", { domain: opts.mailDomain, consequence: "acceptance deferred" });
+    return rejectWith(451, "4.3.0", "Signing temporarily unavailable");
   }
 
-  // 3. Accept-and-drop recipients: blocked log (with the drop reason —
-  //    "mailbox_suppressed" is how a paused mailbox's dropped mail stays
-  //    auditable), nothing queued.
-  for (const drop of drops) {
-    const { alias, user } = drop.facts;
-    if (alias === null || user === null) continue;
-    const reason = drop.decision.kind === "drop" ? drop.decision.reason : "unknown";
-    const scope = { userId: user.id, aliasId: alias.id };
-    const contact = await getOrCreateContact(opts.db, scope, fromAddr, "from", {
-      mailDomain: opts.mailDomain,
-      envelopeFrom: envelope.mailFrom,
-    });
-    await createBlockedLog(opts.db, {
-      userId: user.id,
-      contactId: contact.id,
-      aliasId: alias.id,
-      mailboxId: drop.facts.mailbox?.id ?? null,
-      messageId: originalMessageId,
-      blockedReason: reason,
-      spamFlag,
-    });
-    mxMessagesTotal.inc({ outcome: "dropped" });
-    log.info("inbound_dropped", { to: drop.address, reason });
-  }
-
-  // Trace header for the hop we handled (RFC 5321 §4.4): topmost on every
-  // forwarded copy, above the auth results we prepend. HeaderBlock folds
-  // and sanitizes at serialize time.
-  const receivedValue =
-    `from ${envelope.heloName || "unknown"} (${session.remoteAddress}) ` +
-    `by ${opts.mailHostname} (virtu) with ESMTP; ${formatDateHeader(new Date())}`;
-
-  // Loop guard (mail/rewriteForward.ts): a message that has already been
-  // forwarded by us MAX_FORWARD_HOPS times is going round in a ring — a
-  // mailbox on a domain whose MX is us, catch-all minting it back into an
-  // alias, and so on forever. Accept-and-drop with a blocked log per
-  // recipient so the ring's last hop is auditable; a chained (second)
-  // forward is still delivered but logged, so telemetry shows who chains.
-  const inboundHops = parseForwardHops(parsed.headers.get(FORWARD_HOPS_HEADER));
-  const isLoop = inboundHops >= MAX_FORWARD_HOPS;
-  if (inboundHops > 0 && !isLoop) {
-    log.info("forward_chained", { hops: inboundHops, from: envelope.mailFrom || "<>" });
-  }
-
-  // 4. Forward pipeline per deliverable recipient × delivery mailbox (an
-  //    alias can deliver to several mailboxes; each copy gets its own
-  //    email_log so bounce accounting stays per-mailbox).
-  for (const rcpt of deliverable) {
-    const alias = rcpt.facts.alias!;
-    const user = rcpt.facts.user!;
-    const scope = { userId: user.id, aliasId: alias.id };
-    const isTrash = rcpt.decision.kind === "deliver" && rcpt.decision.trash === true;
-
-    const fromContact = await getOrCreateContact(opts.db, scope, fromAddr, "from", {
-      mailDomain: opts.mailDomain,
-      envelopeFrom: envelope.mailFrom,
-    });
-
-    if (isLoop) {
-      await createBlockedLog(opts.db, {
+  const afterCommit: Array<() => void> = [];
+  await opts.db.transaction(async (tx) => {
+    const transactionOpts = { ...opts, db: tx };
+    // 3. Accept-and-drop recipients: blocked log (with the drop reason —
+    //    "mailbox_suppressed" is how a paused mailbox's dropped mail stays
+    //    auditable), nothing queued.
+    for (const drop of drops) {
+      const { alias, user } = drop.facts;
+      if (alias === null || user === null) continue;
+      const reason = drop.decision.kind === "drop" ? drop.decision.reason : "unknown";
+      const scope = { userId: user.id, aliasId: alias.id };
+      const contact = await getOrCreateContact(tx, scope, fromAddr, "from", {
+        mailDomain: opts.mailDomain,
+        envelopeFrom: envelope.mailFrom,
+      });
+      await createBlockedLog(tx, {
         userId: user.id,
-        contactId: fromContact.id,
+        contactId: contact.id,
         aliasId: alias.id,
-        mailboxId: rcpt.facts.mailbox?.id ?? null,
+        mailboxId: drop.facts.mailbox?.id ?? null,
         messageId: originalMessageId,
-        blockedReason: "forward_loop",
+        blockedReason: reason,
         spamFlag,
       });
-      mxMessagesTotal.inc({ outcome: "loop_dropped" });
-      log.warn("forward_loop_dropped", {
-        alias: rcpt.address,
-        hops: inboundHops,
-        from: envelope.mailFrom || "<>",
-        consequence: "accepted and dropped: message already forwarded by us too many times",
-      });
-      continue;
+      mxMessagesTotal.inc({ outcome: "dropped" });
+      log.info("inbound_dropped", { to: drop.address, reason });
     }
 
-    for (const mailbox of rcpt.facts.deliveryMailboxes) {
-      const emailLog = await createForwardLog(opts.db, {
-        userId: user.id,
-        contactId: fromContact.id,
-        aliasId: alias.id,
-        mailboxId: mailbox.id,
-        messageId: originalMessageId,
-        spamFlag,
+    // Trace header for the hop we handled (RFC 5321 §4.4): topmost on every
+    // forwarded copy, above the auth results we prepend. HeaderBlock folds
+    // and sanitizes at serialize time.
+    const receivedValue =
+      `from ${envelope.heloName || "unknown"} (${session.remoteAddress}) ` +
+      `by ${opts.mailHostname} (virtu) with ESMTP; ${formatDateHeader(new Date())}`;
+
+    // Loop guard (mail/rewriteForward.ts): a message that has already been
+    // forwarded by us MAX_FORWARD_HOPS times is going round in a ring — a
+    // mailbox on a domain whose MX is us, catch-all minting it back into an
+    // alias, and so on forever. Accept-and-drop with a blocked log per
+    // recipient so the ring's last hop is auditable; a chained (second)
+    // forward is still delivered but logged, so telemetry shows who chains.
+    const inboundHops = parseForwardHops(parsed.headers.get(FORWARD_HOPS_HEADER));
+    const isLoop = inboundHops >= MAX_FORWARD_HOPS;
+    if (inboundHops > 0 && !isLoop) {
+      log.info("forward_chained", { hops: inboundHops, from: envelope.mailFrom || "<>" });
+    }
+
+    // 4. Forward pipeline per deliverable recipient × delivery mailbox (an
+    //    alias can deliver to several mailboxes; each copy gets its own
+    //    email_log so bounce accounting stays per-mailbox).
+    for (const rcpt of deliverable) {
+      const alias = rcpt.facts.alias!;
+      const user = rcpt.facts.user!;
+      const scope = { userId: user.id, aliasId: alias.id };
+      const isTrash = rcpt.decision.kind === "deliver" && rcpt.decision.trash === true;
+
+      const fromContact = await getOrCreateContact(tx, scope, fromAddr, "from", {
+        mailDomain: opts.mailDomain,
         envelopeFrom: envelope.mailFrom,
-        senderAuthenticated,
       });
 
-      const rewritten = await rewriteForwardForAlias(opts, {
-        alias,
-        mailbox,
-        user,
-        emailLogId: emailLog.id,
-        parsedHeaders: parsed.headers,
-        envelopeFrom: envelope.mailFrom,
-      });
+      if (isLoop) {
+        await createBlockedLog(tx, {
+          userId: user.id,
+          contactId: fromContact.id,
+          aliasId: alias.id,
+          mailboxId: rcpt.facts.mailbox?.id ?? null,
+          messageId: originalMessageId,
+          blockedReason: "forward_loop",
+          spamFlag,
+        });
+        mxMessagesTotal.inc({ outcome: "loop_dropped" });
+        log.warn("forward_loop_dropped", {
+          alias: rcpt.address,
+          hops: inboundHops,
+          from: envelope.mailFrom || "<>",
+          consequence: "accepted and dropped: message already forwarded by us too many times",
+        });
+        continue;
+      }
 
-      // Prepend the auth results (fields keep their raw bytes → verbatim),
-      // then our Received on top.
+      for (const mailbox of rcpt.facts.deliveryMailboxes) {
+        const emailLog = await createForwardLog(tx, {
+          userId: user.id,
+          contactId: fromContact.id,
+          aliasId: alias.id,
+          mailboxId: mailbox.id,
+          messageId: originalMessageId,
+          spamFlag,
+          envelopeFrom: envelope.mailFrom,
+          senderAuthenticated,
+        });
+
+        const rewritten = await rewriteForwardForAlias(transactionOpts, {
+          alias,
+          mailbox,
+          user,
+          emailLogId: emailLog.id,
+          parsedHeaders: parsed.headers,
+          envelopeFrom: envelope.mailFrom,
+        });
+
+        // Prepend the auth results (fields keep their raw bytes → verbatim),
+        // then our Received on top.
+        rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
+        rewritten.prepend("Received", receivedValue);
+        if (verification.verdict.action === "flag") {
+          rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
+        }
+        if (isTrash) {
+          // The alias is off: the copy goes to the trash inbox, marked so
+          // mailbox-side filters can file it.
+          rewritten.append("X-Virtu-Trash", "YES (alias disabled)");
+        }
+
+        const message = await signCopy(opts, rewritten, parsed.body, verification, dkimKey);
+
+        // Trash copies use the NULL reverse path: an off alias must not start
+        // emitting delivery-failure signals (DSNs to the outside sender,
+        // bounce accounting) that accept-and-drop never produced. A broken
+        // trash mailbox fails silently in the queue log — the dumpster's
+        // health is the user's dashboard concern, not the sender's.
+        const envelopeFrom = isTrash
+          ? ""
+          : buildVerp({
+              type: "bounce_forward",
+              id: emailLog.id,
+              secret: opts.verpSecret,
+              domain: opts.mailDomain,
+            });
+        const queueId = await enqueue(tx, {
+          raw: message,
+          envelopeFrom,
+          envelopeTo: mailbox.email,
+          maxRawBytes: signedMessageLimit(opts.maxMessageSize),
+          userId: user.id,
+          emailLogId: emailLog.id,
+        });
+        afterCommit.push(() => {
+          mxMessagesTotal.inc({ outcome: isTrash ? "trash" : "forwarded" });
+          log.info("forward_queued", {
+            queueId,
+            alias: rcpt.address,
+            to: mailbox.email,
+            trash: isTrash,
+            emailLogId: emailLog.id,
+          });
+        });
+      }
+    }
+
+    // 5. Operator mail (postmaster@ / abuse@ …): one re-signed copy per
+    //    effective operator, null reverse path (an operator's dead mailbox
+    //    must never bounce a complaint back to the reporter), no email_log —
+    //    it is the service's own mail, outside any user's ledger.
+    for (const rcpt of operatorRcpts) {
+      if (rcpt.decision.kind !== "operator") continue;
+      const { localpart, recipients } = rcpt.decision;
+      if (recipients.length === 0) {
+        mxMessagesTotal.inc({ outcome: "operator_undeliverable" });
+        log.warn("operator_mail_undeliverable", {
+          to: rcpt.address,
+          from: envelope.mailFrom || "<>",
+          consequence: "accepted and dropped: no operator has a deliverable default mailbox",
+        });
+        continue;
+      }
+      const rewrite = rewriteOperator(
+        { headers: parsed.headers },
+        { localpart, mailDomain: opts.mailDomain, envelopeFrom: envelope.mailFrom },
+      );
+      const rewritten = rewrite.headers;
       rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
       rewritten.prepend("Received", receivedValue);
       if (verification.verdict.action === "flag") {
         rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
       }
-      if (isTrash) {
-        // The alias is off: the copy goes to the trash inbox, marked so
-        // mailbox-side filters can file it.
-        rewritten.append("X-Virtu-Trash", "YES (alias disabled)");
-      }
-
-      const message = await signCopy(opts, log, rewritten, parsed.body, verification, dkimKey);
-
-      // Trash copies use the NULL reverse path: an off alias must not start
-      // emitting delivery-failure signals (DSNs to the outside sender,
-      // bounce accounting) that accept-and-drop never produced. A broken
-      // trash mailbox fails silently in the queue log — the dumpster's
-      // health is the user's dashboard concern, not the sender's.
-      const envelopeFrom = isTrash
-        ? ""
-        : buildVerp({
-            type: "bounce_forward",
-            id: emailLog.id,
-            secret: opts.verpSecret,
-            domain: opts.mailDomain,
+      const message = await signCopy(opts, rewritten, parsed.body, verification, dkimKey);
+      for (const { user, mailbox } of recipients) {
+        const queueId = await enqueue(tx, {
+          raw: message,
+          envelopeFrom: "",
+          envelopeTo: mailbox.email,
+          maxRawBytes: signedMessageLimit(opts.maxMessageSize),
+          userId: user.id,
+        });
+        afterCommit.push(() => {
+          mxMessagesTotal.inc({ outcome: "operator" });
+          log.info("operator_mail_queued", {
+            queueId,
+            role: localpart,
+            from: rewrite.originalFrom.address,
+            to: mailbox.email,
+            operatorUserId: user.id,
           });
-      const queueId = await enqueue(opts.db, {
-        raw: message,
-        envelopeFrom,
-        envelopeTo: mailbox.email,
-        maxRawBytes: opts.maxMessageSize,
-        userId: user.id,
-        emailLogId: emailLog.id,
-      });
-      mxMessagesTotal.inc({ outcome: isTrash ? "trash" : "forwarded" });
-      log.info("forward_queued", {
-        queueId,
-        alias: rcpt.address,
-        to: mailbox.email,
-        trash: isTrash,
-        emailLogId: emailLog.id,
-      });
+        });
+      }
     }
-  }
-
-  // 5. Operator mail (postmaster@ / abuse@ …): one re-signed copy per
-  //    effective operator, null reverse path (an operator's dead mailbox
-  //    must never bounce a complaint back to the reporter), no email_log —
-  //    it is the service's own mail, outside any user's ledger.
-  for (const rcpt of operatorRcpts) {
-    if (rcpt.decision.kind !== "operator") continue;
-    const { localpart, recipients } = rcpt.decision;
-    if (recipients.length === 0) {
-      mxMessagesTotal.inc({ outcome: "operator_undeliverable" });
-      log.warn("operator_mail_undeliverable", {
-        to: rcpt.address,
-        from: envelope.mailFrom || "<>",
-        consequence: "accepted and dropped: no operator has a deliverable default mailbox",
-      });
-      continue;
-    }
-    const rewrite = rewriteOperator(
-      { headers: parsed.headers },
-      { localpart, mailDomain: opts.mailDomain, envelopeFrom: envelope.mailFrom },
-    );
-    const rewritten = rewrite.headers;
-    rewritten.fields.unshift(...prepended.headers.fields.map((f) => ({ ...f })));
-    rewritten.prepend("Received", receivedValue);
-    if (verification.verdict.action === "flag") {
-      rewritten.append("X-Virtu-Spam-Flag", `YES (${verification.verdict.reason})`);
-    }
-    const message = await signCopy(opts, log, rewritten, parsed.body, verification, dkimKey);
-    for (const { user, mailbox } of recipients) {
-      const queueId = await enqueue(opts.db, {
-        raw: message,
-        envelopeFrom: "",
-        envelopeTo: mailbox.email,
-        maxRawBytes: opts.maxMessageSize,
-        userId: user.id,
-      });
-      mxMessagesTotal.inc({ outcome: "operator" });
-      log.info("operator_mail_queued", {
-        queueId,
-        role: localpart,
-        from: rewrite.originalFrom.address,
-        to: mailbox.email,
-        operatorUserId: user.id,
-      });
-    }
-  }
+    // Each copy is staged in Postgres before preparing the next. Nothing
+    // is visible to workers until this transaction commits all logs/copies.
+  });
+  for (const report of afterCommit) report();
 
   return { accept: true, message: "Ok: queued" };
 }
 
 /**
  * DKIM-sign (and ARC-seal with the pre-rewrite context) one outbound copy;
- * without a key the copy goes out unsigned rather than not at all.
+ * required signing failures abort the entire acceptance transaction.
  */
 async function signCopy(
   opts: MxOptions,
-  log: Logger,
   headers: HeaderBlock,
   body: Uint8Array,
   verification: VerifyResult,
   dkimKey: DkimKeyConfig | null,
 ): Promise<Uint8Array> {
-  if (dkimKey === null) return foldLongLines(serializeMessage(headers, body));
+  if (dkimKey === null) throw new Error("Required DKIM key unavailable");
   const signed = await signOutbound(headers, body, {
     dkimKeys: [dkimKey],
     arc:
@@ -563,13 +584,6 @@ async function signCopy(
             context: verification.arcContext,
           },
   });
-  for (const err of signed.errors) {
-    log.error("dkim_sign_error", {
-      domain: err.signingDomain,
-      selector: err.selector,
-      error: err.err.message,
-    });
-  }
   return signed.message;
 }
 
@@ -710,6 +724,7 @@ export function mxOptionsFromConfig(): MxOptions {
     mailDomain: config.mailDomain,
     mailHostname: config.mailHostname,
     dkimSelector: config.dkimSelector,
+    inboundFlagDisposition: config.inboundFlagDisposition,
     verpSecret: config.verpSecret,
     maxMessageSize: config.smtpMaxMessageSize,
     inboundRateLimits: {

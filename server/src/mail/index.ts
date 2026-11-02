@@ -19,7 +19,7 @@ export {
   unfoldValue,
 } from "./headers.ts";
 
-export { foldLongLines, MAX_LINE_OCTETS } from "./lineLength.ts";
+export { assertLineLengths, MAX_LINE_OCTETS } from "./lineLength.ts";
 
 export {
   buildVerp,

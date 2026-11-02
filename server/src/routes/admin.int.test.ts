@@ -1,3 +1,4 @@
+import { ensureTestSigningKey } from "../routes/intHarness.ts";
 // Admin route int tests (PLAN Lane K P1): the 403 wall for non-admins, the
 // overview aggregates, queue list/detail (VERP ownership + the no-Subject
 // privacy assertion), drop and requeue. Prerequisites: `just up` + `just db
@@ -17,6 +18,7 @@ import { makeAdmin, registerAndLogin, createAlias } from "./intHarness";
 let app: App;
 
 beforeAll(async () => {
+  await ensureTestSigningKey();
   app = await buildApp({ logger: false });
   await app.ready();
 });
@@ -284,6 +286,35 @@ async function forwardVerpFixture(status: "pending" | "failed" = "pending") {
 }
 
 describe("POST /api/admin/queue/bounce", () => {
+  test("a failure while queueing the notice leaves the original deliverable", async () => {
+    const { bounceQueuedMessages } = await import("../pipeline/operatorBounce.ts");
+    const { row, websiteEmail } = await forwardVerpFixture("pending");
+    // Throw after the real DSN enqueue inside the caller's transaction.
+    const broken = new Proxy(db, {
+      get(target, prop) {
+        if (prop === "transaction")
+          return (fn: Parameters<typeof db.transaction>[0]) =>
+            target.transaction(async (tx) => {
+              await fn(tx);
+              throw new Error("injected failure before commit");
+            });
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const result = await bounceQueuedMessages(broken, [row.id]);
+    expect(result).toEqual({
+      bounced: [],
+      skipped: [{ id: row.id, reason: "temporarily_unavailable" }],
+    });
+    const [after] = await db.select().from(outboundMessages).where(eq(outboundMessages.id, row.id));
+    expect(after!.status).toBe("pending");
+    expect(
+      await db.select().from(outboundMessages).where(eq(outboundMessages.envelopeTo, websiteEmail)),
+    ).toHaveLength(0);
+    expect((await bounceQueuedMessages(db, [row.id])).bounced).toEqual([row.id]);
+  });
+
   test("DSNs the originator, fails the row, never touches the bounce ledger", async () => {
     const { apiKey } = await adminUser();
     const { row, websiteEmail, alias, emailLogId } = await forwardVerpFixture("pending");

@@ -499,6 +499,10 @@ export const outboundMessages = pgTable(
     // (queue/reaper.ts) returns rows whose lease is stale to "pending".
     claimedAt: timestamp({ withTimezone: true, mode: "date" }),
     lastError: text(),
+    // Durable failure job. Its effects and clearing this flag commit together.
+    failurePending: boolean().default(false).notNull(),
+    dsnQueued: boolean().default(false).notNull(),
+    failureEnhancedCode: text(),
     // Durable attribution (Lane K P2 schema decision): who a row belongs to,
     // outliving VERP's 5-day decode window. Purely informational — deliverd
     // never reads these; the queue stays dumb. Null on rows that predate the

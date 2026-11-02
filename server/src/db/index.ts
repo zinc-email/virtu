@@ -11,4 +11,6 @@ export const db = drizzle({
   schema,
 });
 
-export type Db = typeof db;
+export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+/** Pipeline helpers can participate in the caller’s atomic acceptance/job transaction. */
+export type Db = typeof db | DbTransaction;

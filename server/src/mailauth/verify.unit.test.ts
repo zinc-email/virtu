@@ -8,9 +8,7 @@ import {
 } from "./test-fixtures.ts";
 import { createBulkhead } from "../pipeline/verifyBulkhead.ts";
 import {
-  boundSignatureHeaders,
   DEFAULT_VERIFY_POLICY,
-  MAX_BODY_HASH_VARIANTS,
   MAX_DKIM_SIGNATURES,
   mapVerdict,
   VERDICT_RULES,
@@ -78,7 +76,7 @@ describe("verifyInbound", () => {
     });
 
     expect(result.verdict).toEqual({ action: "accept" });
-    expect(result.raw.dkim.results?.[0]?.status.result).toBe("pass");
+    expect(result.raw.dkim.results?.[0]?.status).toMatchObject({ result: "pass" });
     expect(result.raw.spf !== false && result.raw.spf.status.result).toBe("pass");
     expect(result.raw.dmarc !== false && result.raw.dmarc.status.result).toBe("pass");
 
@@ -93,17 +91,13 @@ describe("verifyInbound", () => {
     expect(result.arcContext!.authResults).toContain("dkim=pass");
   });
 
-  test("spoofed mail, p=reject: verdict reject 550 5.7.1", async () => {
-    // unsigned + wrong source IP → dkim none, spf fail, dmarc fail
+  test("DMARC reject alone flags rather than rejects without independent abuse evidence", async () => {
     const result = await verifyInbound({ ...SESSION, remoteAddress: "198.51.100.99" }, MESSAGE, {
       resolver: makeStubResolver(zonesFor("reject")),
+      flagDisposition: "reject",
     });
-    expect(result.verdict.action).toBe("reject");
-    if (result.verdict.action !== "reject") throw new Error("unreachable");
-    expect(result.verdict.code).toBe(550);
-    expect(result.verdict.enhanced).toBe("5.7.1");
-    expect(result.verdict.reason).toBe("dmarc-reject");
-    expect(result.verdict.message).toContain("initech.com");
+    expect(result.verdict).toEqual({ action: "flag", reason: "dmarc-reject" });
+    expect(result.raw.dmarc && result.raw.dmarc.status.result).toBe("fail");
   });
 
   test("spoofed mail, p=quarantine: verdict flag (deliver annotated)", async () => {
@@ -176,14 +170,14 @@ describe("mapVerdict table", () => {
 
   test("default policy is conservative", () => {
     expect(DEFAULT_VERIFY_POLICY).toEqual({
-      onDmarcReject: "reject",
+      onDmarcReject: "flag",
       onDmarcQuarantine: "flag",
       onSpfHardFailWithoutDmarc: "flag",
       onDkimBodyLengthLimited: "flag",
     });
   });
 
-  test("accept action short-circuits any rule", () => {
+  test("accept policy suppresses only its own finding", () => {
     const res = {
       dmarc: { status: { result: "fail" }, policy: "reject", p: "reject", domain: "x.com" },
       spf: false,
@@ -240,15 +234,17 @@ describe("verifyInbound bounds the sender-controlled work (review round 2)", () 
       if (name.endsWith("._domainkey.initech.com")) looked.push(name);
       return stub(name, rrtype);
     };
-    await verifyInbound(SESSION, many, { resolver });
+    const outcome = await verifyInbound(SESSION, many, { resolver });
+    expect(outcome.completion).toBe("incomplete");
+    expect(outcome.verdict).toMatchObject({ code: 451 });
     expect(new Set(looked).size).toBeLessThanOrEqual(MAX_DKIM_SIGNATURES);
-    expect(boundSignatureHeaders(Buffer.from(signed))).toEqual(Buffer.from(signed));
   });
 
   test("a resolver that never answers becomes a 451 within the budget", async () => {
     const started = Date.now();
     const result = await verifyInbound(SESSION, await signedByInitech(), {
       resolver: () => new Promise(() => {}),
+      bulkhead: createBulkhead(1), // intentionally never released; isolate from the shared process slot
       timeoutMs: 100,
     });
     expect(Date.now() - started).toBeLessThan(2000);
@@ -310,7 +306,7 @@ describe("verifyInbound enforces what mailauth leaves to policy (review round 3)
     const result = await verifyInbound(ELSEWHERE, unsigned, {
       resolver: makeStubResolver(zonesFor("reject")),
     });
-    expect(result.verdict).toMatchObject({ action: "reject", code: 550, reason: "dmarc-reject" });
+    expect(result.verdict).toMatchObject({ action: "flag", reason: "dmarc-reject" });
     // The same message with From signed passes DMARC through DKIM alone.
     const signed = await verifyInbound(ELSEWHERE, await initechSigned({}), {
       resolver: makeStubResolver(zonesFor("reject")),
@@ -324,10 +320,10 @@ describe("verifyInbound enforces what mailauth leaves to policy (review round 3)
     const result = await verifyInbound(ELSEWHERE, sha1, {
       resolver: makeStubResolver(zonesFor("reject")),
     });
-    expect(result.verdict).toMatchObject({ action: "reject", reason: "dmarc-reject" });
+    expect(result.verdict).toMatchObject({ action: "flag", reason: "dmarc-reject" });
   });
 
-  test("distinct body-hash variants beyond the cap are dropped before any lookup", async () => {
+  test("distinct body-hash variants exceeding the cap defer before any lookup", async () => {
     const signed = await signedByInitech();
     const sigLine = signed.slice(0, signed.indexOf(MESSAGE));
     // Six signatures, each naming its own selector and its own l= value.
@@ -341,8 +337,11 @@ describe("verifyInbound enforces what mailauth leaves to policy (review round 3)
       if (name.endsWith("._domainkey.initech.com")) looked.add(name);
       return stub(name, rrtype);
     };
-    await verifyInbound(SESSION, many, { resolver });
-    expect(looked.size).toBe(MAX_BODY_HASH_VARIANTS);
+    const result = await verifyInbound(SESSION, many, { resolver });
+    expect(result.completion).toBe("incomplete");
+    expect(result.verdict).toMatchObject({ code: 451 });
+    expect(result.arcContext).toBeNull();
+    expect(looked.size).toBe(0);
   });
 
   test("the bulkhead slot stays taken until timed-out work settles", async () => {

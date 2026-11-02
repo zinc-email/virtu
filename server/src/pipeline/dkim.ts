@@ -5,8 +5,8 @@
  *
  * Custom domains get their own key (selector "dkim", RSA-2048), generated at
  * domain-creation time; `selectReplyDkimKey` picks it for replies/sends once
- * the domain's DKIM DNS record is verified, falling back to the service key
- * otherwise. Forwards always sign with the service key.
+ * the domain can send. Missing/unusable custom-domain keys never fall back
+ * to an unrelated service-domain identity. Forwards always sign with the service key.
  */
 
 import { generateKeyPairSync } from "node:crypto";
@@ -35,7 +35,7 @@ export function clearDkimKeyCache(): void {
  * Load the active signing key for a domain. When `selector` is given, an
  * active key with that selector wins; otherwise the first active key for the
  * domain (by id) is used. Returns null when the domain has no active key —
- * callers should deliver unsigned rather than drop mail.
+ * callers must defer acceptance or retry instead of delivering unsigned.
  */
 export async function loadDkimKey(
   db: Db,
@@ -167,34 +167,28 @@ export async function ensureDkimKeyRow(
 
 /** Options for {@link selectReplyDkimKey}. */
 export interface ReplyKeySelection {
-  /** config.mailDomain — the fallback signing domain. */
+  /** config.mailDomain — the signing domain for service-domain aliases only. */
   serviceDomain: string;
   /** config.dkimSelector — the service key's selector. */
   serviceSelector: string;
 }
 
 /**
- * Key selection for the reply/send phase: a custom-domain alias signs with
- * its domain's own key once the domain's DKIM record is verified
- * (dkim_verified); otherwise — unverified DNS, missing key row, or a
- * service-domain alias — the service key. Forwards never call this: they
- * always sign with the service domain.
+ * Custom-domain aliases require the send-enabled domain's published selector.
+ * A missing domain, revoked capability or missing key prevents acceptance.
+ * Service-domain aliases alone use the service key; the signer enforces
+ * author alignment and rejects unusable keys without weakening the policy.
  */
 export async function selectReplyDkimKey(
   db: Db,
   alias: { domainId: number | null },
   opts: ReplyKeySelection,
 ): Promise<DkimKeyConfig | null> {
-  if (alias.domainId !== null) {
-    const rows = await db.select().from(domains).where(eq(domains.id, alias.domainId)).limit(1);
-    const domain = rows[0];
-    // Only sign as the custom domain when it can safely send (owner+dkim+spf);
-    // otherwise fall back to the service key so we never lend the domain's
-    // From to mail that would fail DKIM/SPF at the recipient.
-    if (domain !== undefined && canSend(domain)) {
-      const key = await loadDkimKey(db, domain.nameRequested, CUSTOM_DOMAIN_DKIM_SELECTOR);
-      if (key !== null) return key;
-    }
-  }
-  return loadDkimKey(db, opts.serviceDomain, opts.serviceSelector);
+  if (alias.domainId === null) return loadDkimKey(db, opts.serviceDomain, opts.serviceSelector);
+  const [domain] = await db.select().from(domains).where(eq(domains.id, alias.domainId)).limit(1);
+  if (domain === undefined || !canSend(domain)) return null;
+  const key = await loadDkimKey(db, domain.nameRequested, CUSTOM_DOMAIN_DKIM_SELECTOR);
+  // verifiedDkim covers this selector; another active but unpublished key
+  // for the same domain is not an acceptable substitute either.
+  return key?.selector === CUSTOM_DOMAIN_DKIM_SELECTOR ? key : null;
 }

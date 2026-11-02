@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { SmtpDataEvent, SmtpServer, SmtpServerOptions } from "./types.ts";
 import { RawClient, listen } from "./testutil.ts";
+
+import { DataSpool } from "./spool.ts";
 
 const HOST = "mx.test.example";
 
@@ -709,4 +711,33 @@ describe("smtp server: per-session and process-wide bounds (review round 3)", ()
     client.write(".\r\n");
     await client.waitFor(/^250 2\.6\.0/);
   });
+});
+
+describe("smtp server: disk failure before acceptance", () => {
+  for (const operation of ["write", "read"] as const) {
+    test(`spool ${operation} failure never accepts the message`, async () => {
+      let accepted = 0;
+      const { client } = await setup({
+        onData: () => {
+          accepted++;
+          return { accept: true };
+        },
+      });
+      client.write(
+        "EHLO x\r\nMAIL FROM:<sender@example.com>\r\nRCPT TO:<to@example.com>\r\nDATA\r\n",
+      );
+      await client.waitFor(/^354 /);
+      const fault = spyOn(DataSpool.prototype, operation).mockRejectedValue(
+        new Error("disk fault"),
+      );
+      try {
+        client.write("Subject: test\r\n\r\nbody\r\n.\r\n");
+        await client.waitForClose();
+        expect(accepted).toBe(0);
+        expect(client.all).not.toContain("250 2.6.0");
+      } finally {
+        fault.mockRestore();
+      }
+    });
+  }
 });

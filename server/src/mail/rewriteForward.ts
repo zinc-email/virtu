@@ -35,6 +35,10 @@ import {
  * by that header and must see it survive the rewrite.
  */
 export const FORWARD_HEADER_WHITELIST: readonly string[] = [
+  // Preserve every field and its raw bytes: the next sealer extends this chain.
+  "arc-seal",
+  "arc-message-signature",
+  "arc-authentication-results",
   "from",
   "to",
   "cc",

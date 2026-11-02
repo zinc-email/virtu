@@ -1,0 +1,426 @@
+diff --git a/node_modules/mailauth/.bun-tag-419674c521d40e4f b/.bun-tag-419674c521d40e4f
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/mailauth/.bun-tag-73868e7ef36c5828 b/.bun-tag-73868e7ef36c5828
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/lib/arc/index.js b/lib/arc/index.js
+index eeb7971905ae42815a20cb2835ac21f7cb5a9519..6701d35b710b1426226564286c9600a06e98d42f 100644
+--- a/lib/arc/index.js
++++ b/lib/arc/index.js
+@@ -290,7 +290,7 @@ const getARChain = headers => {
+             .map(v => v.trim())
+             .filter(v => v);
+ 
+-        if (amsH?.some(v => v === 'arc-seal')) {
++        if (!amsH?.includes('from') || amsH.some(v => ['arc-seal', 'arc-message-signature', 'arc-authentication-results', 'authentication-results'].includes(v))) {
+             let err = new Error(`i=${arcInstance.i} invalid ams h`);
+             err.code = 'invalid_ams_h_value';
+             throw err;
+@@ -475,7 +475,8 @@ const createSeal = async (input, data) => {
+         headerList: seal.headerList,
+ 
+         arc: {
+-            instance: seal.i, // overriden if not set
++            instance: seal.i, // explicit instance also supports malformed incoming sets
++            cv: seal.cv,
+             algorithm: seal.algorithm,
+             signingDomain: seal.signingDomain,
+             selector: seal.selector,
+diff --git a/lib/dkim/dkim-signer.js b/lib/dkim/dkim-signer.js
+index 6996432a8e80e73589e359d14f47d9c18928bd11..ae00b72a9e8fc21a3c9579a17c23f191b9711aa3 100644
+--- a/lib/dkim/dkim-signer.js
++++ b/lib/dkim/dkim-signer.js
+@@ -122,7 +122,7 @@ class DkimSigner extends MessageParser {
+     async messageHeaders(headers) {
+         this.headers = headers;
+ 
+-        if (this.getARChain) {
++        if (this.getARChain && this.arc.cv !== 'fail') {
+             try {
+                 this.arc.chain = this?.getARChain(headers);
+                 if (this.arc.chain?.length) {
+@@ -182,7 +182,7 @@ class DkimSigner extends MessageParser {
+                 }
+             }
+ 
+-            let signingHeaderLines = getSigningHeaderLines(this.headers.parsed, this.headerList);
++            let signingHeaderLines = getSigningHeaderLines(this.headers.parsed, fieldNames);
+ 
+             let { algorithm, signAlgo, hashAlgo } = this.getAlgorithm(signatureData);
+             let { canonicalization, bodyCanon } = this.getCanonicalization(signatureData);
+diff --git a/lib/dkim/dkim-verifier.js b/lib/dkim/dkim-verifier.js
+index cd1fc831322ae339b9422dda79d84cfb8f5cf1e5..05b98752b9bb95bbcf71ec1f1109acbbc4e2b439 100644
+--- a/lib/dkim/dkim-verifier.js
++++ b/lib/dkim/dkim-verifier.js
+@@ -16,7 +16,7 @@ class DkimVerifier extends MessageParser {
+ 
+         this.options = options || {};
+         this.resolver = this.options.resolver;
+-        this.minBitLength = this.options.minBitLength;
++        this.minBitLength = Math.max(1024, this.options.minBitLength || 1024);
+ 
+         this.curTime = getCurTime(this.options.curTime);
+ 
+@@ -46,6 +46,11 @@ class DkimVerifier extends MessageParser {
+     async messageHeaders(headers) {
+         this.headers = headers;
+ 
++        const limits = this.options.verificationLimits || {};
++        const exhausted = reason => { const err = new Error(reason); err.code = 'EAUTHINCOMPLETE'; throw err; };
++        if (headers.parsed.filter(h => h.key === 'arc-seal').length > (limits.arcSets ?? Infinity)) {
++            exhausted('ARC verification budget exceeded');
++        }
+         try {
+             this.arc.chain = getARChain(headers);
+             if (this.arc.chain?.length) {
+@@ -105,6 +110,7 @@ class DkimVerifier extends MessageParser {
+             this.signatureHeaders.push(sealHeader);
+         }
+ 
++        let dkimCount = 0;
+         for (let signatureHeader of this.signatureHeaders) {
+             signatureHeader.algorithm = signatureHeader.parsed?.a?.value || '';
+             signatureHeader.signAlgo = signatureHeader.algorithm.split('-').shift().toLowerCase().trim();
+@@ -128,7 +134,7 @@ class DkimVerifier extends MessageParser {
+                 signatureHeader.parsed?.l?.value && !isNaN(signatureHeader.parsed?.l?.value) ? signatureHeader.parsed?.l?.value : '';
+ 
+             const validSignAlgo = ['rsa', 'ed25519'];
+-            const validHeaderAlgo = signatureHeader.type === 'DKIM' ? ['sha256', 'sha1'] : ['sha256'];
++            const validHeaderAlgo = ['sha256'];
+             const validHeaderCanon = signatureHeader.type !== 'AS' ? ['relaxed', 'simple'] : ['relaxed'];
+             const validBodyCanon = signatureHeader.type !== 'AS' ? ['relaxed', 'simple'] : ['relaxed'];
+ 
+@@ -144,8 +150,15 @@ class DkimVerifier extends MessageParser {
+                 continue;
+             }
+ 
++            if (signatureHeader.type === 'DKIM') {
++                // RFC 6376 6.1.1: invalid signatures do not contribute an identity.
++                const names = (signatureHeader.parsed?.h?.value || '').toLowerCase().split(':').map(s => s.trim());
++                if (!names.includes('from')) { signatureHeader.skip = true; continue; }
++                if (++dkimCount > (limits.dkimSignatures ?? Infinity)) exhausted('DKIM verification budget exceeded');
++            }
+             signatureHeader.bodyHashKey = [signatureHeader.bodyCanon, signatureHeader.hashAlgo, signatureHeader.maxBodyLength].join(':');
+             if (!this.bodyHashes.has(signatureHeader.bodyHashKey)) {
++                if (this.bodyHashes.size >= (limits.bodyHashVariants ?? Infinity)) exhausted('Body hash verification budget exceeded');
+                 this.bodyHashes.set(signatureHeader.bodyHashKey, dkimBody(signatureHeader.bodyCanon, signatureHeader.hashAlgo, signatureHeader.maxBodyLength));
+             }
+ 
+diff --git a/lib/dmarc/verify.js b/lib/dmarc/verify.js
+index f7756357d65c4d7f785c6b6eeb08b761e5c6458f..7eac431419bd09761148cb9d741b0e3a30b7c818 100644
+--- a/lib/dmarc/verify.js
++++ b/lib/dmarc/verify.js
+@@ -1,120 +1,191 @@
+-'use strict';
+-
+-const dns = require('node:dns').promises;
+-const punycode = require('punycode.js');
+-const tldts = require('tldts');
+-const { formatAuthHeaderRow, getAlignment, TLDTS_OPTS } = require('../tools');
+-const getDmarcRecord = require('./get-dmarc-record');
+-
+-const verifyDmarc = async opts => {
+-    let { headerFrom, spfDomains, dkimDomains, resolver, arcResult } = opts;
+-
+-    resolver = resolver || dns.resolve;
+-
+-    if (Array.isArray(headerFrom)) {
+-        if (headerFrom.length === 1) {
+-            headerFrom = headerFrom[0];
+-        } else {
+-            // invalid number of FROM addresses found
+-            return false;
+-        }
+-    }
+-
+-    let atPos = headerFrom.indexOf('@');
+-    let domain = atPos >= 0 ? headerFrom.substr(atPos + 1) : headerFrom;
+-
+-    domain = domain.toLowerCase().trim();
+-
++"use strict";
++
++// RFC 9989: discovery and alignment share one request-scoped DNS tree-walk engine.
++// Never use a PSL to infer organizational boundaries.
++const dns = require("node:dns").promises;
++const punycode = require("punycode.js");
++const { formatAuthHeaderRow } = require("../tools");
++const normalize = (domain) => punycode.toASCII(domain.toLowerCase().replace(/\.$/, ""));
++const policies = new Set(["none", "quarantine", "reject"]);
++const knownTags = new Set(["v", "p", "sp", "np", "adkim", "aspf", "psd", "t", "rua"]);
++const version = /^[vV][ \t]*=[ \t]*DMARC1[ \t]*(?:;|$)/;
++
++function parseRecord(rr, domain) {
++  const tags = {};
++  for (const field of rr.split(";")) {
++    const match = field.trim().match(/^([a-z]+)[ \t]*=[ \t]*(.*)$/i);
++    if (!match) continue;
++    const name = match[1].toLowerCase();
++    if (!knownTags.has(name)) continue;
++    // Duplicate known tags cannot establish an unambiguous policy.
++    if (Object.hasOwn(tags, name)) return null;
++    tags[name] = match[2].trim();
++  }
++  for (const name of ["p", "sp", "np", "adkim", "aspf", "psd", "t"]) {
++    if (tags[name]) tags[name] = tags[name].toLowerCase();
++  }
++  if (!Object.hasOwn(tags, "p")) tags.p = "none";
++  if (
++    !policies.has(tags.p) ||
++    ["sp", "np"].some((k) => Object.hasOwn(tags, k) && !policies.has(tags[k]))
++  ) {
++    const validUri = (tags.rua || "").split(",").some((uri) => {
++      try {
++        return !!new URL(uri.trim().replace(/!\d+[kmgt]?$/i, "")).protocol;
++      } catch {
++        return false;
++      }
++    });
++    if (!validUri) return { ...tags, domain, invalid: true, rr };
++    tags.p = "none";
++    delete tags.sp;
++    delete tags.np;
++  }
++  if (!["s", "r"].includes(tags.adkim)) tags.adkim = "r";
++  if (!["s", "r"].includes(tags.aspf)) tags.aspf = "r";
++  if (!["n", "y"].includes(tags.psd)) tags.psd = "u";
++  if (!["n", "y"].includes(tags.t)) tags.t = "n";
++  return { ...tags, domain, rr };
++}
++
++function engine(resolver) {
++  const cache = new Map();
++  const query = (name, type) => {
++    const key = `${type}:${name}`;
++    if (!cache.has(key)) cache.set(key, resolver(name, type));
++    return cache.get(key);
++  };
++  const record = async (domain) => {
++    let rows;
+     try {
+-        domain = punycode.toASCII(domain);
++      rows = await query(`_dmarc.${domain}`, "TXT");
+     } catch (err) {
+-        // ignore punycode conversion errors
++      if (["ENOTFOUND", "ENODATA"].includes(err.code)) return null;
++      throw err;
+     }
+-
+-    let formatResponse = response => {
+-        response.info = formatAuthHeaderRow('dmarc', response.status);
+-
+-        if (typeof response.status.comment === 'boolean') {
+-            delete response.status.comment;
+-        }
+-
+-        return response;
+-    };
+-
+-    let orgDomain = tldts.getDomain(domain, TLDTS_OPTS);
+-
+-    let status = {
+-        result: 'neutral',
+-        comment: false,
+-        // ptype properties
+-        header: {
+-            // RFC 8601 2.7.2: header.from is the domain of the RFC5322.From address,
+-            // not the organizational domain the policy may have been inherited from
+-            from: domain
+-        }
+-    };
+-
+-    let dmarcRecord;
++    const records = (rows || []).map((row) => row.join("").trim()).filter((rr) => version.test(rr));
++    return records.length === 1 ? parseRecord(records[0], domain) : null;
++  };
++  const walk = async (domain, policyDiscovery = false) => {
++    const records = [];
++    let target = domain;
++    while (target) {
++      const found = await record(target);
++      if (found) {
++        if (found.invalid) {
++          if (policyDiscovery) {
++            records.push(found);
++            break;
++          }
++        } else records.push(found);
++        if (!found.invalid && ["n", "y"].includes(found.psd)) break;
++      }
++      const labels = target.split(".");
++      target = labels.slice(labels.length >= 8 ? labels.length - 7 : 1).join(".");
++    }
++    return records;
++  };
++  const org = (domain, records) => {
++    records = records.filter((item) => !item.invalid);
++    for (const item of records) {
++      if (item.psd === "n") return item.domain;
++      if (item.psd === "y" && item.domain !== domain) {
++        return domain
++          .split(".")
++          .slice(-(item.domain.split(".").length + 1))
++          .join(".");
++      }
++    }
++    return records.at(-1)?.domain || domain;
++  };
++  const exists = async (domain) => {
++    // RFC 9989 3.2.13: NXDOMAIN, not NODATA, establishes nonexistence.
+     try {
+-        dmarcRecord = await getDmarcRecord(domain, resolver);
++      await query(domain, "A");
++      return true;
+     } catch (err) {
+-        // temperror?
+-        status.result = 'temperror';
+-        return formatResponse({ status, domain: orgDomain || domain, error: err.message });
++      if (err.code === "ENOTFOUND") return false;
++      if (err.code === "ENODATA") return true;
++      throw err;
+     }
+-
+-    if (!dmarcRecord) {
+-        // nothing to do here
+-        // none
+-        status.result = 'none';
+-        return formatResponse({ status, domain: orgDomain || domain });
++  };
++  return { record, walk, org, exists };
++}
++
++module.exports = async (opts) => {
++  let { headerFrom, spfDomains, dkimDomains } = opts;
++  if (Array.isArray(headerFrom)) {
++    if (headerFrom.length !== 1) return false;
++    headerFrom = headerFrom[0];
++  }
++  const domain = normalize(headerFrom.slice(headerFrom.lastIndexOf("@") + 1).trim());
++  const status = { result: "none", header: { from: domain } };
++  const finish = (extra) => {
++    const result = { status, domain, ...extra };
++    result.info = formatAuthHeaderRow("dmarc", status);
++    return result;
++  };
++  const dnsEngine = engine(opts.resolver || dns.resolve);
++  try {
++    const direct = await dnsEngine.record(domain);
++    if (direct?.invalid) return finish({});
++    let authorWalk;
++    const getAuthorWalk = async () => authorWalk || (authorWalk = await dnsEngine.walk(domain));
++    let policyRecord = direct;
++    if (!policyRecord) {
++      const found = await dnsEngine.walk(domain, true);
++      authorWalk = found;
++      if (found.some((r) => r.invalid)) return finish({});
++      const organization = dnsEngine.org(domain, found);
++      policyRecord =
++        found.find((r) => r.domain === organization) || found.find((r) => r.psd === "y");
+     }
+-
+-    // the domain the applied policy record was published at
+-    status.header.d = dmarcRecord.isOrgRecord ? orgDomain : domain;
+-
+-    status.comment = []
+-        .concat(dmarcRecord.p ? `p=${dmarcRecord.p.toUpperCase()}` : [])
+-        .concat(dmarcRecord.sp ? `sp=${dmarcRecord.sp.toUpperCase()}` : [])
+-        .concat(arcResult?.status?.result ? `arc=${arcResult?.status?.result}` : [])
+-        .join(' ');
+-
+-    // use "sp" if this is a subdomain of an org domain and "sp" is set, otherwise use "p"
+-    const policy = dmarcRecord.isOrgRecord && dmarcRecord.sp ? dmarcRecord.sp : dmarcRecord.p;
+-
+-    const adkimStrict = dmarcRecord.adkim === 's';
+-    const aspfStrict = dmarcRecord.aspf === 's';
+-
+-    const dkimAlignment = getAlignment(domain, dkimDomains, adkimStrict);
+-    const spfAlignment = getAlignment(domain, spfDomains, aspfStrict);
+-
+-    // "underSized" warns that a passing DKIM signature covers only part of the body (l= tag).
+-    // It describes the signature rather than the alignment mode, so it is still reported when
+-    // strict alignment rejected a signature that aligns at the org level.
+-    const underSized = (adkimStrict && !dkimAlignment ? getAlignment(domain, dkimDomains, false) : dkimAlignment)?.underSized;
+-
+-    if (dkimAlignment || spfAlignment) {
+-        // pass
+-        status.result = 'pass';
+-    } else {
+-        // fail
+-        status.result = 'fail';
++    if (!policyRecord) return finish({});
++    status.header.d = policyRecord.domain;
++    let policy = policyRecord.p;
++    if (policyRecord.domain !== domain) {
++      policy =
++        policyRecord.np && !(await dnsEngine.exists(domain))
++          ? policyRecord.np
++          : policyRecord.sp || policyRecord.p;
+     }
+-
+-    return formatResponse({
+-        status,
+-        domain: orgDomain || domain,
+-        policy,
+-        p: dmarcRecord.p,
+-        sp: dmarcRecord.sp || dmarcRecord.p,
+-        pct: dmarcRecord.pct,
+-        rr: dmarcRecord.rr,
+-
+-        alignment: {
+-            spf: { result: spfAlignment?.domain, strict: aspfStrict },
+-            dkim: { result: dkimAlignment?.domain, strict: adkimStrict, underSized }
++    if (policyRecord.t === "y")
++      policy = { reject: "quarantine", quarantine: "none", none: "none" }[policy];
++    const align = async (entries, strict) => {
++      entries = []
++        .concat(entries || [])
++        .map((e) => (typeof e === "string" ? { domain: e } : e))
++        .sort((a, b) => (a.underSized || 0) - (b.underSized || 0));
++      for (const entry of entries) {
++        const candidate = normalize(entry.domain);
++        if (candidate === domain) return entry;
++        if (!strict) {
++          const authorOrg = dnsEngine.org(domain, await getAuthorWalk());
++          if (authorOrg === dnsEngine.org(candidate, await dnsEngine.walk(candidate))) return entry;
+         }
++      }
++      return false;
++    };
++    const dkim = await align(dkimDomains, policyRecord.adkim === "s");
++    const spf = dkim ? false : await align(spfDomains, policyRecord.aspf === "s");
++    status.result = dkim || spf ? "pass" : "fail";
++    status.comment = `p=${policyRecord.p.toUpperCase()}`;
++    return finish({
++      policy,
++      p: policyRecord.p,
++      sp: policyRecord.sp || policyRecord.p,
++      rr: policyRecord.rr,
++      alignment: {
++        spf: { result: spf?.domain, strict: policyRecord.aspf === "s" },
++        dkim: {
++          result: dkim?.domain,
++          strict: policyRecord.adkim === "s",
++          underSized: dkim?.underSized,
++        },
++      },
+     });
++  } catch (err) {
++    status.result = "temperror";
++    return finish({ error: err.message });
++  }
+ };
+-
+-module.exports = verifyDmarc;
+diff --git a/lib/mailauth.js b/lib/mailauth.js
+index a1bb0cca0cc99833083933e34425485ee4645a1d..c4fd94b2e9008638b31c1db74b71b37a80eeb149 100644
+--- a/lib/mailauth.js
++++ b/lib/mailauth.js
+@@ -42,6 +42,7 @@ const authenticate = async (input, opts) => {
+         resolver: opts.resolver,
+         sender: opts.sender, // defaults to Return-Path header
+         seal: opts.seal,
++        verificationLimits: opts.verificationLimits,
+         minBitLength: opts.minBitLength
+     });
+ 

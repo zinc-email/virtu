@@ -18,12 +18,11 @@
  * verification_codes row (recordTransactionalBounce): the code dies, a
  * mailbox-verification failure bumps the mailbox's failed checks, the user
  * gets a notification — and no DSN (it's our own mail). DSNs are
- * rate-limited per (user, recipient, alias) through sent_alerts so a
- * broken mailbox never becomes a bounce storm at the sender.
+ * deduplicated on the original delivery row.
  */
 
 import { config } from "./config.ts";
-import { db } from "./db/index.ts";
+import { db, type Db } from "./db/index.ts";
 import type { OutboundMessage } from "./db/schema.ts";
 import { createLogger } from "./log.ts";
 import { parseVerp } from "./mail/index.ts";
@@ -39,20 +38,21 @@ const logger = createLogger("deliverd");
 export async function handlePermanentFailure(
   row: OutboundMessage,
   error: string,
-  enhancedCode?: string,
+  enhancedCode: string | undefined,
+  transaction: Db,
 ): Promise<void> {
   if (row.envelopeFrom === "") {
     // Null reverse path: never bounce a bounce.
     return;
   }
-  const verp = parseVerp(row.envelopeFrom, config.verpSecret);
+  const verp = parseVerp(row.envelopeFrom, config.verpSecret, { now: row.createdAt });
   if (verp === null) {
     dsnTotal.inc({ outcome: "skipped" });
     logger.info("dsn_skipped", { queueId: row.id, reason: "no_verp_mapping", error });
     return;
   }
   if (verp.type === "transactional") {
-    const result = await recordTransactionalBounce(db, verp.id);
+    const result = await recordTransactionalBounce(transaction, verp.id);
     logger.info("transactional_bounce", {
       queueId: row.id,
       verpId: verp.id,
@@ -62,7 +62,7 @@ export async function handlePermanentFailure(
     });
     return; // our own mail: notify in-app, never DSN
   }
-  const result = await recordBounce(db, verp.id);
+  const result = await recordBounce(transaction, verp.id);
   const log = result.emailLog;
   logger.info("bounce_recorded", {
     queueId: row.id,
@@ -82,7 +82,7 @@ export async function handlePermanentFailure(
     isSuppressionCode(enhancedCode) &&
     log.mailboxId !== null
   ) {
-    const suppressed = await suppressMailbox(db, log.mailboxId, { enhancedCode });
+    const suppressed = await suppressMailbox(transaction, log.mailboxId, { enhancedCode });
     if (suppressed.suppressed) {
       logger.warn("mailbox_suppressed", {
         queueId: row.id,
@@ -92,10 +92,10 @@ export async function handlePermanentFailure(
     }
   }
 
-  // Composition, alias-naming/sanitization, rate limit, signing and the
+  // Composition, alias-naming/sanitization, deduplication, signing and the
   // enqueue all live in pipeline/dsnDelivery.ts (shared with the operator
   // bounce, which sends the DSN WITHOUT the accounting above).
-  await sendFailureDsn(db, { row, verp, emailLog: log, diagnostic: error });
+  await sendFailureDsn(transaction, { row, verp, emailLog: log, diagnostic: error });
 }
 
 /** Start the queue worker with config-driven settings. */

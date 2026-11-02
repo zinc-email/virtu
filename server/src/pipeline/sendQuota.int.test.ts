@@ -1,3 +1,4 @@
+import { ensureTestSigningKey } from "../routes/intHarness.ts";
 /**
  * The daily send quota under concurrency (review round 2 P1 #9): N parallel
  * submissions from one user, each under the limit alone, must not all pass
@@ -35,6 +36,7 @@ const silent = {
 };
 
 beforeAll(async () => {
+  await ensureTestSigningKey();
   app = await buildApp({ logger: false });
   await app.ready();
   servers = createSubmissionServers({

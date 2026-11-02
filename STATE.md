@@ -102,7 +102,7 @@ with a regression test encoding the observed sequence).
 |---|---|---|
 | 0 — Scaffold + schema | ✅ done | Contract pipeline (fastify-zod-openapi → committed spec → Kubb) proven; schema at v1 + wave-3 additions |
 | A — SMTP library | ✅ done | 101 loopback tests, zero deps. One workaround: server-side STARTTLS via loopback bridge until Bun ships oven-sh/bun#34598 (merged upstream 2026-07-25, unreleased) |
-| B — Email auth (mailauth) | ✅ done | All verification in-process; table-driven verdicts; glts spf-milter documented as fallback, unused |
+| B — Email auth (mailauth) | ✅ done | Pinned mailauth engine with RFC 9989 discovery/alignment; immutable verification input and bounded work; explicit ARC custody transitions; separate local acceptance policy; required author-aligned signing |
 | C — Rewrite core | ✅ done | VERP byte-compatible with SimpleLogin (CPython golden vector) + constant-time compare + real expiry; forward/reply whitelists; refuse-to-leak on replies |
 | D — Queue + deliverd | ✅ done* | SKIP LOCKED worker, backoff, RFC 3464 DSNs (null reverse path, rate-limited). *Gap: bounces OF transactional mail are log-only |
 | E — API (SimpleLogin-compat) | ~90% | 28+ spec paths incl. custom domains, billing extras, SMTP credentials (Virtu extension) + mailbox `trash` flag. Auth is passwordless (PLAN decision #13): `/auth/login` + `/auth/verify` replace SL's register/activate/reactivate/login, sudo is an emailed code. Deferred: MFA, PATCH user_info, DELETE /user, cookie_token, export, apple/phone (forgot_password is moot — no passwords) |

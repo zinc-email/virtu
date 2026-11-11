@@ -134,3 +134,46 @@ raising the ceiling.
 This suite replaces the earlier `src/scripts/mailResourceCheck.ts` one-off check.
 It does not validate deployed DNS, IP reputation, remote-provider delivery, or
 recoverability after losing the PostgreSQL host.
+
+## Queue memory investigation (2026-11-11)
+
+Focused Bun 1.4.2 probes on macOS arm64 generated repetitive `bytea` fixtures in PostgreSQL, then
+ran the real queue worker in a fresh process. They bypassed MX rewriting/signing
+and used one queue worker. Delivery was stubbed; failure hooks threw on their
+first attempt and succeeded on retry, without database accounting or DSN work.
+The 768 MiB ceiling remained in place, with no forced garbage collection.
+
+| Probe | Rows | Bytes per message | SQL pool maximum | Peak RSS bytes |
+| --- | ---: | ---: | ---: | ---: |
+| All sent | 60 | 26,214,400 | 10 | 299,745,280 |
+| All permanently failed; hooks retried | 60 | 26,214,400 | 10 | 631,652,352 |
+| Mixed outcomes | 300 | 26,214,400 | 10 | 654,065,664 |
+| Mixed outcomes | 300 | 26,214,400 | 1 | 322,977,792 |
+| Mixed outcomes; extra header-sized space | 300 | 26,218,496 | 10 | 659,685,376 |
+
+Each mixed probe recorded 400 delivery callbacks and 200 hook callbacks. The stub
+returned success immediately for 100 copies, success after a temporary failure
+for 100, and permanent failure for 100. These probes did not independently assert
+the terminal database rows. All probe databases were removed afterward.
+
+The diagnostic was kept outside the suite at
+`/tmp/virtu-queue-memory-diagnostic.ts`. Commands used `MAIL_STRESS=1`, an explicit
+`MAIL_STRESS_ADMIN_DATABASE_URL`, and `bun /tmp/virtu-queue-memory-diagnostic.ts`
+with mode `sent`, `permanent`, or `mixed`. The table's row count corresponds to
+`MAIL_DIAGNOSTIC_ROWS`; pool maximum to `MAIL_DIAGNOSTIC_POOL_MAX` (default 10).
+The final row additionally set `MAIL_DIAGNOSTIC_EXTRA_BYTES=4096`; all other runs
+used its default of zero. This temporary diagnostic is not a supported runner.
+
+In the 60-row permanent-failure probe, delivery callbacks peaked at 273,924,096
+bytes RSS; subsequent failure-hook processing reached 631,652,352. Reported JS
+external memory peaked at 134,146,908 bytes during those hooks and ended near
+29 MiB. The matched 300-row single-connection run substantially reduced RSS.
+These observations suggest investigating transactional failure-job reads
+and connection-associated allocation or buffer reuse. They do not establish a
+leak or justify changing the production pool size: these are single-run
+diagnostics, and the full accounting hook and producer workload were absent.
+Adding 4,096 bytes did not reproduce a size-boundary jump in this probe.
+
+The full combined workload's 833.375 MiB failure remains unresolved. Next compare
+the production-shaped accounting hook and transaction lifecycle against these
+controls, measuring connection use as well as RSS and JS external memory.

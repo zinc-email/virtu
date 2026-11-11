@@ -100,6 +100,10 @@ test-unit *args="":
 test-int *args="":
   bin/test-int {{args}}
 
+# Opt-in load tests; MAIL_STRESS=1 is required. See server/stress/README.md.
+test-stress *args="":
+  cd server && bun run test:stress {{args}}
+
 # Client DOM tests (*.dom.test.tsx): real React pages driving the running
 # stack over HTTP. Requires `just up` first (migrates on boot). See bin/test-client.
 test-client *args="":

@@ -91,7 +91,8 @@ PostgreSQL storage; these tests are not disk-throughput benchmarks.
 | Contention message size | 1 MiB | 1 MiB | `MAIL_STRESS_QUEUE_MESSAGE_MIB` (1–25) |
 | SMTP/auth clients | 8 | 16 | `MAIL_STRESS_CLIENTS` (1–128) |
 | Fan-out recipients | 8 | 100 | `MAIL_STRESS_COPIES` (2–1000) |
-| Competing queue workers | 2 | 2 | `MAIL_STRESS_QUEUE_WORKERS` (2–32) |
+| Queue loops in one process | 2 | 2 | `MAIL_STRESS_QUEUE_WORKERS` (1–32) |
+| Claim batch size | Workload divided by loops | Workload divided by loops | `MAIL_STRESS_QUEUE_BATCH_SIZE` (1–1000) |
 | Rounds | 2 | 3 | `MAIL_STRESS_ROUNDS` (1–100) |
 | Worker RSS ceiling | 768 MiB | 768 MiB | `MAIL_STRESS_RSS_MIB` |
 | Per-worker deadline | 90 seconds | 600 seconds | `MAIL_STRESS_TIMEOUT_SECONDS` |
@@ -99,6 +100,13 @@ PostgreSQL storage; these tests are not disk-throughput benchmarks.
 An explicit `MAIL_STRESS_MESSAGE_MIB` also sets contention size unless
 `MAIL_STRESS_QUEUE_MESSAGE_MIB` overrides it. Each worker result includes its
 effective workload sizes and concurrency.
+
+For scaling comparisons, set `MAIL_STRESS_QUEUE_BATCH_SIZE=10` to hold the claim
+batch size at the production default. This mode drains each ready wave through
+multiple batches and verifies the same delivery and retry outcomes. Omitting
+the setting preserves the original single-pass scenario. `queueWorkers` counts
+concurrent queue loops sharing one Bun process and SQL pool; it does not count
+independent delivery processes. One loop provides a baseline without contention.
 
 The default load fan-out commits 300 copies, about 7.32 GiB of logical mail, after
 first exercising a failed 100-copy transaction. Each queue scenario also starts

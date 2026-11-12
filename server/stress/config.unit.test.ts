@@ -26,7 +26,10 @@ test("stress profiles validate bounded integer settings", () => {
       .queueMessageBytes,
   ).toBe(2 * 1024 * 1024);
   expect(() => stressConfig("unknown", {})).toThrow();
-  expect(() => stressConfig("smoke", { MAIL_STRESS_QUEUE_WORKERS: "1" })).toThrow();
+  expect(stressConfig("load", { MAIL_STRESS_QUEUE_WORKERS: "1" }).queueWorkers).toBe(1);
+  for (const bad of ["0", "-1", "1.5", "33"]) {
+    expect(() => stressConfig("load", { MAIL_STRESS_QUEUE_WORKERS: bad })).toThrow();
+  }
 });
 
 test("workers accept only generated scratch database targets", () => {
@@ -112,7 +115,9 @@ test("runner resolves encoded paths and preserves workload when children fail be
       MAIL_STRESS_RSS_MIB: "1",
       STRESS_TEST_CWD: await realpath(directory),
     };
-    const expected = stressWorkload(stressConfig("smoke", env), "smtp-load");
+    const expected = JSON.parse(
+      JSON.stringify(stressWorkload(stressConfig("smoke", env), "smtp-load")),
+    );
     for (const mode of ["success", "killed", "missing", "rss", "timeout"]) {
       const child = Bun.spawn(
         [process.execPath, "--no-env-file", join(stress, "run.ts"), "--scenario", "smtp-load"],
@@ -134,3 +139,43 @@ test("runner resolves encoded paths and preserves workload when children fail be
     await rm(directory, { recursive: true, force: true });
   }
 }, 10000);
+
+test("one, two and four queue loops keep the same recovery workload", () => {
+  const workloads = [1, 2, 4].map((queueWorkers) =>
+    stressWorkload(
+      stressConfig("load", {
+        MAIL_STRESS_QUEUE_WORKERS: String(queueWorkers),
+        MAIL_STRESS_QUEUE_MESSAGE_MIB: "25",
+      }),
+      "queue-recovery",
+    ),
+  );
+  expect(workloads.map((workload) => workload.queueWorkers)).toEqual([1, 2, 4]);
+  for (const { queueWorkers: _queueWorkers, ...workload } of workloads) {
+    expect(workload).toEqual({
+      messageBytes: 25 * 1024 * 1024,
+      clients: 16,
+      copies: 100,
+      rounds: 3,
+      queueBatchSize: undefined,
+    });
+  }
+});
+
+test("queue batch size is opt-in, bounded, and reported consistently", () => {
+  const baseline = stressConfig("load", {});
+  expect(baseline.queueBatchSize).toBeUndefined();
+  expect(JSON.stringify(stressWorkload(baseline, "queue-recovery"))).not.toContain(
+    "queueBatchSize",
+  );
+  const configured = stressConfig("load", { MAIL_STRESS_QUEUE_BATCH_SIZE: "10" });
+  for (const scenario of ["queue-seed", "queue-recovery", "queue-combined"] as const) {
+    expect(effectiveStressConfig(configured, scenario).queueBatchSize).toBe(10);
+    expect(stressWorkload(configured, scenario).queueBatchSize).toBe(10);
+  }
+  expect(stressConfig("smoke", { MAIL_STRESS_QUEUE_BATCH_SIZE: "1" }).queueBatchSize).toBe(1);
+  expect(stressConfig("smoke", { MAIL_STRESS_QUEUE_BATCH_SIZE: "1000" }).queueBatchSize).toBe(1000);
+  for (const bad of ["", "0", "-1", "1.5", "1001", "NaN"]) {
+    expect(() => stressConfig("load", { MAIL_STRESS_QUEUE_BATCH_SIZE: bad })).toThrow();
+  }
+});

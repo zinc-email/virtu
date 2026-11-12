@@ -16,6 +16,8 @@ export interface StressConfig {
   clients: number;
   copies: number;
   queueWorkers: number;
+  /** Omit to divide the initial backlog among the configured loops. */
+  queueBatchSize?: number;
   rounds: number;
   rssLimitBytes: number;
   timeoutMs: number;
@@ -41,7 +43,11 @@ export function stressConfig(
       1024 *
       1024,
     clients: number("MAIL_STRESS_CLIENTS", heavy ? 16 : 8, 128),
-    queueWorkers: number("MAIL_STRESS_QUEUE_WORKERS", 2, 32, 2),
+    queueWorkers: number("MAIL_STRESS_QUEUE_WORKERS", 2, 32),
+    queueBatchSize:
+      env.MAIL_STRESS_QUEUE_BATCH_SIZE === undefined
+        ? undefined
+        : number("MAIL_STRESS_QUEUE_BATCH_SIZE", 10, 1000),
     copies: number("MAIL_STRESS_COPIES", heavy ? 100 : 8, 1000, 2),
     rounds: number("MAIL_STRESS_ROUNDS", heavy ? 3 : 2, 100),
     rssLimitBytes: number("MAIL_STRESS_RSS_MIB", 768, 65536) * 1024 * 1024,
@@ -77,15 +83,13 @@ export function effectiveStressConfig(
 
 export type StressWorkload = Pick<
   StressConfig,
-  "messageBytes" | "clients" | "copies" | "rounds" | "queueWorkers"
+  "messageBytes" | "clients" | "copies" | "rounds" | "queueWorkers" | "queueBatchSize"
 >;
 
 export function stressWorkload(config: StressConfig, scenario: WorkerScenario): StressWorkload {
-  const { messageBytes, clients, copies, rounds, queueWorkers } = effectiveStressConfig(
-    config,
-    scenario,
-  );
-  return { messageBytes, clients, copies, rounds, queueWorkers };
+  const { messageBytes, clients, copies, rounds, queueWorkers, queueBatchSize } =
+    effectiveStressConfig(config, scenario);
+  return { messageBytes, clients, copies, rounds, queueWorkers, queueBatchSize };
 }
 
 export function assertScratchDatabase(url: string): void {

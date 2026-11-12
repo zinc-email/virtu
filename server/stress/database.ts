@@ -262,8 +262,9 @@ export async function runQueueRecovery(config: StressConfig): Promise<Record<str
   let active = 0;
   let peak = 0;
   let workerPeak = 0;
-  const batchSize = Math.max(1, Math.ceil(rows.length / config.queueWorkers));
-  const competingWorkers = Math.ceil(rows.length / batchSize);
+  const batchSize =
+    config.queueBatchSize ?? Math.max(1, Math.ceil(rows.length / config.queueWorkers));
+  const competingWorkers = Math.min(config.queueWorkers, Math.ceil(rows.length / batchSize));
   let arrivals = 0;
   let release!: () => void;
   const overlap = new Promise<void>((resolve) => {
@@ -336,7 +337,17 @@ export async function runQueueRecovery(config: StressConfig): Promise<Record<str
     };
   };
   const compete = () =>
-    Promise.all(Array.from({ length: config.queueWorkers }, () => processQueueOnce(db, options())));
+    Promise.all(
+      Array.from({ length: config.queueWorkers }, async () => {
+        const opts = options();
+        // Fixed-size claims let scaling trials hold the production batch size
+        // constant while still draining the entire ready wave.
+        for (;;) {
+          const claimed = await processQueueOnce(db, opts);
+          if (config.queueBatchSize === undefined || claimed === 0) break;
+        }
+      }),
+    );
   await compete();
   firstWave = false;
   progress("queue-recovery", "first-claims-finished");
@@ -354,9 +365,13 @@ export async function runQueueRecovery(config: StressConfig): Promise<Record<str
   clock += 120_000;
   await compete();
   progress("queue-recovery", "retry-claims-finished");
-  await Promise.all(
-    Array.from({ length: config.queueWorkers }, () => processFailureJobs(db, options())),
-  );
+  const failureBatches =
+    config.queueBatchSize === undefined ? 1 : Math.ceil(permanent.size / batchSize);
+  for (let batch = 0; batch < failureBatches; batch++) {
+    await Promise.all(
+      Array.from({ length: config.queueWorkers }, () => processFailureJobs(db, options())),
+    );
+  }
   progress("queue-recovery", "failure-jobs-drained");
   const terminal = await db
     .select({
@@ -391,6 +406,7 @@ export async function runQueueRecovery(config: StressConfig): Promise<Record<str
     peakDeliveryConcurrency: peak,
     peakPerWorkerConcurrency: workerPeak,
     queueWorkers: config.queueWorkers,
+    claimBatchSize: batchSize,
     elapsedMs: Date.now() - started,
   };
 }

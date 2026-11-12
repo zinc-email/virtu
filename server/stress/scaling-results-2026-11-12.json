@@ -13,6 +13,9 @@
     "postgres": "15.13 Homebrew"
   },
   "workload": {
+    "classification": "Historical fan-out stress workload, not single-recipient inbound capacity",
+    "incomingTransactionsPerProducer": 3,
+    "forwardedRecipientsPerTransaction": 100,
     "messageBytes": 26214400,
     "copiesPerRoundPerRunner": 100,
     "roundsPerRunner": 3,

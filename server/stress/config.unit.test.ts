@@ -14,6 +14,11 @@ import {
 test("stress profiles validate bounded integer settings", () => {
   expect(stressConfig("smoke", {})).toMatchObject({ clients: 8, copies: 8, queueWorkers: 2 });
   expect(stressConfig("load", {})).toMatchObject({ messageBytes: 25 * 1024 * 1024, copies: 100 });
+  expect(stressConfig("smoke", {}).inboundMessages).toBe(20);
+  expect(stressConfig("load", {}).inboundMessages).toBe(100);
+  expect(stressConfig("load", { MAIL_STRESS_INBOUND_MESSAGES: "200" }).inboundMessages).toBe(200);
+  expect(() => stressConfig("load", { MAIL_STRESS_INBOUND_MESSAGES: "0" })).toThrow();
+  expect(() => stressConfig("load", { MAIL_STRESS_INBOUND_MESSAGES: "10001" })).toThrow();
   expect(stressConfig("load", {}).rssLimitBytes).toBe(1536 * 1024 * 1024);
   expect(stressConfig("load", { MAIL_STRESS_RSS_MIB: "768" }).rssLimitBytes).toBe(
     768 * 1024 * 1024,
@@ -157,6 +162,7 @@ test("one, two and four queue loops keep the same recovery workload", () => {
   expect(workloads.map((workload) => workload.queueWorkers)).toEqual([1, 2, 4]);
   for (const { queueWorkers: _queueWorkers, ...workload } of workloads) {
     expect(workload).toEqual({
+      inboundMessages: 100,
       messageBytes: 25 * 1024 * 1024,
       clients: 16,
       copies: 100,

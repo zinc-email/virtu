@@ -6,6 +6,7 @@ export const SCENARIOS = [
   "queue-recovery",
   "queue-combined",
   "auth-pressure",
+  "inbound-mix",
 ] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 export type WorkerScenario = Scenario | "queue-seed";
@@ -14,6 +15,7 @@ export interface StressConfig {
   messageBytes: number;
   queueMessageBytes: number;
   clients: number;
+  inboundMessages: number;
   copies: number;
   queueWorkers: number;
   /** Omit to divide the initial backlog among the configured loops. */
@@ -43,6 +45,7 @@ export function stressConfig(
       1024 *
       1024,
     clients: number("MAIL_STRESS_CLIENTS", heavy ? 16 : 8, 128),
+    inboundMessages: number("MAIL_STRESS_INBOUND_MESSAGES", heavy ? 100 : 20, 10000),
     queueWorkers: number("MAIL_STRESS_QUEUE_WORKERS", 2, 32),
     queueBatchSize:
       env.MAIL_STRESS_QUEUE_BATCH_SIZE === undefined
@@ -57,12 +60,13 @@ export function stressConfig(
 
 export function isDatabaseScenario(
   scenario: WorkerScenario,
-): scenario is "fanout" | "queue-recovery" | "queue-combined" | "queue-seed" {
+): scenario is "fanout" | "queue-recovery" | "queue-combined" | "queue-seed" | "inbound-mix" {
   return (
     scenario === "fanout" ||
     scenario === "queue-recovery" ||
     scenario === "queue-combined" ||
-    scenario === "queue-seed"
+    scenario === "queue-seed" ||
+    scenario === "inbound-mix"
   );
 }
 
@@ -83,13 +87,19 @@ export function effectiveStressConfig(
 
 export type StressWorkload = Pick<
   StressConfig,
-  "messageBytes" | "clients" | "copies" | "rounds" | "queueWorkers" | "queueBatchSize"
+  | "messageBytes"
+  | "clients"
+  | "copies"
+  | "rounds"
+  | "queueWorkers"
+  | "queueBatchSize"
+  | "inboundMessages"
 >;
 
 export function stressWorkload(config: StressConfig, scenario: WorkerScenario): StressWorkload {
-  const { messageBytes, clients, copies, rounds, queueWorkers, queueBatchSize } =
+  const { messageBytes, clients, copies, rounds, queueWorkers, queueBatchSize, inboundMessages } =
     effectiveStressConfig(config, scenario);
-  return { messageBytes, clients, copies, rounds, queueWorkers, queueBatchSize };
+  return { messageBytes, clients, copies, rounds, queueWorkers, queueBatchSize, inboundMessages };
 }
 
 export function assertScratchDatabase(url: string): void {

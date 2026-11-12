@@ -1,0 +1,607 @@
+{
+  "date": "2026-11-12",
+  "sourceHead": "a9d02bc449be929167be8f7355d33fcba011d21c",
+  "sourceNote": "Final inbound module and integration were uncommitted but frozen for all four final-code cases; source file hashes and snapshot retained. Earlier reports are pre-fix, not pooled into baseline results.",
+  "sourceSha256": {
+    "server/stress/inbound.ts": "9ed26d95044d865a43fa2df56822a7ade318635d34d3634dd5b5d1d58770b52e",
+    "server/stress/inbound.unit.test.ts": "744d9c2170d05267c55296872f2517046658c8a4f8666dbb7ad83d4158c06bef",
+    "server/stress/config.ts": "c4c0d6e9665a62ba6fe62e9d94296dc6f662fbba243f8960322244156dd43d5e",
+    "server/stress/worker.ts": "3cb7b739d2a517ee3c1d0cf1dc624b862e83287ec7f67f663eab968a561b9fb3",
+    "server/stress/run.ts": "b8311a0b98da568ee9ca2bc094c0cdc37982a051a42eced3563cd8120856cbae"
+  },
+  "runtime": {
+    "bun": "1.4.2",
+    "os": "macOS 15.3.1",
+    "arch": "arm64",
+    "cpu": "Apple M1",
+    "cores": 8,
+    "hostMemoryBytes": 17179869184,
+    "postgres": "15.13 Homebrew"
+  },
+  "scenario": "inbound-mix",
+  "measurement": "Real loopback SMTP to durable acceptance; no queue draining or outbound delivery. Acceptance rates use trafficElapsedMs, excluding fixture setup and post-traffic validation.",
+  "fullInputMix": [
+    {
+      "messageBytes": 16384,
+      "count": 70
+    },
+    {
+      "messageBytes": 262144,
+      "count": 20
+    },
+    {
+      "messageBytes": 2097152,
+      "count": 8
+    },
+    {
+      "messageBytes": 26214400,
+      "count": 2
+    }
+  ],
+  "fullAcceptedInputBytes": 75595776,
+  "guards": {
+    "workerRssCapBytes": 1610612736,
+    "sampledApplicationAndPostgresRssCapBytes": 8589934592,
+    "hostPressureAbort": "any sampled non-normal pressure",
+    "swapGrowthAbortMiB": 512,
+    "sampleIntervalTargetSeconds": 0.25
+  },
+  "coverage": {
+    "normalBaselines": "Both final 100-message runs accepted all 100 without refusals, with matching pending queue rows/logs/destinations/body hashes and zero delivery attempts.",
+    "quotaSmoke": "20 offered; exactly 2 accepted and 18 SMTP 452 temporary refusals under pending-row quota 2; only 2 durable rows/logs.",
+    "earlyDataSmoke": "20 offered; 4 accepted and 16 SMTP 421 temporary refusals with a 65536-byte DATA budget; only 4 durable rows/logs.",
+    "unitTests": "Four tests/154 assertions cover size mix/caps, streamed bodies, and socket-write settlement/listener cleanup including missing callback plus close/error.",
+    "unexercisedBranches": "Permanent 5xx refusal classification and the premature-positive-DATA guard were reviewed but not directly exercised by these cases."
+  },
+  "preFixFailure": {
+    "case": "data-budget-64k",
+    "completeRunnerReport": {
+      "started": "2026-11-12T03:31:16.334Z",
+      "runtime": {
+        "bun": "1.4.2",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "config": {
+        "profile": "smoke",
+        "messageBytes": 1048576,
+        "queueMessageBytes": 1048576,
+        "clients": 8,
+        "inboundMessages": 20,
+        "queueWorkers": 1,
+        "queueBatchSize": 10,
+        "copies": 8,
+        "rounds": 2,
+        "rssLimitBytes": 1610612736,
+        "timeoutMs": 90000
+      },
+      "memoryScope": "Worker process including bounded in-process load driver; PostgreSQL and runner excluded",
+      "interrupted": false,
+      "ok": false,
+      "results": [
+        {
+          "ok": false,
+          "workload": {
+            "messageBytes": 1048576,
+            "clients": 8,
+            "copies": 8,
+            "rounds": 2,
+            "queueWorkers": 1,
+            "queueBatchSize": 10,
+            "inboundMessages": 20
+          },
+          "error": "Deadline exceeded (90000 ms)",
+          "elapsedMs": 90006.543209,
+          "peakRssBytes": 120799232,
+          "scenario": "inbound-mix",
+          "scratchRemoved": true,
+          "scratchDatabase": "virtu_stress_db29a52abf6a4f568bbbcfcdd03ed85f"
+        }
+      ]
+    },
+    "cause": "Sender write awaited only its callback, which could remain unresolved when the server closed during early DATA refusal.",
+    "fix": "Per-write close/error listeners settle the write promise and are removed on callback, close, or error; already-closed sockets are rejected.",
+    "deadlineUnchanged": true,
+    "earlierNormalResults": "Preserved in pre-fix-evidence.json and raw case reports; excluded from final-code baseline results."
+  },
+  "limitations": [
+    "Synthetic varied printable-ASCII bodies and synthetic size distribution; not observed production traffic or representative MIME attachments.",
+    "One account owner and one loopback remote IP; distinct logical sender domains/HELOs and recipient aliases.",
+    "SPF/DMARC DNS is stubbed; no TLS or inbound DKIM signatures. Real forwarding rewrite/signing and PostgreSQL acceptance run.",
+    "Bounded sender and server share one process; worker RSS includes setup and post-traffic body-hash validation.",
+    "Sampled PostgreSQL RSS sums may double-count shared pages and short peaks can be missed; short policy smokes can finish between samples. Worker high-water RSS comes from the runner report.",
+    "Two short full runs are sanity checks, not steady-state capacity, endurance, shared-provider reputation, or outbound delivery validation.",
+    "Generic runner copies/rounds/queueWorkers/queueBatchSize descriptors do not drive inbound-mix; inboundMessages, clients and maximum message size govern traffic."
+  ],
+  "cases": [
+    {
+      "name": "final-data-budget-64k",
+      "kind": "policy-smoke",
+      "completeRunnerReport": {
+        "started": "2026-11-12T03:34:54.153Z",
+        "runtime": {
+          "bun": "1.4.2",
+          "platform": "darwin",
+          "arch": "arm64"
+        },
+        "config": {
+          "profile": "smoke",
+          "messageBytes": 1048576,
+          "queueMessageBytes": 1048576,
+          "clients": 8,
+          "inboundMessages": 20,
+          "queueWorkers": 1,
+          "queueBatchSize": 10,
+          "copies": 8,
+          "rounds": 2,
+          "rssLimitBytes": 1610612736,
+          "timeoutMs": 90000
+        },
+        "memoryScope": "Worker process including bounded in-process load driver; PostgreSQL and runner excluded",
+        "interrupted": false,
+        "ok": true,
+        "results": [
+          {
+            "type": "result",
+            "ok": true,
+            "workload": {
+              "messageBytes": 1048576,
+              "clients": 8,
+              "copies": 8,
+              "rounds": 2,
+              "queueWorkers": 1,
+              "queueBatchSize": 10,
+              "inboundMessages": 20
+            },
+            "elapsedMs": 317.840708,
+            "peakRssBytes": 119341056,
+            "metrics": {
+              "offeredMessagesAtBytes16384": 14,
+              "acceptedMessagesAtBytes16384": 4,
+              "offeredMessagesAtBytes262144": 4,
+              "acceptedMessagesAtBytes262144": 0,
+              "offeredMessagesAtBytes1048576": 2,
+              "acceptedMessagesAtBytes1048576": 0,
+              "smtpReply421Messages": 16,
+              "smtpReply250Messages": 4,
+              "setupElapsedMs": 86.63199999999999,
+              "validationElapsedMs": 1.5657079999999723,
+              "offeredInputMessages": 20,
+              "acceptedInputMessages": 4,
+              "retryableInputMessages": 16,
+              "permanentlyRejectedInputMessages": 0,
+              "offeredInputBytes": 3375104,
+              "acceptedInputBytes": 65536,
+              "logicalSenderDomains": 20,
+              "logicalSenderHelos": 20,
+              "recipientAliases": 20,
+              "remoteIpCount": 1,
+              "accountOwners": 1,
+              "recipientsPerInput": 1,
+              "queueBacklogMessages": 4,
+              "deliveryLogs": 4,
+              "trafficElapsedMs": 131.91587500000003,
+              "acceptedInputMessagesPerSecond": 30.322355061511733,
+              "acceptedPayloadMiBPerSecond": 0.4737867978361208,
+              "acceptanceLatencyP50Ms": 87.389375,
+              "acceptanceLatencyP95Ms": 121.56774999999999,
+              "automaticRetries": 0,
+              "policyAliasMessagesPerMinute": 10,
+              "policyMailboxMessagesPerMinute": 15,
+              "policyQueueMaxPendingRows": 500,
+              "policyQueueMaxPendingBytes": 268435456,
+              "policyDataBudgetBytes": 65536,
+              "tlsSessions": 0,
+              "inboundDkimSignatures": 0
+            },
+            "scenario": "inbound-mix",
+            "scratchRemoved": true,
+            "scratchDatabase": "virtu_stress_1771cbc530cd4b9da4eb0a8fda51e508"
+          }
+        ]
+      },
+      "command": {
+        "argv": [
+          "bun",
+          "stress/run.ts",
+          "--profile",
+          "smoke",
+          "--scenario",
+          "inbound-mix",
+          "--output",
+          "/tmp/virtu-inbound-mix.M9Rwy9/final-data-budget-64k/runner-1.json"
+        ],
+        "cwd": "/Users/jchook/projects/virtu-ts/server",
+        "overrides": {
+          "SMTP_MAX_DATA_BYTES_IN_FLIGHT": "65536",
+          "MAIL_STRESS": "1",
+          "MAIL_STRESS_ADMIN_DATABASE_URL": "postgres://virtu@127.0.0.1:55439/postgres",
+          "MAIL_STRESS_QUEUE_WORKERS": "1",
+          "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+          "MAIL_STRESS_RSS_MIB": "1536"
+        }
+      },
+      "observed": {
+        "commonWallSeconds": 0.7636581670958549,
+        "workerPeakRssBytes": 119341056,
+        "sampledApplicationTreePeakRssBytes": 20480000,
+        "sampledPostgresTreePeakRssBytes": 56360960,
+        "sampledCoincidentAggregatePeakRssBytes": 71057408,
+        "hostPressureLevels": [1],
+        "swapUsedMiBMin": 6107.88,
+        "swapUsedMiBMax": 6107.88,
+        "processSamples": 2,
+        "maxObservedScenarioProcesses": 0,
+        "remainingScratchDatabases": [],
+        "guardStop": null
+      }
+    },
+    {
+      "name": "final-queue-quota-two",
+      "kind": "policy-smoke",
+      "completeRunnerReport": {
+        "started": "2026-11-12T03:35:05.929Z",
+        "runtime": {
+          "bun": "1.4.2",
+          "platform": "darwin",
+          "arch": "arm64"
+        },
+        "config": {
+          "profile": "smoke",
+          "messageBytes": 1048576,
+          "queueMessageBytes": 1048576,
+          "clients": 8,
+          "inboundMessages": 20,
+          "queueWorkers": 1,
+          "queueBatchSize": 10,
+          "copies": 8,
+          "rounds": 2,
+          "rssLimitBytes": 1610612736,
+          "timeoutMs": 90000
+        },
+        "memoryScope": "Worker process including bounded in-process load driver; PostgreSQL and runner excluded",
+        "interrupted": false,
+        "ok": true,
+        "results": [
+          {
+            "type": "result",
+            "ok": true,
+            "workload": {
+              "messageBytes": 1048576,
+              "clients": 8,
+              "copies": 8,
+              "rounds": 2,
+              "queueWorkers": 1,
+              "queueBatchSize": 10,
+              "inboundMessages": 20
+            },
+            "elapsedMs": 275.123542,
+            "peakRssBytes": 126320640,
+            "metrics": {
+              "offeredMessagesAtBytes16384": 14,
+              "acceptedMessagesAtBytes16384": 2,
+              "offeredMessagesAtBytes262144": 4,
+              "acceptedMessagesAtBytes262144": 0,
+              "offeredMessagesAtBytes1048576": 2,
+              "acceptedMessagesAtBytes1048576": 0,
+              "smtpReply250Messages": 2,
+              "smtpReply452Messages": 18,
+              "setupElapsedMs": 69.001417,
+              "validationElapsedMs": 0.9826250000000414,
+              "offeredInputMessages": 20,
+              "acceptedInputMessages": 2,
+              "retryableInputMessages": 18,
+              "permanentlyRejectedInputMessages": 0,
+              "offeredInputBytes": 3375104,
+              "acceptedInputBytes": 32768,
+              "logicalSenderDomains": 20,
+              "logicalSenderHelos": 20,
+              "recipientAliases": 20,
+              "remoteIpCount": 1,
+              "accountOwners": 1,
+              "recipientsPerInput": 1,
+              "queueBacklogMessages": 2,
+              "deliveryLogs": 2,
+              "trafficElapsedMs": 111.111625,
+              "acceptedInputMessagesPerSecond": 17.99991675038503,
+              "acceptedPayloadMiBPerSecond": 0.2812486992247661,
+              "acceptanceLatencyP50Ms": 62.487832999999995,
+              "acceptanceLatencyP95Ms": 91.206333,
+              "automaticRetries": 0,
+              "policyAliasMessagesPerMinute": 10,
+              "policyMailboxMessagesPerMinute": 15,
+              "policyQueueMaxPendingRows": 2,
+              "policyQueueMaxPendingBytes": 268435456,
+              "policyDataBudgetBytes": 268435456,
+              "tlsSessions": 0,
+              "inboundDkimSignatures": 0
+            },
+            "scenario": "inbound-mix",
+            "scratchRemoved": true,
+            "scratchDatabase": "virtu_stress_40c46aa0a7b248278058efe3519b0c79"
+          }
+        ]
+      },
+      "command": {
+        "argv": [
+          "bun",
+          "stress/run.ts",
+          "--profile",
+          "smoke",
+          "--scenario",
+          "inbound-mix",
+          "--output",
+          "/tmp/virtu-inbound-mix.M9Rwy9/final-queue-quota-two/runner-1.json"
+        ],
+        "cwd": "/Users/jchook/projects/virtu-ts/server",
+        "overrides": {
+          "QUEUE_MAX_PENDING_ROWS_PER_USER": "2",
+          "MAIL_STRESS": "1",
+          "MAIL_STRESS_ADMIN_DATABASE_URL": "postgres://virtu@127.0.0.1:55439/postgres",
+          "MAIL_STRESS_QUEUE_WORKERS": "1",
+          "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+          "MAIL_STRESS_RSS_MIB": "1536"
+        }
+      },
+      "observed": {
+        "commonWallSeconds": 0.7559466250240803,
+        "workerPeakRssBytes": 126320640,
+        "sampledApplicationTreePeakRssBytes": 18530304,
+        "sampledPostgresTreePeakRssBytes": 62275584,
+        "sampledCoincidentAggregatePeakRssBytes": 80805888,
+        "hostPressureLevels": [1],
+        "swapUsedMiBMin": 6107.88,
+        "swapUsedMiBMax": 6107.88,
+        "processSamples": 2,
+        "maxObservedScenarioProcesses": 0,
+        "remainingScratchDatabases": [],
+        "guardStop": null
+      }
+    },
+    {
+      "name": "final-load100-1",
+      "kind": "acceptance-baseline",
+      "completeRunnerReport": {
+        "started": "2026-11-12T03:35:16.125Z",
+        "runtime": {
+          "bun": "1.4.2",
+          "platform": "darwin",
+          "arch": "arm64"
+        },
+        "config": {
+          "profile": "load",
+          "messageBytes": 26214400,
+          "queueMessageBytes": 1048576,
+          "clients": 16,
+          "inboundMessages": 100,
+          "queueWorkers": 1,
+          "queueBatchSize": 10,
+          "copies": 100,
+          "rounds": 3,
+          "rssLimitBytes": 1610612736,
+          "timeoutMs": 600000
+        },
+        "memoryScope": "Worker process including bounded in-process load driver; PostgreSQL and runner excluded",
+        "interrupted": false,
+        "ok": true,
+        "results": [
+          {
+            "type": "result",
+            "ok": true,
+            "workload": {
+              "messageBytes": 26214400,
+              "clients": 16,
+              "copies": 100,
+              "rounds": 3,
+              "queueWorkers": 1,
+              "queueBatchSize": 10,
+              "inboundMessages": 100
+            },
+            "elapsedMs": 6656.420375,
+            "peakRssBytes": 529022976,
+            "metrics": {
+              "offeredMessagesAtBytes16384": 70,
+              "acceptedMessagesAtBytes16384": 70,
+              "offeredMessagesAtBytes262144": 20,
+              "acceptedMessagesAtBytes262144": 20,
+              "offeredMessagesAtBytes2097152": 8,
+              "acceptedMessagesAtBytes2097152": 8,
+              "offeredMessagesAtBytes26214400": 2,
+              "acceptedMessagesAtBytes26214400": 2,
+              "smtpReply250Messages": 100,
+              "setupElapsedMs": 92.852875,
+              "validationElapsedMs": 123.4238749999995,
+              "offeredInputMessages": 100,
+              "acceptedInputMessages": 100,
+              "retryableInputMessages": 0,
+              "permanentlyRejectedInputMessages": 0,
+              "offeredInputBytes": 75595776,
+              "acceptedInputBytes": 75595776,
+              "logicalSenderDomains": 100,
+              "logicalSenderHelos": 100,
+              "recipientAliases": 100,
+              "remoteIpCount": 1,
+              "accountOwners": 1,
+              "recipientsPerInput": 1,
+              "queueBacklogMessages": 100,
+              "deliveryLogs": 100,
+              "trafficElapsedMs": 6345.824166,
+              "acceptedInputMessagesPerSecond": 15.758394399861471,
+              "acceptedPayloadMiBPerSecond": 11.36081746265013,
+              "acceptanceLatencyP50Ms": 790.437375,
+              "acceptanceLatencyP95Ms": 2341.742667,
+              "automaticRetries": 0,
+              "policyAliasMessagesPerMinute": 10,
+              "policyMailboxMessagesPerMinute": 15,
+              "policyQueueMaxPendingRows": 500,
+              "policyQueueMaxPendingBytes": 268435456,
+              "policyDataBudgetBytes": 268435456,
+              "tlsSessions": 0,
+              "inboundDkimSignatures": 0
+            },
+            "scenario": "inbound-mix",
+            "scratchRemoved": true,
+            "scratchDatabase": "virtu_stress_08180029352d4408b2051ea72ec71c6d"
+          }
+        ]
+      },
+      "command": {
+        "argv": [
+          "bun",
+          "stress/run.ts",
+          "--profile",
+          "load",
+          "--scenario",
+          "inbound-mix",
+          "--output",
+          "/tmp/virtu-inbound-mix.M9Rwy9/final-load100-1/runner-1.json"
+        ],
+        "cwd": "/Users/jchook/projects/virtu-ts/server",
+        "overrides": {
+          "MAIL_STRESS": "1",
+          "MAIL_STRESS_ADMIN_DATABASE_URL": "postgres://virtu@127.0.0.1:55439/postgres",
+          "MAIL_STRESS_QUEUE_WORKERS": "1",
+          "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+          "MAIL_STRESS_RSS_MIB": "1536"
+        }
+      },
+      "observed": {
+        "commonWallSeconds": 7.2326480420306325,
+        "workerPeakRssBytes": 529022976,
+        "sampledApplicationTreePeakRssBytes": 546619392,
+        "sampledPostgresTreePeakRssBytes": 613187584,
+        "sampledCoincidentAggregatePeakRssBytes": 1159806976,
+        "hostPressureLevels": [1],
+        "swapUsedMiBMin": 6107.88,
+        "swapUsedMiBMax": 6107.88,
+        "processSamples": 16,
+        "maxObservedScenarioProcesses": 1,
+        "remainingScratchDatabases": [],
+        "guardStop": null
+      }
+    },
+    {
+      "name": "final-load100-2",
+      "kind": "acceptance-baseline",
+      "completeRunnerReport": {
+        "started": "2026-11-12T03:35:23.380Z",
+        "runtime": {
+          "bun": "1.4.2",
+          "platform": "darwin",
+          "arch": "arm64"
+        },
+        "config": {
+          "profile": "load",
+          "messageBytes": 26214400,
+          "queueMessageBytes": 1048576,
+          "clients": 16,
+          "inboundMessages": 100,
+          "queueWorkers": 1,
+          "queueBatchSize": 10,
+          "copies": 100,
+          "rounds": 3,
+          "rssLimitBytes": 1610612736,
+          "timeoutMs": 600000
+        },
+        "memoryScope": "Worker process including bounded in-process load driver; PostgreSQL and runner excluded",
+        "interrupted": false,
+        "ok": true,
+        "results": [
+          {
+            "type": "result",
+            "ok": true,
+            "workload": {
+              "messageBytes": 26214400,
+              "clients": 16,
+              "copies": 100,
+              "rounds": 3,
+              "queueWorkers": 1,
+              "queueBatchSize": 10,
+              "inboundMessages": 100
+            },
+            "elapsedMs": 6193.0025,
+            "peakRssBytes": 529399808,
+            "metrics": {
+              "offeredMessagesAtBytes16384": 70,
+              "acceptedMessagesAtBytes16384": 70,
+              "offeredMessagesAtBytes262144": 20,
+              "acceptedMessagesAtBytes262144": 20,
+              "offeredMessagesAtBytes2097152": 8,
+              "acceptedMessagesAtBytes2097152": 8,
+              "offeredMessagesAtBytes26214400": 2,
+              "acceptedMessagesAtBytes26214400": 2,
+              "smtpReply250Messages": 100,
+              "setupElapsedMs": 132.05491700000002,
+              "validationElapsedMs": 109.28095800000028,
+              "offeredInputMessages": 100,
+              "acceptedInputMessages": 100,
+              "retryableInputMessages": 0,
+              "permanentlyRejectedInputMessages": 0,
+              "offeredInputBytes": 75595776,
+              "acceptedInputBytes": 75595776,
+              "logicalSenderDomains": 100,
+              "logicalSenderHelos": 100,
+              "recipientAliases": 100,
+              "remoteIpCount": 1,
+              "accountOwners": 1,
+              "recipientsPerInput": 1,
+              "queueBacklogMessages": 100,
+              "deliveryLogs": 100,
+              "trafficElapsedMs": 5858.607583,
+              "acceptedInputMessagesPerSecond": 17.068902223485892,
+              "acceptedPayloadMiBPerSecond": 12.305611696744359,
+              "acceptanceLatencyP50Ms": 734.3641669999997,
+              "acceptanceLatencyP95Ms": 2182.056,
+              "automaticRetries": 0,
+              "policyAliasMessagesPerMinute": 10,
+              "policyMailboxMessagesPerMinute": 15,
+              "policyQueueMaxPendingRows": 500,
+              "policyQueueMaxPendingBytes": 268435456,
+              "policyDataBudgetBytes": 268435456,
+              "tlsSessions": 0,
+              "inboundDkimSignatures": 0
+            },
+            "scenario": "inbound-mix",
+            "scratchRemoved": true,
+            "scratchDatabase": "virtu_stress_ca4912e72c204a9d8fe124e034d0a44e"
+          }
+        ]
+      },
+      "command": {
+        "argv": [
+          "bun",
+          "stress/run.ts",
+          "--profile",
+          "load",
+          "--scenario",
+          "inbound-mix",
+          "--output",
+          "/tmp/virtu-inbound-mix.M9Rwy9/final-load100-2/runner-1.json"
+        ],
+        "cwd": "/Users/jchook/projects/virtu-ts/server",
+        "overrides": {
+          "MAIL_STRESS": "1",
+          "MAIL_STRESS_ADMIN_DATABASE_URL": "postgres://virtu@127.0.0.1:55439/postgres",
+          "MAIL_STRESS_QUEUE_WORKERS": "1",
+          "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+          "MAIL_STRESS_RSS_MIB": "1536"
+        }
+      },
+      "observed": {
+        "commonWallSeconds": 6.724378166953102,
+        "workerPeakRssBytes": 529399808,
+        "sampledApplicationTreePeakRssBytes": 525746176,
+        "sampledPostgresTreePeakRssBytes": 612843520,
+        "sampledCoincidentAggregatePeakRssBytes": 1138589696,
+        "hostPressureLevels": [1],
+        "swapUsedMiBMin": 6107.88,
+        "swapUsedMiBMax": 6107.88,
+        "processSamples": 15,
+        "maxObservedScenarioProcesses": 1,
+        "remainingScratchDatabases": [],
+        "guardStop": null
+      }
+    }
+  ],
+  "artifactDirectory": "/tmp/virtu-inbound-mix.M9Rwy9"
+}

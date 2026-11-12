@@ -32,6 +32,8 @@ try {
   let metrics: Record<string, number>;
   if (scenario === "auth-pressure") {
     metrics = await (await import("./auth.ts")).runAuthPressure(config);
+  } else if (scenario === "inbound-mix") {
+    metrics = await (await import("./inbound.ts")).runInboundMix(config);
   } else if (isDatabaseScenario(scenario)) {
     const db = await import("./database.ts");
     metrics = await {

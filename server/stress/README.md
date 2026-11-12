@@ -4,7 +4,7 @@ These tests are opt-in. Ordinary unit/integration runs do not execute them. Each
 scenario runs in fresh Bun subprocesses with deadlines, memory measurements, and
 assertions about delivery outcomes. The runner exits nonzero if any scenario or
 cleanup fails. The default per-process memory budget is 1.5 GiB, based on the
-capacity trials below. The original 768 MiB budget was exceeded by the combined
+fan-out stress trials below. The original 768 MiB budget was exceeded by the combined
 acceptance/one-worker scenario; `MAIL_STRESS_RSS_MIB=768` retains that comparison.
 
 List scenarios without starting services:
@@ -51,6 +51,7 @@ awake and otherwise idle during measurement.
 | `queue-recovery` | A separate bounded subprocess seeds mail; fresh competing workers claim distinct deliveries; temporary failures retry; permanent failures retain follow-up jobs; interrupted transactional hooks roll back and retry; a stale pre-delivery claim is reclaimed. |
 | `queue-combined` | Sequential acceptance then recovery with one queue worker in the same process, preserving producer allocator history; no forced GC. |
 | `auth-pressure` | Blocked DNS outlives verification timeout; overload starts no more DNS work; the slot recovers; excessive signature work is refused before DNS; input bytes remain unchanged. |
+| `inbound-mix` | Independent single-recipient SMTP transactions across logical senders and aliases, with a deterministic size mix; durable acceptance, one queued copy per accepted message, and unchanged body bytes. |
 
 The queue tests measure two distinct cases. `queue-recovery` isolates consumer
 memory while testing multiple workers; `queue-combined` keeps acceptance and one
@@ -92,6 +93,7 @@ PostgreSQL storage; these tests are not disk-throughput benchmarks.
 | SMTP/fan-out/combined message size | 1 MiB | 25 MiB | `MAIL_STRESS_MESSAGE_MIB` (1–25) |
 | Contention message size | 1 MiB | 1 MiB | `MAIL_STRESS_QUEUE_MESSAGE_MIB` (1–25) |
 | SMTP/auth clients | 8 | 16 | `MAIL_STRESS_CLIENTS` (1–128) |
+| Independent inbound messages | 20 | 100 | `MAIL_STRESS_INBOUND_MESSAGES` (1–10000) |
 | Fan-out recipients | 8 | 100 | `MAIL_STRESS_COPIES` (2–1000) |
 | Queue loops in one process | 2 | 2 | `MAIL_STRESS_QUEUE_WORKERS` (1–32) |
 | Claim batch size | Workload divided by loops | Workload divided by loops | `MAIL_STRESS_QUEUE_BATCH_SIZE` (1–1000) |
@@ -145,6 +147,73 @@ This suite replaces the earlier `src/scripts/mailResourceCheck.ts` one-off check
 It does not validate deployed DNS, IP reputation, remote-provider delivery, or
 recoverability after losing the PostgreSQL host.
 
+## Independent inbound acceptance
+
+`inbound-mix` models separate incoming SMTP transactions, each addressed to one
+local alias that forwards to one mailbox. Every transaction has a distinct
+logical sender domain, EHLO name, Message-ID, and recipient alias. All connections
+use the same loopback IP; this does not simulate diverse source IPs or networks.
+The fixtures belong to one account. The real MX path performs recipient policy,
+authentication, rewriting, signing and atomic enqueue, with configured rate,
+queue-quota and DATA-reservation limits retained and recorded in the report.
+
+The synthetic size mix repeats every 100 messages in a deterministic interleaved
+order: 70 messages of 16 KiB, 20 of 256 KiB, eight of 2 MiB, and two of 25 MiB.
+These are complete input-message sizes, capped by `MAIL_STRESS_MESSAGE_MIB`.
+They are assumptions for comparison, not an observed traffic distribution.
+Smoke sends 20 inputs capped at 1 MiB; load sends 100 with the full size range.
+Reports include the actual offered and accepted size histograms, including any
+caps or refusals. Bodies are varied synthetic ASCII, not real attachments.
+
+```sh
+MAIL_STRESS=1 MAIL_STRESS_ADMIN_DATABASE_URL=postgres://virtu@localhost:5432/postgres \
+bun run --cwd server test:stress --profile load --scenario inbound-mix
+```
+
+`MAIL_STRESS_CLIENTS` controls concurrent sender connections; each sender starts
+another transaction after its previous result. This applies bounded concurrent
+load, not a fixed arrival rate. `MAIL_STRESS_INBOUND_MESSAGES` controls input
+count independently of fan-out copies or rounds. Senders stream bounded chunks
+and wait for writes; the harness does not retain complete input payloads.
+
+Headline metrics are accepted incoming messages/s, accepted payload MiB/s, and
+connection-to-final-acknowledgment p50/p95 latency. Their traffic window excludes
+fixture preparation and post-run integrity checks, which are timed separately.
+The RSS measurement includes the driver and validation. Temporary and permanent
+refusals and actual SMTP codes are reported separately; there are no automatic
+retries. Unknown transport outcomes fail the test. All accepted messages must
+have exactly one corresponding pending queue row and delivery log, the expected
+recipient, and unchanged body bytes. Rejected transactions must not leave those
+rows. Body verification loads one queued message at a time.
+
+This measures **durable acceptance only**. No delivery worker drains the queue;
+the final backlog equals accepted input count. High input-count overrides can
+therefore encounter legitimate per-account queue quotas, and this test must not
+be presented as sustained forwarding capacity. DNS is deterministic and local;
+inputs use SPF alignment without inbound DKIM or TLS. A delivery-worker scaling
+recommendation needs a subsequent test with concurrent ingress and delivery.
+
+On the same 16 GiB M1 host described below, two final-code load runs each accepted
+all 100 inputs (72.09375 MiB), with zero refusals and exactly 100 pending copies:
+
+| Run | Accepted inputs/s | Accepted MiB/s | p95 acceptance latency | Worker peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 15.76 | 11.36 | 2.34 s | 504.5 MiB |
+| 2 | 17.07 | 12.31 | 2.18 s | 504.9 MiB |
+
+These are short acceptance-only samples, not a new delivery-worker scaling
+envelope. The sender driver and one-message-at-a-time readback validation are
+included in worker memory. A queue-quota probe accepted two inputs and explicitly
+refused 18 with SMTP 452; a 64 KiB DATA-reservation probe accepted four and refused
+16 with SMTP 421. Neither left rows for refused messages. The latter initially
+exposed a sender-harness hang when a socket closed without its write callback;
+the fixed driver settles writes on close/error, and the same probe now completes
+in under a second with the original deadline. Host pressure stayed normal,
+swap did not grow, and scratch databases were removed.
+
+Final-run reports, settings and the preserved failure/fix evidence are in
+[inbound-results-2026-11-12.json](./inbound-results-2026-11-12.json).
+
 ## Queue memory investigation (2026-11-11)
 
 Focused Bun 1.4.2 probes on macOS arm64 generated repetitive `bytea` fixtures in PostgreSQL, then
@@ -188,7 +257,13 @@ The full combined workload's 833.375 MiB failure remains unresolved. Next compar
 the production-shaped accounting hook and transaction lifecycle against these
 controls, measuring connection use as well as RSS and JS external memory.
 
-## Measured scaling envelope (2026-11-12)
+## Historical fan-out scaling measurements (2026-11-12)
+
+These trials used **three incoming messages, each forwarded to 100 mailboxes**
+per producer. They are fan-out stress measurements, not capacity estimates for
+diverse incoming messages with one recipient each. The provisional budgets
+below describe those trials only and should not be used to size ordinary inbound
+traffic. Use `inbound-mix` for independent-message acceptance measurements.
 
 The original combined scenario subsequently exceeded 768 MiB in two of three
 unchanged runs (818, 797, and 746 MiB peaks). A run with only the cap raised to
@@ -245,8 +320,9 @@ The monitor would stop on non-normal pressure, 512 MiB of additional swap, or
 8 GiB of aggregate RSS. No guard fired. All scratch databases were removed and
 the dedicated PostgreSQL server was stopped.
 
-For the next monitored deployment-shaped trials, use these **provisional total
-budgets**, keeping the OS and other applications outside the budget:
+The fan-out trials led to these **provisional total trial budgets**, keeping the
+OS and other applications outside the budget. They remain historical context,
+not production sizing recommendations for single-recipient traffic:
 
 | Independent processes | Total application + database planning budget |
 | ---: | ---: |
@@ -257,8 +333,7 @@ budgets**, keeping the OS and other applications outside the budget:
 Use the tested 1.5 GiB per-process ceiling as a starting point, and monitor the
 aggregate separately. These are total headroom choices above the observed
 peaks, not a guaranteed additive partition between application and database
-memory. Start with two processes for further validation; test four when more
-aggregate work is needed and the 8 GiB budget is available. Do not extrapolate
+memory. Do not select a production worker count from these fan-out results. Do not extrapolate
 past four or treat the declining per-process peaks as a scaling law. Production
 currently starts one queue loop; these tests do not change that configuration.
 

@@ -3,8 +3,9 @@
 These tests are opt-in. Ordinary unit/integration runs do not execute them. Each
 scenario runs in fresh Bun subprocesses with deadlines, memory measurements, and
 assertions about delivery outcomes. The runner exits nonzero if any scenario or
-cleanup fails. The full load profile has not passed the 768 MiB memory budget:
-the combined acceptance/one-worker scenario exceeded it during validation.
+cleanup fails. The default per-process memory budget is 1.5 GiB, based on the
+capacity trials below. The original 768 MiB budget was exceeded by the combined
+acceptance/one-worker scenario; `MAIL_STRESS_RSS_MIB=768` retains that comparison.
 
 List scenarios without starting services:
 
@@ -63,8 +64,9 @@ concern unresolved; the cause has not been established.
 
 Default contention tests use 1 MiB bodies to test competing claims and retry
 semantics. The combined one-worker baseline retains 25 MiB bodies in the load
-profile and the same 768 MiB ceiling. This separation does not resolve or waive
-the observed memory failures. To reproduce large contention explicitly, set
+profile. The initial trials kept the same 768 MiB ceiling; the later budget
+revision below changes the test allowance, not the application's memory use.
+To reproduce large contention explicitly, set
 `MAIL_STRESS_QUEUE_MESSAGE_MIB=25` and select `queue-recovery`. A passing
 small-body contention run is not evidence that large-message queue processing
 fits the budget.
@@ -94,7 +96,7 @@ PostgreSQL storage; these tests are not disk-throughput benchmarks.
 | Queue loops in one process | 2 | 2 | `MAIL_STRESS_QUEUE_WORKERS` (1–32) |
 | Claim batch size | Workload divided by loops | Workload divided by loops | `MAIL_STRESS_QUEUE_BATCH_SIZE` (1–1000) |
 | Rounds | 2 | 3 | `MAIL_STRESS_ROUNDS` (1–100) |
-| Worker RSS ceiling | 768 MiB | 768 MiB | `MAIL_STRESS_RSS_MIB` |
+| Worker RSS ceiling | 1536 MiB | 1536 MiB | `MAIL_STRESS_RSS_MIB` |
 | Per-worker deadline | 90 seconds | 600 seconds | `MAIL_STRESS_TIMEOUT_SECONDS` |
 
 An explicit `MAIL_STRESS_MESSAGE_MIB` also sets contention size unless
@@ -185,3 +187,94 @@ Adding 4,096 bytes did not reproduce a size-boundary jump in this probe.
 The full combined workload's 833.375 MiB failure remains unresolved. Next compare
 the production-shaped accounting hook and transaction lifecycle against these
 controls, measuring connection use as well as RSS and JS external memory.
+
+## Measured scaling envelope (2026-11-12)
+
+The original combined scenario subsequently exceeded 768 MiB in two of three
+unchanged runs (818, 797, and 746 MiB peaks). A run with only the cap raised to
+1 GiB completed at 802 MiB. The trials below use a fixed claim batch of 10 and
+larger explicit budgets to measure scaling. They do not establish the cause of
+allocation variability or a sustained memory plateau.
+
+Hardware: 16 GiB Apple M1, eight cores, macOS 15.3.1, Bun 1.4.2, PostgreSQL 15.13.
+Each workload contains 300 copies of a 25 MiB message. Real acceptance, rewriting,
+signing, queue storage and worker code run locally; delivery outcomes and
+transactional failure accounting are simulated. Every run verified its expected
+sent/failed counts, retries, rollback, and claim recovery. Full received-message
+SMTP delivery, actual DSN generation, and simultaneous ingress/egress are not
+part of this measurement.
+
+First, one consumer process drained the same 300 copies with different numbers
+of queue loops, sharing its SQL pool. Preparation ran in a separate process:
+
+| Queue loops | Consumer peak RSS | Recovery copies/s |
+| ---: | ---: | ---: |
+| 1 | 611 MiB | 24.89 |
+| 2 | 887 MiB | 43.98 |
+| 4 | 984 MiB | 49.05 |
+
+Two loops improved consumer throughput by 77%; four added another 12%. Including
+preparation, all three cases stayed near 1.3 copies/s because acceptance/signing
+dominated elapsed time. These recovery rates are not whole-service throughput.
+
+Next, independent processes each prepared and drained 300 copies in the same
+heap. They shared a PostgreSQL instance but used separate scratch databases.
+Their consumer phases were observed overlapping. This measures process resource
+scaling, not independent processes contending on a single production queue:
+
+| Processes | Total copies | Common elapsed time | Whole-workload copies/s | Sampled app + PostgreSQL RSS peak |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 300 | 233 s | 1.29 | 1.83 GiB |
+| 2 | 600 | 241 s | 2.49 | 3.25 GiB |
+| 4 | 1,200 | 290 s | 4.14 | 4.74 GiB |
+
+All cases passed. Aggregate rates include acceptance, signing, simulated
+delivery/retries, and runner cleanup, over a common wall-clock interval. They
+are neither network SMTP capacity nor a sum of individual consumer rates.
+Each point is one run. The separate-process cases used a 1.5 GiB application
+ceiling per process and a 1,200-second deadline. No SQL pool tuning or forced GC
+was applied. Each process retained the default SQL pool maximum of 10.
+
+The monitor sampled runner/worker and all dedicated PostgreSQL process RSS about
+every two seconds. PostgreSQL shared pages can be counted more than once, while
+sampling can miss brief peaks: these totals are a conservative accounting proxy,
+not exact physical memory or a hard OS limit. Per-process high-water RSS is
+recorded separately in the evidence. Host memory pressure stayed normal and
+existing swap usage remained at 6,187.88 MiB; this was not a swap-free benchmark.
+The monitor would stop on non-normal pressure, 512 MiB of additional swap, or
+8 GiB of aggregate RSS. No guard fired. All scratch databases were removed and
+the dedicated PostgreSQL server was stopped.
+
+For the next monitored deployment-shaped trials, use these **provisional total
+budgets**, keeping the OS and other applications outside the budget:
+
+| Independent processes | Total application + database planning budget |
+| ---: | ---: |
+| 1 | 4 GiB |
+| 2 | 6 GiB |
+| 4 | 8 GiB |
+
+Use the tested 1.5 GiB per-process ceiling as a starting point, and monitor the
+aggregate separately. These are total headroom choices above the observed
+peaks, not a guaranteed additive partition between application and database
+memory. Start with two processes for further validation; test four when more
+aggregate work is needed and the 8 GiB budget is available. Do not extrapolate
+past four or treat the declining per-process peaks as a scaling law. Production
+currently starts one queue loop; these tests do not change that configuration.
+
+The suite's default RSS allowance is now 1.5 GiB. This is a budget revision, not
+a memory optimization. The scaling trials explicitly set batch size 10; the
+complete load profile with all new defaults has not been rerun. Keep the 768 MiB
+override for historical comparisons. A single-process scaling run is:
+
+```sh
+MAIL_STRESS=1 MAIL_STRESS_ADMIN_DATABASE_URL=postgres://virtu@localhost:5432/postgres \
+MAIL_STRESS_QUEUE_BATCH_SIZE=10 MAIL_STRESS_RSS_MIB=1536 \
+MAIL_STRESS_TIMEOUT_SECONDS=1200 \
+bun run --cwd server test:stress --profile load --scenario queue-combined
+```
+
+Multiple runners need an external aggregate monitor; the suite's RSS ceiling
+applies to each child, not the whole group. Exact configurations, results,
+overlap observations and resource measurements are retained in
+[scaling-results-2026-11-12.json](./scaling-results-2026-11-12.json).

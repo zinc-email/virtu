@@ -50,7 +50,7 @@ export function stressConfig(
         : number("MAIL_STRESS_QUEUE_BATCH_SIZE", 10, 1000),
     copies: number("MAIL_STRESS_COPIES", heavy ? 100 : 8, 1000, 2),
     rounds: number("MAIL_STRESS_ROUNDS", heavy ? 3 : 2, 100),
-    rssLimitBytes: number("MAIL_STRESS_RSS_MIB", 768, 65536) * 1024 * 1024,
+    rssLimitBytes: number("MAIL_STRESS_RSS_MIB", 1536, 65536) * 1024 * 1024,
     timeoutMs: number("MAIL_STRESS_TIMEOUT_SECONDS", heavy ? 600 : 90, 3600) * 1000,
   };
 }

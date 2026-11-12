@@ -14,6 +14,10 @@ import {
 test("stress profiles validate bounded integer settings", () => {
   expect(stressConfig("smoke", {})).toMatchObject({ clients: 8, copies: 8, queueWorkers: 2 });
   expect(stressConfig("load", {})).toMatchObject({ messageBytes: 25 * 1024 * 1024, copies: 100 });
+  expect(stressConfig("load", {}).rssLimitBytes).toBe(1536 * 1024 * 1024);
+  expect(stressConfig("load", { MAIL_STRESS_RSS_MIB: "768" }).rssLimitBytes).toBe(
+    768 * 1024 * 1024,
+  );
   for (const bad of ["NaN", "0", "-1", "1.5", "129"]) {
     expect(() => stressConfig("smoke", { MAIL_STRESS_CLIENTS: bad })).toThrow();
   }

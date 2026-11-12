@@ -1,0 +1,638 @@
+{
+  "date": "2026-11-12",
+  "sourceCommit": "7dcb9a1",
+  "sourceNote": "Phase A began before the same unchanged working-tree diff was committed as 7dcb9a1; baseline and diff retained in artifacts. Phase B used committed source.",
+  "runtime": {
+    "bun": "1.4.2",
+    "os": "macOS 15.3.1",
+    "architecture": "arm64",
+    "cpu": "Apple M1",
+    "physicalCores": 8,
+    "logicalCores": 8,
+    "hostMemoryBytes": 17179869184,
+    "postgres": "15.13 Homebrew"
+  },
+  "workload": {
+    "messageBytes": 26214400,
+    "copiesPerRoundPerRunner": 100,
+    "roundsPerRunner": 3,
+    "claimBatchSize": 10,
+    "delivery": "stubbed outcomes through real queue worker; synthetic transactional accounting hooks",
+    "queueTopology": "Phase A: independent queue loops inside one consumer process, with separate producer. Phase B: independent combined producer/consumer processes, each with its own scratch database on one shared PostgreSQL instance."
+  },
+  "guards": {
+    "aggregateRssBytes": 8589934592,
+    "aggregateScope": "Sampled runner and child process RSS plus all dedicated PostgreSQL process RSS; shared PostgreSQL pages may be counted repeatedly. This is a conservative accounting proxy, not physical memory usage or a hard OS limit.",
+    "sampleIntervalTargetSeconds": 2,
+    "hostPressureAbort": "any sampled non-normal level",
+    "swapIncreaseAbortMiB": 512,
+    "perWorkerRssCaps": "A1/A2 2048MiB; A4 3072MiB; B cases 1536MiB",
+    "deadlineSeconds": {
+      "A": 600,
+      "B": 1200
+    }
+  },
+  "measurementNotes": [
+    "Per-worker high-water values come from worker reports; sampled process-tree sums can miss short peaks. Sums of per-worker high-water values are not necessarily simultaneous.",
+    "Common wall time spans all runners from launch through completion and scratch cleanup checks; common-wall throughput includes real acceptance/signing and retry/accounting work.",
+    "Per-process consumer rates are local rates, not measured aggregate concurrent throughput.",
+    "Observed consumer overlap is established only at listed sample times. These short trials do not establish a long-running memory plateau.",
+    "Real SMTP/network throughput, shared-queue contention across independent processes, simultaneous production ingress/egress, and endurance are not measured.",
+    "Every reported point is one run, not a statistical confidence interval."
+  ],
+  "cases": [
+    {
+      "name": "a1",
+      "scenario": "queue-recovery",
+      "independentRunners": 1,
+      "queueLoopsPerProcess": 1,
+      "perWorkerRssCapMiB": 2048,
+      "overrides": {
+        "MAIL_STRESS": "1",
+        "MAIL_STRESS_QUEUE_MESSAGE_MIB": "25",
+        "MAIL_STRESS_QUEUE_WORKERS": "1",
+        "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+        "MAIL_STRESS_RSS_MIB": "2048"
+      },
+      "commandTemplate": [
+        "bun",
+        "stress/run.ts",
+        "--profile",
+        "load",
+        "--scenario",
+        "queue-recovery",
+        "--output",
+        "<runner-report.json>"
+      ],
+      "wholeWorkloadCommonWallSeconds": 235.60240179207176,
+      "wholeWorkloadAcceptedCopies": 300,
+      "wholeWorkloadAcceptedCopiesPerSecond": 1.2733316711463816,
+      "memory": {
+        "workerHighWaterBytes": [640630784],
+        "sumWorkerHighWaterBytes": 640630784,
+        "maxSampledApplicationTreeRssBytes": 665878528,
+        "maxSampledPostgresTreeRssBytes": 953221120,
+        "maxSampledCoincidentApplicationPlusPostgresRssBytes": 1607909376
+      },
+      "consumerOverlap": {
+        "maxObservedProcesses": 1,
+        "allRunnersConsumingSamples": 5,
+        "sampleTimesUtc": [
+          "2026-11-12T01:56:32Z",
+          "2026-11-12T01:56:34Z",
+          "2026-11-12T01:56:37Z",
+          "2026-11-12T01:56:39Z",
+          "2026-11-12T01:56:41Z"
+        ],
+        "maxTargetDbConnectionsAllPhases": 10,
+        "maxTargetDbConnectionsAtFullConsumerOverlap": 10
+      },
+      "host": {
+        "pressureLevels": [1],
+        "swapUsedMiBMin": 6187.88,
+        "swapUsedMiBMax": 6187.88
+      },
+      "guardStop": null,
+      "remainingScratchDatabases": [],
+      "processes": [
+        {
+          "runner": 1,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 640630784,
+          "workerElapsedMs": 12051.313624999999,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 524124160,
+          "seedElapsedMs": 221783.4865,
+          "consumerElapsedMs": 12051.313624999999,
+          "consumerLocalCopiesPerSecond": 24.893567725444836
+        }
+      ]
+    },
+    {
+      "name": "a2",
+      "scenario": "queue-recovery",
+      "independentRunners": 1,
+      "queueLoopsPerProcess": 2,
+      "perWorkerRssCapMiB": 2048,
+      "overrides": {
+        "MAIL_STRESS": "1",
+        "MAIL_STRESS_QUEUE_MESSAGE_MIB": "25",
+        "MAIL_STRESS_QUEUE_WORKERS": "2",
+        "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+        "MAIL_STRESS_RSS_MIB": "2048"
+      },
+      "commandTemplate": [
+        "bun",
+        "stress/run.ts",
+        "--profile",
+        "load",
+        "--scenario",
+        "queue-recovery",
+        "--output",
+        "<runner-report.json>"
+      ],
+      "wholeWorkloadCommonWallSeconds": 227.01950345910154,
+      "wholeWorkloadAcceptedCopies": 300,
+      "wholeWorkloadAcceptedCopiesPerSecond": 1.3214723643955384,
+      "memory": {
+        "workerHighWaterBytes": [929726464],
+        "sumWorkerHighWaterBytes": 929726464,
+        "maxSampledApplicationTreeRssBytes": 903266304,
+        "maxSampledPostgresTreeRssBytes": 941277184,
+        "maxSampledCoincidentApplicationPlusPostgresRssBytes": 1844543488
+      },
+      "consumerOverlap": {
+        "maxObservedProcesses": 1,
+        "allRunnersConsumingSamples": 3,
+        "sampleTimesUtc": ["2026-11-12T02:00:24Z", "2026-11-12T02:00:26Z", "2026-11-12T02:00:28Z"],
+        "maxTargetDbConnectionsAllPhases": 10,
+        "maxTargetDbConnectionsAtFullConsumerOverlap": 10
+      },
+      "host": {
+        "pressureLevels": [1],
+        "swapUsedMiBMin": 6187.88,
+        "swapUsedMiBMax": 6187.88
+      },
+      "guardStop": null,
+      "remainingScratchDatabases": [],
+      "processes": [
+        {
+          "runner": 1,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 2,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 929726464,
+          "workerElapsedMs": 6820.553083,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 2,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 506363904,
+          "seedElapsedMs": 219396.07975,
+          "consumerElapsedMs": 6820.553083,
+          "consumerLocalCopiesPerSecond": 43.98474279234391
+        }
+      ]
+    },
+    {
+      "name": "a4",
+      "scenario": "queue-recovery",
+      "independentRunners": 1,
+      "queueLoopsPerProcess": 4,
+      "perWorkerRssCapMiB": 3072,
+      "overrides": {
+        "MAIL_STRESS": "1",
+        "MAIL_STRESS_QUEUE_MESSAGE_MIB": "25",
+        "MAIL_STRESS_QUEUE_WORKERS": "4",
+        "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+        "MAIL_STRESS_RSS_MIB": "3072"
+      },
+      "commandTemplate": [
+        "bun",
+        "stress/run.ts",
+        "--profile",
+        "load",
+        "--scenario",
+        "queue-recovery",
+        "--output",
+        "<runner-report.json>"
+      ],
+      "wholeWorkloadCommonWallSeconds": 227.25359895802103,
+      "wholeWorkloadAcceptedCopies": 300,
+      "wholeWorkloadAcceptedCopiesPerSecond": 1.3201111066030549,
+      "memory": {
+        "workerHighWaterBytes": [1032011776],
+        "sumWorkerHighWaterBytes": 1032011776,
+        "maxSampledApplicationTreeRssBytes": 1031192576,
+        "maxSampledPostgresTreeRssBytes": 983187456,
+        "maxSampledCoincidentApplicationPlusPostgresRssBytes": 2014380032
+      },
+      "consumerOverlap": {
+        "maxObservedProcesses": 1,
+        "allRunnersConsumingSamples": 3,
+        "sampleTimesUtc": ["2026-11-12T02:04:11Z", "2026-11-12T02:04:13Z", "2026-11-12T02:04:15Z"],
+        "maxTargetDbConnectionsAllPhases": 10,
+        "maxTargetDbConnectionsAtFullConsumerOverlap": 10
+      },
+      "host": {
+        "pressureLevels": [1],
+        "swapUsedMiBMin": 6187.88,
+        "swapUsedMiBMax": 6187.88
+      },
+      "guardStop": null,
+      "remainingScratchDatabases": [],
+      "processes": [
+        {
+          "runner": 1,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 4,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 1032011776,
+          "workerElapsedMs": 6116.098125,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 4,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 778108928,
+          "seedElapsedMs": 219618.516083,
+          "consumerElapsedMs": 6116.098125,
+          "consumerLocalCopiesPerSecond": 49.05093258620234
+        }
+      ]
+    },
+    {
+      "name": "b1",
+      "scenario": "queue-combined",
+      "independentRunners": 1,
+      "queueLoopsPerProcess": 1,
+      "perWorkerRssCapMiB": 1536,
+      "overrides": {
+        "MAIL_STRESS": "1",
+        "MAIL_STRESS_QUEUE_MESSAGE_MIB": "25",
+        "MAIL_STRESS_QUEUE_WORKERS": "1",
+        "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+        "MAIL_STRESS_RSS_MIB": "1536",
+        "MAIL_STRESS_TIMEOUT_SECONDS": "1200"
+      },
+      "commandTemplate": [
+        "bun",
+        "stress/run.ts",
+        "--profile",
+        "load",
+        "--scenario",
+        "queue-combined",
+        "--output",
+        "<runner-report.json>"
+      ],
+      "wholeWorkloadCommonWallSeconds": 233.23185174982063,
+      "wholeWorkloadAcceptedCopies": 300,
+      "wholeWorkloadAcceptedCopiesPerSecond": 1.2862737132567945,
+      "memory": {
+        "workerHighWaterBytes": [888291328],
+        "sumWorkerHighWaterBytes": 888291328,
+        "maxSampledApplicationTreeRssBytes": 914063360,
+        "maxSampledPostgresTreeRssBytes": 1047805952,
+        "maxSampledCoincidentApplicationPlusPostgresRssBytes": 1961869312
+      },
+      "consumerOverlap": {
+        "maxObservedProcesses": 1,
+        "allRunnersConsumingSamples": 5,
+        "sampleTimesUtc": [
+          "2026-11-12T02:09:08Z",
+          "2026-11-12T02:09:10Z",
+          "2026-11-12T02:09:12Z",
+          "2026-11-12T02:09:14Z",
+          "2026-11-12T02:09:17Z"
+        ],
+        "maxTargetDbConnectionsAllPhases": 10,
+        "maxTargetDbConnectionsAtFullConsumerOverlap": 10
+      },
+      "host": {
+        "pressureLevels": [1],
+        "swapUsedMiBMin": 6187.88,
+        "swapUsedMiBMax": 6187.88
+      },
+      "guardStop": null,
+      "remainingScratchDatabases": [],
+      "processes": [
+        {
+          "runner": 1,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 888291328,
+          "workerElapsedMs": 232501.81050000002,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 506101760,
+          "seedElapsedMs": 220471,
+          "consumerElapsedMs": 11891,
+          "consumerLocalCopiesPerSecond": 25.229164914641327
+        }
+      ]
+    },
+    {
+      "name": "b2",
+      "scenario": "queue-combined",
+      "independentRunners": 2,
+      "queueLoopsPerProcess": 1,
+      "perWorkerRssCapMiB": 1536,
+      "overrides": {
+        "MAIL_STRESS": "1",
+        "MAIL_STRESS_QUEUE_MESSAGE_MIB": "25",
+        "MAIL_STRESS_QUEUE_WORKERS": "1",
+        "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+        "MAIL_STRESS_RSS_MIB": "1536",
+        "MAIL_STRESS_TIMEOUT_SECONDS": "1200"
+      },
+      "commandTemplate": [
+        "bun",
+        "stress/run.ts",
+        "--profile",
+        "load",
+        "--scenario",
+        "queue-combined",
+        "--output",
+        "<runner-report.json>"
+      ],
+      "wholeWorkloadCommonWallSeconds": 241.19695425010286,
+      "wholeWorkloadAcceptedCopies": 600,
+      "wholeWorkloadAcceptedCopiesPerSecond": 2.487593601110923,
+      "memory": {
+        "workerHighWaterBytes": [728662016, 766017536],
+        "sumWorkerHighWaterBytes": 1494679552,
+        "maxSampledApplicationTreeRssBytes": 1496530944,
+        "maxSampledPostgresTreeRssBytes": 2110095360,
+        "maxSampledCoincidentApplicationPlusPostgresRssBytes": 3486810112
+      },
+      "consumerOverlap": {
+        "maxObservedProcesses": 2,
+        "allRunnersConsumingSamples": 6,
+        "sampleTimesUtc": [
+          "2026-11-12T02:13:06Z",
+          "2026-11-12T02:13:09Z",
+          "2026-11-12T02:13:11Z",
+          "2026-11-12T02:13:13Z",
+          "2026-11-12T02:13:16Z",
+          "2026-11-12T02:13:18Z"
+        ],
+        "maxTargetDbConnectionsAllPhases": 20,
+        "maxTargetDbConnectionsAtFullConsumerOverlap": 20
+      },
+      "host": {
+        "pressureLevels": [1],
+        "swapUsedMiBMin": 6187.88,
+        "swapUsedMiBMax": 6187.88
+      },
+      "guardStop": null,
+      "remainingScratchDatabases": [],
+      "processes": [
+        {
+          "runner": 1,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 728662016,
+          "workerElapsedMs": 239549.204375,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 481869824,
+          "seedElapsedMs": 225246,
+          "consumerElapsedMs": 14123,
+          "consumerLocalCopiesPerSecond": 21.241945762231822
+        },
+        {
+          "runner": 2,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 766017536,
+          "workerElapsedMs": 239573.888084,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 567066624,
+          "seedElapsedMs": 225285,
+          "consumerElapsedMs": 14110,
+          "consumerLocalCopiesPerSecond": 21.261516654854713
+        }
+      ]
+    },
+    {
+      "name": "b4",
+      "scenario": "queue-combined",
+      "independentRunners": 4,
+      "queueLoopsPerProcess": 1,
+      "perWorkerRssCapMiB": 1536,
+      "overrides": {
+        "MAIL_STRESS": "1",
+        "MAIL_STRESS_QUEUE_MESSAGE_MIB": "25",
+        "MAIL_STRESS_QUEUE_WORKERS": "1",
+        "MAIL_STRESS_QUEUE_BATCH_SIZE": "10",
+        "MAIL_STRESS_RSS_MIB": "1536",
+        "MAIL_STRESS_TIMEOUT_SECONDS": "1200"
+      },
+      "commandTemplate": [
+        "bun",
+        "stress/run.ts",
+        "--profile",
+        "load",
+        "--scenario",
+        "queue-combined",
+        "--output",
+        "<runner-report.json>"
+      ],
+      "wholeWorkloadCommonWallSeconds": 289.6600747909397,
+      "wholeWorkloadAcceptedCopies": 1200,
+      "wholeWorkloadAcceptedCopiesPerSecond": 4.1427870267108515,
+      "memory": {
+        "workerHighWaterBytes": [626065408, 600506368, 647708672, 637288448],
+        "sumWorkerHighWaterBytes": 2511568896,
+        "maxSampledApplicationTreeRssBytes": 2379415552,
+        "maxSampledPostgresTreeRssBytes": 2735341568,
+        "maxSampledCoincidentApplicationPlusPostgresRssBytes": 5089574912
+      },
+      "consumerOverlap": {
+        "maxObservedProcesses": 4,
+        "allRunnersConsumingSamples": 9,
+        "sampleTimesUtc": [
+          "2026-11-12T02:18:37Z",
+          "2026-11-12T02:18:40Z",
+          "2026-11-12T02:18:42Z",
+          "2026-11-12T02:18:45Z",
+          "2026-11-12T02:18:47Z",
+          "2026-11-12T02:18:50Z",
+          "2026-11-12T02:18:52Z",
+          "2026-11-12T02:18:55Z",
+          "2026-11-12T02:18:57Z"
+        ],
+        "maxTargetDbConnectionsAllPhases": 41,
+        "maxTargetDbConnectionsAtFullConsumerOverlap": 41
+      },
+      "host": {
+        "pressureLevels": [1],
+        "swapUsedMiBMin": 6187.88,
+        "swapUsedMiBMax": 6187.88
+      },
+      "guardStop": null,
+      "remainingScratchDatabases": [],
+      "processes": [
+        {
+          "runner": 1,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 626065408,
+          "workerElapsedMs": 286841.001042,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 567640064,
+          "seedElapsedMs": 261919,
+          "consumerElapsedMs": 24718,
+          "consumerLocalCopiesPerSecond": 12.136904280281577
+        },
+        {
+          "runner": 2,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 600506368,
+          "workerElapsedMs": 286841.53125,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 443154432,
+          "seedElapsedMs": 261860,
+          "consumerElapsedMs": 24774,
+          "consumerLocalCopiesPerSecond": 12.109469605231292
+        },
+        {
+          "runner": 3,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 647708672,
+          "workerElapsedMs": 286159.298833,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 559005696,
+          "seedElapsedMs": 261433,
+          "consumerElapsedMs": 24521,
+          "consumerLocalCopiesPerSecond": 12.23441132090861
+        },
+        {
+          "runner": 4,
+          "ok": true,
+          "effectiveWorkload": {
+            "messageBytes": 26214400,
+            "clients": 16,
+            "copies": 100,
+            "rounds": 3,
+            "queueWorkers": 1,
+            "queueBatchSize": 10
+          },
+          "workerPeakRssBytes": 637288448,
+          "workerElapsedMs": 287077.53741700004,
+          "acceptedCopies": 300,
+          "sentCopies": 200,
+          "failedCopies": 100,
+          "hookRetries": 100,
+          "reapedClaims": 1,
+          "peakDeliveryConcurrency": 1,
+          "claimBatchSize": 10,
+          "scratchRemoved": true,
+          "seedPeakRssBytes": 465928192,
+          "seedElapsedMs": 262351,
+          "consumerElapsedMs": 24522,
+          "consumerLocalCopiesPerSecond": 12.233912405187178
+        }
+      ]
+    }
+  ],
+  "artifactDirectory": "/tmp/virtu-queue-scaling.UJRvMa"
+}

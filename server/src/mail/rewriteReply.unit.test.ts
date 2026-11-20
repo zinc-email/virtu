@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseAddressList, parseMessage } from "./headers.ts";
+import { MAX_TRANSLATED_REFERENCES } from "./rewriteForward.ts";
 import { REPLY_HEADER_WHITELIST, type ReplyContext, rewriteReply } from "./rewriteReply.ts";
 
 const enc = new TextEncoder();
@@ -188,6 +189,52 @@ describe("rewriteReply", () => {
     expect(new TextDecoder().decode(result.headers.serialize()).toLowerCase()).not.toContain(
       "wes@qmail.com",
     );
+  });
+
+  test("screens encoded inbox names while preserving ordinary encoded names", async () => {
+    const { headers } = parseMessage(enc.encode(BASIC));
+    const encodedInbox = "=?UTF-8?B?" + Buffer.from("Wes@qmail.com").toString("base64") + "?=";
+    const colleague = "=?UTF-8?Q?Andr=C3=A9?=";
+    headers.append("Cc", "colleague@example.com");
+    const result = await rewriteReply(
+      { headers },
+      baseCtx({
+        alias: { email: "alias@example.com", name: encodedInbox },
+        resolveReverseAlias: async (addr) => ({
+          websiteEmail: addr,
+          name: addr === "colleague@example.com" ? colleague : encodedInbox,
+        }),
+      }),
+    );
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.headers.get("From")).toBe("alias@example.com");
+    expect(result.headers.get("To")).not.toContain(encodedInbox);
+    expect(result.headers.get("Cc")).toContain(colleague);
+  });
+
+  test("limits database translations to the newest IDs in each threading header", async () => {
+    const { headers } = parseMessage(enc.encode(BASIC));
+    headers.remove("Message-ID");
+    const ids = Array.from(
+      { length: MAX_TRANSLATED_REFERENCES + 8 },
+      (_, i) => `<${i}@example.com>`,
+    );
+    for (const name of ["References", "In-Reply-To"]) headers.replace(name, ids.join(" "));
+    const lookups: string[] = [];
+    const result = await rewriteReply(
+      { headers },
+      baseCtx({
+        resolveOurMessageId: async (id) => {
+          lookups.push(id);
+          return null;
+        },
+      }),
+    );
+    if (!result.ok) throw new Error("expected ok");
+    const recent = ids.slice(-MAX_TRANSLATED_REFERENCES);
+    expect(lookups).toEqual([...recent, ...recent]);
+    expect(result.headers.get("References")).toBe(recent.join(" "));
+    expect(result.headers.get("In-Reply-To")).toBe(recent.join(" "));
   });
 
   test("alias display name used in From when set", async () => {

@@ -314,11 +314,18 @@ export async function verifyInbound(
   opts: VerifyOptions = {},
 ): Promise<VerifyResult> {
   const policy: VerifyPolicy = { ...DEFAULT_VERIFY_POLICY, ...opts.policy };
-  const bytes = typeof rawMessage === "string" ? Buffer.from(rawMessage) : rawMessage;
-  const input = Buffer.from(bytes);
-
   const bulkhead = opts.bulkhead ?? defaultBulkhead;
   if (!bulkhead.tryAcquire()) return unavailable("bulkhead");
+  // Refused callers must not allocate any whole-message buffers.
+  let bytes: Uint8Array;
+  let input: Buffer;
+  try {
+    bytes = typeof rawMessage === "string" ? Buffer.from(rawMessage) : rawMessage;
+    input = Buffer.from(bytes);
+  } catch (error) {
+    bulkhead.release();
+    throw error;
+  }
   // The budget cannot cancel mailauth; when it wins, the work runs on to
   // completion. The bulkhead slot is therefore held until the work truly
   // settles, so leaked verifications count against concurrency instead of

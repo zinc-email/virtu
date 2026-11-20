@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { dkimSign } from "mailauth";
 import {
   dkimTxtRecord,
@@ -370,4 +370,20 @@ describe("verifyInbound enforces what mailauth leaves to policy (review round 3)
     expect(bulkhead.tryAcquire()).toBe(false); // the one slot is ours now
     bulkhead.release();
   });
+});
+
+test("buffer allocation failure releases the authentication slot", async () => {
+  const bulkhead = createBulkhead(1);
+  const raw = Buffer.from(MESSAGE);
+  const allocation = spyOn(Buffer, "from").mockImplementationOnce(() => {
+    throw new Error("injected allocation failure");
+  });
+  try {
+    await expect(verifyInbound(SESSION, raw, { bulkhead })).rejects.toThrow(
+      "injected allocation failure",
+    );
+    expect(bulkhead.saturated()).toBe(false);
+  } finally {
+    allocation.mockRestore();
+  }
 });

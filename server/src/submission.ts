@@ -283,23 +283,6 @@ async function refusesLocalAddress(db: Db, mailDomain: string, address: string):
   return aliasRows[0] === undefined;
 }
 
-/**
- * True when `address` resolves to one of the user's own mailboxes under
- * provider-aware normalization ({@link mailboxMatchKey}: plus-tags everywhere,
- * plus Gmail dot/googlemail folding). The refuse-to-leak invariant (PLAN #9):
- * an outbound recipient (envelope OR To/Cc) that lands back in the user's own
- * inbox must never go out — so `wes@gmail.com` matches a `w.es@googlemail.com`
- * mailbox, not just plus-tag variants.
- */
-async function isOwnMailboxAddress(db: Db, userId: number, address: string): Promise<boolean> {
-  const target = mailboxMatchKey(address);
-  const rows = await db
-    .select({ email: mailboxes.email })
-    .from(mailboxes)
-    .where(eq(mailboxes.userId, userId));
-  return rows.some((r) => mailboxMatchKey(r.email) === target);
-}
-
 /** One classified envelope recipient (no rows created yet). */
 type PlanEntry =
   /** rcpt was a reverse alias: the existing contact carries the metadata. */
@@ -397,14 +380,6 @@ async function resolveOutbound(
       plan.push({ kind: "reply", contact: reverse });
       continue;
     }
-    // Refuse-to-leak also on the envelope side: an RCPT TO naming the user's
-    // own mailbox (e.g. a Bcc-self MUA) would otherwise be minted as a cold
-    // contact and relayed back out — the same leak the To/Cc screen blocks.
-    if (await isOwnMailboxAddress(opts.db, user.id, rcpt)) {
-      submissionRcptRefusedTotal.inc({ reason: "own_mailbox" });
-      log.info("rcpt_refused", { rcpt, from: alias.email, reason: "own_mailbox" });
-      return { reject: MAILBOX_LEAK };
-    }
     if (await refusesLocalAddress(opts.db, opts.mailDomain, rcpt)) {
       submissionRcptRefusedTotal.inc({ reason: "unknown_local" });
       log.info("rcpt_refused", { rcpt, from: alias.email, reason: "unknown_local" });
@@ -492,6 +467,23 @@ async function completeSubmission(
   const { envelope } = event;
   const { alias, plan, mode, sendingMailboxId } = resolved;
 
+  // Compare final destinations, including existing reverse-alias contacts.
+  const mailboxRows = await opts.db
+    .select({ email: mailboxes.email })
+    .from(mailboxes)
+    .where(eq(mailboxes.userId, user.id));
+  const privateAddresses = mailboxRows.map((row) => row.email.toLowerCase());
+  const mailboxKeys = new Set(privateAddresses.map(mailboxMatchKey));
+  const isOwnMailbox = (addr: string) => mailboxKeys.has(mailboxMatchKey(addr));
+  if (
+    plan.some((entry) =>
+      isOwnMailbox(entry.kind === "reply" ? entry.contact.websiteEmail : entry.address),
+    )
+  ) {
+    submissionRcptRefusedTotal.inc({ reason: "own_mailbox" });
+    return MAILBOX_LEAK;
+  }
+
   // Daily send quota (PLAN Lane K P2), pre-enqueue and pre-write: the cap on
   // what a leaked device credential can blast through our IP. Counted per
   // recipient over a rolling 24h; a multi-recipient message is refused whole
@@ -560,6 +552,8 @@ async function completeSubmission(
     { headers: parsed.headers },
     {
       alias: { email: alias.email, name: alias.name },
+      isOwnMailbox,
+      privateAddresses,
       emailLogId: 0, // unused: generateMessageId below never embeds it
       generateMessageId: () => `<${randomUUID()}@${aliasDomain}>`,
       resolveReverseAlias: async (addr) => {
@@ -583,9 +577,6 @@ async function completeSubmission(
           : {
               screen: async (addr) => {
                 const normalized = addr.trim().toLowerCase();
-                if (await isOwnMailboxAddress(opts.db, user.id, normalized)) {
-                  return "mailbox_address";
-                }
                 // Non-null here means SOME reverse alias — this alias's own
                 // were already translated by resolveReverseAlias above.
                 if ((await resolveReverseAlias(opts.db, normalized)) !== null) {

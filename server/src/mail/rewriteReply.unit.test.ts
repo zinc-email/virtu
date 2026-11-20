@@ -17,6 +17,8 @@ function baseCtx(overrides: Partial<ReplyContext> = {}): ReplyContext {
   return {
     alias: { email: "asdf@user.com" },
     emailLogId: 77,
+    privateAddresses: ["wes@qmail.com"],
+    isOwnMailbox: (addr) => addr.toLowerCase() === "wes@qmail.com",
     resolveReverseAlias: async (addr) => REVERSE.get(addr.toLowerCase()) ?? null,
     generateMessageId: () => "<77.fixed@user.com>",
     now: new Date("2026-08-08T12:00:00Z"),
@@ -137,6 +139,55 @@ describe("rewriteReply", () => {
 
     // input untouched (pure)
     expect(headers.get("From")).toBe("Wes Smith <wes@qmail.com>");
+  });
+
+  test("reply-all refuses a Cc reverse alias resolving to the backing inbox", async () => {
+    const { headers } = parseMessage(enc.encode(BASIC));
+    headers.append("Cc", "self@proxy.virtu.test");
+    const result = await rewriteReply(
+      { headers },
+      baseCtx({
+        resolveReverseAlias: async (addr) =>
+          addr === "self@proxy.virtu.test"
+            ? { websiteEmail: "wes@qmail.com" }
+            : (REVERSE.get(addr) ?? null),
+      }),
+    );
+    expect(result).toEqual({
+      ok: false,
+      refusal: {
+        reason: "mailbox_address",
+        header: "cc",
+        address: "self@proxy.virtu.test",
+      },
+    });
+  });
+
+  test("private names, duplicate Bcc-mode To, and private thread IDs stay out of replies", async () => {
+    const { headers } = parseMessage(enc.encode(BASIC));
+    headers.replace("To", "undisclosed-recipients:;");
+    headers.append("To", "wes@qmail.com");
+    headers.append("Cc", "contact@proxy.virtu.test");
+    for (const field of ["References", "In-Reply-To"]) {
+      headers.append(field, "<public@initech.com> <thread.Wes@qmail.com>");
+    }
+    const result = await rewriteReply(
+      { headers },
+      baseCtx({
+        resolveReverseAlias: async () => ({
+          name: "wes@qmail.com",
+          websiteEmail: "peter@initech.com",
+        }),
+      }),
+    );
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.headers.getAll("To")).toEqual(["undisclosed-recipients:;"]);
+    expect(result.headers.get("Cc")).toBe("peter@initech.com");
+    expect(result.headers.get("References")).toBe("<public@initech.com>");
+    expect(result.headers.get("In-Reply-To")).toBe("<public@initech.com>");
+    expect(new TextDecoder().decode(result.headers.serialize()).toLowerCase()).not.toContain(
+      "wes@qmail.com",
+    );
   });
 
   test("alias display name used in From when set", async () => {

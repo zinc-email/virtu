@@ -562,11 +562,12 @@ virtu/mailauth parser differential all held up under direct attack.
 
 ## Not started
 
-- **Backups** — planned 2026-09-02 in **`plans/backups.md`**: nightly
-  `pg_dump` → `age` (pubkey on the box, private key on the workstation) →
-  Backblaze B2 via rclone with a write-only key, gated on
-  `BACKUP_AGE_PUBKEY`; retention by B2 lifecycle rules; `bin/db-restore`
-  drill into a scratch container; `bin/backup-provision` for the bucket.
+- **Backup deployment and recovery target** — `bin/db-backup`, `bin/db-restore`
+  and systemd timer/service templates are implemented and locally exercised.
+  Off-host production credentials, retention, scheduling, alert routing and a
+  production restore drill remain open. Accepted-mail RPO is undecided; daily
+  logical dumps do not provide a minutes-level or zero-loss guarantee.
+  See `plans/backups.md`.
 - **Production/deploy story** — _mostly built (2026-08-10), first target
   each.email:_ the serve stack (`docker-compose.serve.yml`) now runs the whole
   app — db, api, built frontends behind the **universal `Caddyfile`**, and

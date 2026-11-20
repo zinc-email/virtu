@@ -7,7 +7,8 @@
     "start": "bun src/api.ts",
     "typecheck": "tsc --noEmit",
     "openapi": "bun run src/scripts/openapiEmit.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "test:stress": "bun stress/run.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -21,7 +22,7 @@
     "@fastify/cookie": "^11.1.2",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/swagger": "^9.8.1",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "0.45.2",
     "drizzle-zod": "^0.8.3",
     "fastify": "^5.11.3",
     "fastify-zod-openapi": "^5.7.0",
@@ -30,6 +31,7 @@
     "zod-openapi": "^6.0.0"
   },
   "patchedDependencies": {
-    "mailauth@5.0.0": "patches/mailauth@5.0.0.patch"
+    "mailauth@5.0.0": "patches/mailauth@5.0.0.patch",
+    "drizzle-orm@0.45.2": "patches/drizzle-orm@0.45.2.patch"
   }
 }

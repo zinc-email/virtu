@@ -1,87 +1,91 @@
-# Backups — plan (not started)
+# Database backup and recovery
 
-Nightly encrypted logical dumps of Postgres pushed off-box to Backblaze
-B2, on the five-dollar box, with retention and a restore drill. Decided
-2026-09-02; nothing below is built yet. Companion to README "Deploy" and
-STATE.md "Not started".
+Local tooling is implemented. Production off-host storage, scheduling, alert routing,
+and a restore from that storage still need deployment. The maximum acceptable loss
+of SMTP-accepted mail has not been agreed. Do not use a daily dump as evidence that
+accepted mail can be recovered within minutes.
 
-## Why this shape
+## Run a backup
 
-The database is ~11 MB and lives in one docker volume on one Linode
-nanode. Today's backup is a manual download to a workstation. The Linode
-Backups add-on (already on) is a daily whole-disk snapshot: same provider,
-whole-box restore, keep it but don't rely on it alone. At this volume a
-logical dump is the right primitive: `pg_dump` is exact, portable across
-Postgres versions, and small enough that a year of dailies fits inside
-B2's free ten gigabytes. WAL archiving / point-in-time recovery
-(pgBackRest, WAL-G) is deliberately deferred: another daemon and mental
-model for an up-to-one-day loss window that is acceptable here.
+Install a PostgreSQL client matching the server major version, `age`, `rclone`, and
+`shasum`. Generate the age identity on the recovery workstation. Keep its private
+key off the database host and store a second recovery copy separately.
 
-## Design
+Set these environment variables for `bin/db-backup`:
 
-**Gate:** the whole lane is off unless `BACKUP_AGE_PUBKEY` is set in the
-box's `/opt/virtu/.env`. No pubkey → `bin/db-backup` exits 0 with "backups
-disabled" and the cron line is a no-op. Dumps are encrypted to that public
-key with `age`; the matching private key lives ONLY on the operator's
-workstation (never on the box), so a compromised box leaks ciphertext.
+- `DATABASE_URL`: host-reachable PostgreSQL connection string.
+- `BACKUP_AGE_PUBKEY`: public age recipient.
+- `BACKUP_DESTINATION`: off-host rclone directory, such as `b2:bucket/each.email`.
+- `BACKUP_PING_URL`: optional success URL for an external missed-backup monitor.
 
-**Env (box `/opt/virtu/.env`):**
+Configure the rclone remote with a bucket-scoped application key. Upload/read-back
+verification needs write, list and read access; omit delete access. Set bucket
+retention independently of the host: 35 days for daily dumps, 400 days under
+`monthly/`. Test those policies in the storage console. The script also uploads a
+monthly copy on the first UTC day of the month.
 
-- `BACKUP_AGE_PUBKEY` — `age1…` recipient; the gate.
-- `BACKUP_B2_BUCKET` — bucket name (private).
-- `BACKUP_B2_KEY_ID` / `BACKUP_B2_KEY` — an application key scoped to that
-  one bucket with `writeFiles` + `listFiles` only (no `deleteFiles`: a
-  compromised box cannot destroy history; retention is the bucket's job).
-- `BACKUP_PREFIX` — defaults to `VIRTU_HOST` (each / lmnop / zinc share one
-  bucket, separate prefixes).
+The script streams `pg_dump -Fc` through age, stages ciphertext with mode 0600,
+uploads it, then downloads it to compare SHA-256. It exits nonzero if configuration
+is missing or any stage fails. It does not write a plaintext dump on the source host.
 
-**Scripts (`bin/`, concern-first naming):**
+For a systemd host, copy `deploy/virtu-backup.service` and `.timer` to
+`/etc/systemd/system/`. Put the environment values in `/opt/virtu/backup.env`, readable
+only by root and the `virtu` user; configure rclone for that user. Run the service
+once and check its journal before enabling the timer with
+`systemctl enable --now virtu-backup.timer`. Configure the external monitor to alert
+on a missed run. The supplied timer is daily.
 
-- `bin/db-backup` — `docker compose exec -T db pg_dump -U virtu -Fc virtu |
-  age -r "$BACKUP_AGE_PUBKEY" | rclone rcat b2:$BUCKET/$PREFIX/virtu-$(date
-  -u +%Y%m%dT%H%M%SZ).dump.age`. Custom format (`-Fc`) restores selectively
-  and compresses itself. Logs one line to the journal; non-zero exit on any
-  stage failure (pipefail). Runs from cron as the `virtu` user.
-- `bin/db-restore <file.dump.age>` — decrypts with the workstation key and
-  `pg_restore`s into a SCRATCH postgres container (`virtu-restore`) by
-  default; `--into <DATABASE_URL>` to restore for real. The restore drill is
-  `just db-restore` against the newest dump, monthly.
-- `bin/backup-provision` — one-shot from the workstation with the B2
-  master key in env: creates the private bucket, sets lifecycle rules
-  (below), creates the scoped application key, prints the three env lines
-  to paste into the box's `.env`. Uses the `b2` CLI (pipx); documents the
-  manual console equivalent for anyone without it.
-- `bin/host-provision` gains: install `age` + `rclone` (apt), write the
-  rclone remote from the env vars, and the cron line
-  `17 3 * * * virtu /opt/virtu/bin/db-backup` — all skipped when the pubkey
-  is unset.
+## Restore drill
 
-**Retention:** B2 lifecycle rules on the bucket, not script logic:
-keep every file 35 days (covers "which day did it break"), plus a second
-prefix `monthly/` that `bin/db-backup` writes to on the 1st with a 400-day
-rule. Weekly granularity beyond a month is not worth the extra rule.
-Because the box key cannot delete, retention is enforceable only by B2.
+Download a snapshot with rclone to the recovery workstation. Set
+`BACKUP_AGE_IDENTITY` to the local private-key file and run:
 
-**Second copy:** the workstation keeps pulling one dump a month by hand
-(`rclone copy` of the newest file) — off-B2, off-Linode.
+```sh
+bin/db-restore downloaded.dump.age
+```
 
-**Alerting:** a `virtu_backup_last_success_timestamp` gauge would be ideal
-but the backup runs outside maild; simplest honest option is a
-healthchecks.io-style ping URL (`BACKUP_PING_URL`, optional) hit on
-success, which alerts when a day is missed. Grafana can alert on the ping
-service's own metric later.
+The default starts an isolated PostgreSQL 17 container with no network, restores in
+one transaction, prints queue/account/routing counts, and removes the container.
+Set `BACKUP_POSTGRES_IMAGE` if the source uses a different major version.
 
-## Order of work
+For an existing **empty scratch database**, use:
 
-1. `bin/db-backup` + `bin/db-restore` with the env gate; test locally
-   against the dev stack with a throwaway age key and a local rclone
-   remote (`local:` backend) — no B2 needed to prove the pipeline.
-2. `bin/backup-provision` (B2 CLI) + the manual-console instructions.
-3. `bin/host-provision` additions (packages, rclone config, cron).
-4. Run on each.email; do the first restore drill into a scratch container;
-   record the result in STATE.md.
+```sh
+bin/db-restore downloaded.dump.age --into "$SCRATCH_DATABASE_URL"
+```
 
-## Cost
+This refuses a nonempty destination. It never starts mail workers. Compare account,
+routing and queue counts against the snapshot, and compare queued raw-message bytes.
+Record the source snapshot time, upload completion, restore duration and checksums.
+A restore into scratch proves readability; a recovery exercise must also demonstrate
+that routing, keys and accepted queue rows can resume on replacement infrastructure.
 
-B2: first 10 GB free; a year of daily 11 MB custom-format dumps is under
-3 GB. `age`, `rclone`: free. Nothing else.
+For real recovery, stop acceptance and workers, preserve the failed installation,
+restore into a new empty database, and inspect its queue before pointing services at
+it. Previously delivered messages may still be pending in an older snapshot. Resolve
+that ambiguity against delivery logs before resuming, or document the duplicate risk.
+Never run the old and restored workers together.
+
+## Accepted-mail recovery gate
+
+A daily snapshot can lose changes since its snapshot began, including mail already
+acknowledged with SMTP 250. The interval plus upload time and failed runs determines
+the actual exposure. Record the agreed RPO (maximum lost accepted-mail interval) and
+RTO (maximum recovery time) before cutover.
+
+If the RPO is minutes, provision continuous off-host WAL archiving/PITR and monitor
+archive lag; verify recovery to a chosen timestamp. If the requirement is zero loss
+after a host failure, acceptance needs synchronous durability on another failure
+domain. Neither guarantee is supplied by these logical-dump scripts. Retaining the
+existing MTA with a durable spool remains an option while that work is completed.
+
+## Local validation
+
+The encrypted dump, rclone upload/read-back and restore into an empty PostgreSQL
+scratch database were exercised locally with a throwaway key and the rclone local
+backend on 2026-10-31. The populated restore matched complete-row checksums for
+606 accounts, 237 aliases and 741 queue rows, including their raw-message bytes.
+The nonempty-destination guard also refused an overwrite. This is not a test of
+production B2 credentials, retention, alert delivery,
+or host replacement. Repeat the drill from the deployed off-host destination before
+cutover and monthly thereafter.

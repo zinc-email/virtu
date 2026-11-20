@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Encrypted logical snapshot to a configured off-host rclone destination.
+# Supply secrets through the environment; never print credentials.
+set -euo pipefail
+umask 077
+: "${DATABASE_URL:?Set the host-reachable database URL}"
+: "${BACKUP_AGE_PUBKEY:?Set the off-host recovery key age recipient}"
+: "${BACKUP_DESTINATION:?Set an off-host rclone directory (for example b2:bucket/host)}"
+for tool in pg_dump age rclone shasum; do command -v "$tool" >/dev/null; done
+backup_tmp=$(mktemp -d)
+trap 'rm -rf "$backup_tmp"' EXIT
+backup_name="virtu-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}.dump.age"
+backup_remote="${BACKUP_DESTINATION%/}/$backup_name"
+pg_dump --dbname="$DATABASE_URL" --format=custom --no-owner --no-acl |
+  age -r "$BACKUP_AGE_PUBKEY" >"$backup_tmp/$backup_name"
+rclone copyto "$backup_tmp/$backup_name" "$backup_remote"
+# Read back ciphertext: an upload exit code alone is not a recovery check.
+backup_expected=$(shasum -a 256 "$backup_tmp/$backup_name" | cut -d ' ' -f 1)
+backup_actual=$(rclone cat "$backup_remote" | shasum -a 256 | cut -d ' ' -f 1)
+[[ "$backup_expected" == "$backup_actual" ]] || { echo 'backup read-back checksum mismatch' >&2; exit 1; }
+if [[ $(date -u +%d) == 01 ]]; then
+  rclone copyto "$backup_tmp/$backup_name" "${BACKUP_DESTINATION%/}/monthly/$backup_name"
+fi
+if [[ -n ${BACKUP_PING_URL:-} ]]; then curl --fail --silent --show-error --max-time 30 "$BACKUP_PING_URL" >/dev/null; fi
+printf 'backup verified: %s sha256=%s\n' "$backup_name" "$backup_expected"

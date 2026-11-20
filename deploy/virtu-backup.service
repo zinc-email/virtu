@@ -1,0 +1,14 @@
+[Unit]
+Description=Encrypted off-host Virtu database backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=virtu
+WorkingDirectory=/opt/virtu
+EnvironmentFile=/opt/virtu/backup.env
+ExecStart=/opt/virtu/bin/db-backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

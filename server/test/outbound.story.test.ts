@@ -65,7 +65,7 @@ async function submissionClient(password: string = WES_PASSWORD) {
 }
 
 /** Milton → alias forward; returns the minted reverse alias. */
-async function mintReverseAlias(aliasEmail: string): Promise<string> {
+async function mintReverseAlias(aliasEmail: string, extraHeaders?: string[]): Promise<string> {
   const forwardId = newTestId();
   await smtpSend({
     host: milton.submission.host,
@@ -77,6 +77,7 @@ async function mintReverseAlias(aliasEmail: string): Promise<string> {
       to: aliasEmail,
       subject: "Original",
       testId: forwardId,
+      extraHeaders,
     }),
   });
   const forwarded = await waitForMail(wes, forwardId, { timeoutMs: 60_000 });
@@ -104,6 +105,7 @@ describe("outbound: reply with MAIL FROM = mailbox", () => {
           subject: "Re: Original",
           testId: replyId,
           messageId: `<${replyId}@qmail.com>`,
+          extraHeaders: [`Reply-To: ${wes.email}`, `Sender: ${wes.email}`],
         }),
       });
       expect(result.accepted).toBe(true);
@@ -117,6 +119,36 @@ describe("outbound: reply with MAIL FROM = mailbox", () => {
     // …the real recipient is restored, and the mailbox leaks nowhere.
     expect(getHeader(raw, "To")).toContain(milton.email);
     expect(raw.toString("latin1")).not.toContain(wes.email);
+  }, 180_000);
+
+  test("reply-all refuses a contact for the user's own inbox in the envelope or Cc", async () => {
+    const alias = await createAlias(fixture);
+    const reverse = await mintReverseAlias(alias.email, [`Cc: ${wes.email}`]);
+    const [self] = await db
+      .select()
+      .from(contacts)
+      .where(and(eq(contacts.aliasId, alias.id), eq(contacts.websiteEmail, wes.email)));
+    if (!self) throw new Error("expected Cc to create a reverse alias for the mailbox");
+    const client = await submissionClient();
+    try {
+      for (const headerOnly of [false, true]) {
+        const result = await client.send({
+          mailFrom: wes.email,
+          rcptTo: headerOnly ? [reverse] : [reverse, self.replyEmail],
+          data: buildMessage({
+            from: wes.email,
+            to: reverse,
+            subject: "Re: Original",
+            testId: newTestId(),
+            extraHeaders: headerOnly ? [`Cc: ${self.replyEmail}`] : [],
+          }),
+        });
+        expect(result.accepted).toBe(false);
+        expect(result.data?.code).toBe(550);
+      }
+    } finally {
+      await client.quit();
+    }
   }, 180_000);
 
   test("recipients spanning two aliases refuse (ambiguous identity)", async () => {

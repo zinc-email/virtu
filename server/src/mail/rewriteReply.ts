@@ -86,15 +86,15 @@ export interface ReplyContext {
    * not one of this alias's reverse aliases is screened instead of refused
    * outright. `screen` returns a refusal reason to refuse the WHOLE message
    * (all-or-nothing, never a partial rewrite), or null to keep the entry
-   * verbatim — it's a real outside address the user typed. The refuse-to-leak
-   * invariant lives in the implementation: it must return "mailbox_address"
-   * for the sending user's own mailbox addresses (outside recipients must
-   * never see them). Bundling the guard with the mode makes enabling
-   * cold-send without a leak guard a compile error.
+   * as a real outside address. The own-mailbox check applies in both modes.
    */
   externalRecipients?: {
     screen(addr: string): Promise<"mailbox_address" | "non_reverse_alias" | null>;
   };
+  /** Registered inboxes used to redact literal addresses in reply metadata. */
+  privateAddresses: readonly string[];
+  /** Provider-aware check on the final recipient after reverse-alias resolution. */
+  isOwnMailbox(addr: string): boolean;
   /** Clock override for tests (synthesized Date header). */
   now?: Date;
 }
@@ -154,6 +154,9 @@ export async function rewriteReply(
   const aliasEmail = ctx.alias.email.toLowerCase();
   const now = ctx.now ?? new Date();
 
+  const containsInbox = (text: string) =>
+    ctx.privateAddresses.some((address) => text.toLowerCase().includes(address.toLowerCase()));
+
   // 1. Whitelist.
   const droppedHeaders = applyHeaderWhitelist(headers, REPLY_HEADER_WHITELIST);
 
@@ -174,8 +177,14 @@ export async function rewriteReply(
         continue;
       }
       const contact = await ctx.resolveReverseAlias(entry.address);
+      const header = headerName === "To" ? ("to" as const) : ("cc" as const);
+      if (ctx.isOwnMailbox(contact?.websiteEmail ?? entry.address)) {
+        return {
+          ok: false,
+          refusal: { reason: "mailbox_address", header, address: entry.address },
+        };
+      }
       if (contact === null) {
-        const header = headerName === "To" ? ("to" as const) : ("cc" as const);
         if (ctx.externalRecipients !== undefined) {
           const refuse = await ctx.externalRecipients.screen(entry.address);
           if (refuse !== null) {
@@ -184,7 +193,7 @@ export async function rewriteReply(
               refusal: { reason: refuse, header, address: entry.address },
             };
           }
-          mapped.push(entry); // real outside address, kept verbatim (cold send)
+          mapped.push(entry.name && containsInbox(entry.name) ? { address: entry.address } : entry);
           continue;
         }
         return {
@@ -194,7 +203,7 @@ export async function rewriteReply(
       }
       const name = contact.name ?? undefined;
       mapped.push(
-        name !== undefined && name !== ""
+        name !== undefined && name !== "" && !containsInbox(name)
           ? { name, address: contact.websiteEmail }
           : { address: contact.websiteEmail },
       );
@@ -203,8 +212,8 @@ export async function rewriteReply(
   }
 
   for (const [headerName, mapped] of rewrittenRecipients) {
-    if (mapped === "keep") continue;
-    if (mapped.length > 0) headers.replace(headerName, formatAddressList(mapped));
+    if (mapped === "keep") headers.replace(headerName, "undisclosed-recipients:;");
+    else if (mapped.length > 0) headers.replace(headerName, formatAddressList(mapped));
     else headers.remove(headerName);
   }
 
@@ -212,7 +221,7 @@ export async function rewriteReply(
   const aliasName = ctx.alias.name ?? undefined;
   headers.replace(
     "From",
-    aliasName !== undefined && aliasName !== ""
+    aliasName !== undefined && aliasName !== "" && !containsInbox(aliasName)
       ? formatAddress({ name: aliasName, address: ctx.alias.email })
       : ctx.alias.email,
   );
@@ -236,20 +245,16 @@ export async function rewriteReply(
   //    (SimpleLogin only rewrites References here; we also cover In-Reply-To
   //    — when a user replies to their own earlier reply, the mailbox id
   //    would otherwise leak.)
-  if (ctx.resolveOurMessageId !== undefined) {
-    const references = headers.get("References");
-    if (references !== undefined) {
-      const ids = references.split(/\s+/).filter((s) => s !== "");
-      const mapped = await Promise.all(
-        ids.map(async (id) => (await ctx.resolveOurMessageId!(id)) ?? id),
-      );
-      headers.replace("References", mapped.join(" "));
-    }
-    const inReplyTo = headers.get("In-Reply-To");
-    if (inReplyTo !== undefined) {
-      const mapped = await ctx.resolveOurMessageId(inReplyTo);
-      if (mapped !== null) headers.replace("In-Reply-To", mapped);
-    }
+  for (const field of ["References", "In-Reply-To"]) {
+    const value = headers.get(field);
+    if (value === undefined) continue;
+    const ids = value.split(/\s+/).filter(Boolean);
+    const mapped = await Promise.all(
+      ids.map(async (id) => (await ctx.resolveOurMessageId?.(id)) ?? id),
+    );
+    const safe = mapped.filter((id) => !containsInbox(id));
+    if (safe.length > 0) headers.replace(field, safe.join(" "));
+    else headers.remove(field);
   }
 
   // 6. Missing Date → synthesize.

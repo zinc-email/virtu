@@ -9,8 +9,8 @@ backup_file=$1
 restore_tmp=$(mktemp -d)
 restore_container=""
 cleanup() {
-  if [[ -n "$restore_container" ]]; then docker rm -f "$restore_container" >/dev/null; fi
   rm -rf "$restore_tmp"
+  if [[ -n "$restore_container" ]]; then docker rm -f "$restore_container" >/dev/null; fi
 }
 trap cleanup EXIT
 age --decrypt -i "$BACKUP_AGE_IDENTITY" "$backup_file" >"$restore_tmp/restore.dump"

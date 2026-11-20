@@ -13,6 +13,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import libmime from "libmime";
 import {
   type Address,
   formatAddress,
@@ -21,7 +22,7 @@ import {
   type HeaderBlock,
   parseAddressList,
 } from "./headers.ts";
-import { applyHeaderWhitelist } from "./rewriteForward.ts";
+import { applyHeaderWhitelist, MAX_TRANSLATED_REFERENCES } from "./rewriteForward.ts";
 
 /**
  * Reply-phase header whitelist (data, exported). Narrower than the forward
@@ -154,8 +155,16 @@ export async function rewriteReply(
   const aliasEmail = ctx.alias.email.toLowerCase();
   const now = ctx.now ?? new Date();
 
-  const containsInbox = (text: string) =>
-    ctx.privateAddresses.some((address) => text.toLowerCase().includes(address.toLowerCase()));
+  const privateAddresses = ctx.privateAddresses.map((address) => address.toLowerCase());
+  const containsInbox = (text: string) => {
+    const lower = text.toLowerCase();
+    return privateAddresses.some((address) => lower.includes(address));
+  };
+  const safeName = (name: string | null | undefined) => {
+    if (!name || containsInbox(name)) return undefined;
+    if (name.includes("=?") && containsInbox(libmime.decodeWords(name))) return undefined;
+    return name;
+  };
 
   // 1. Whitelist.
   const droppedHeaders = applyHeaderWhitelist(headers, REPLY_HEADER_WHITELIST);
@@ -193,7 +202,7 @@ export async function rewriteReply(
               refusal: { reason: refuse, header, address: entry.address },
             };
           }
-          mapped.push(entry.name && containsInbox(entry.name) ? { address: entry.address } : entry);
+          mapped.push({ address: entry.address, name: safeName(entry.name) });
           continue;
         }
         return {
@@ -201,12 +210,7 @@ export async function rewriteReply(
           refusal: { reason: "non_reverse_alias", header, address: entry.address },
         };
       }
-      const name = contact.name ?? undefined;
-      mapped.push(
-        name !== undefined && name !== "" && !containsInbox(name)
-          ? { name, address: contact.websiteEmail }
-          : { address: contact.websiteEmail },
-      );
+      mapped.push({ address: contact.websiteEmail, name: safeName(contact.name) });
     }
     rewrittenRecipients.set(headerName, mapped);
   }
@@ -218,12 +222,9 @@ export async function rewriteReply(
   }
 
   // 3. From → the alias (SimpleLogin `get_alias_recipient_name`).
-  const aliasName = ctx.alias.name ?? undefined;
   headers.replace(
     "From",
-    aliasName !== undefined && aliasName !== "" && !containsInbox(aliasName)
-      ? formatAddress({ name: aliasName, address: ctx.alias.email })
-      : ctx.alias.email,
+    formatAddress({ address: ctx.alias.email, name: safeName(ctx.alias.name) }),
   );
 
   // 4. Message-ID → ours (mailbox-side ids never leak). Reuse the existing
@@ -248,7 +249,8 @@ export async function rewriteReply(
   for (const field of ["References", "In-Reply-To"]) {
     const value = headers.get(field);
     if (value === undefined) continue;
-    const ids = value.split(/\s+/).filter(Boolean);
+    // Keep only recent ancestors, so omitted IDs need no privacy lookup.
+    const ids = value.split(/\s+/).filter(Boolean).slice(-MAX_TRANSLATED_REFERENCES);
     const mapped = await Promise.all(
       ids.map(async (id) => (await ctx.resolveOurMessageId?.(id)) ?? id),
     );
